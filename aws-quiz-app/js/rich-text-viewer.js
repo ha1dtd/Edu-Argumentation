@@ -97,10 +97,20 @@ class RichTextViewer extends HTMLElement {
                 figure { margin: 1.5em 0; }
                 figcaption { margin-top: 0.6em; font-size: 0.85em; color: #9ca3af; text-align: center; font-style: italic; }
                 table { width: 100%; border-collapse: collapse; margin: 1.5em 0; font-size: 0.92em; display: block; overflow-x: auto; }
-                th, td { border: 1px solid #374151; padding: 0.55em 0.75em; text-align: left; vertical-align: top; }
+                th, td { border: 1px solid #374151; padding: 0.55em 0.75em; text-align: left; vertical-align: top;
+                         overflow-wrap: normal; word-break: normal; min-width: 6.5em; }
+                /* The lesson wrapper sets overflow-wrap:anywhere (long inline code on phones); inside a
+                   table that split words letter by letter, so cells keep whole words and the table
+                   scrolls sideways in its own box instead (17-09-26). */
                 th { background: #1f2937; color: #fff; font-weight: 600; }
                 tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
                 hr { border: 0; border-top: 1px solid #374151; margin: 2em 0; }
+                /* A long display formula scrolls inside its own box; the container clips what is
+                   left (KaTeX's hidden MathML copy still counts toward page width), so a phone
+                   never scrolls the whole lesson sideways (17-09-26). */
+                .katex-display { overflow-x: auto; overflow-y: hidden; max-width: 100%; padding: 0.25em 0; }
+                li { min-width: 0; }
+                .content-container { max-width: 100%; overflow-x: clip; }
             </style>
             <div class="content-container">${htmlContent}</div>
         `;

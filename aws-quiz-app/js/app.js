@@ -26,15 +26,21 @@ let progress = { completed: {} };
 // merged in, and a title-derived key would orphan every completion.
 let moduleId = '';
 
-function moduleIdFor(parsedData) {
+function moduleIdFor(parsedData, bookFile = null) {
     const explicit = String(parsedData.moduleId || (parsedData.tutorialData || {}).moduleId || '').trim().toLowerCase();
     if (/^[a-z0-9][a-z0-9-]{1,63}$/.test(explicit)) return explicit;
+    // A library book without its own id is keyed by its file: two books with the same
+    // title (the two SageMaker Clarify files) must not share progress.
+    const stem = String(bookFile || '').replace(/\.json$/i, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 56);
+    if (stem.length >= 2) return `f-${stem}`;
     const slug = String((parsedData.tutorialData || {}).title || 'module').toLowerCase()
         .normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 56);
     return /^[a-z0-9]/.test(slug) && slug.length >= 2 ? `t-${slug}` : 'module';
 }
 
-const BUNDLED_MODULE_URL = 'data/geron_hands_on_ml_ch01_ch09.json';
+const DEFAULT_BOOK = 'geron_hands_on_ml_ch01_ch09.json';
+let activeBookFile = null;        // the library file being studied; null for an uploaded module
+let libraryBooks = [];
 let GENERATED_QUIZ_SIZE = 20;   // overridden by server general settings
 let aiQuestionCount = 5;        // overridden by server general settings
 const MAX_FRESH_QUIZ_SIZE = 30; // server enforces the same cap
@@ -68,8 +74,15 @@ const dom = {
     setupResumeBtn: document.getElementById('setup-resume-btn'),
     resultScreen: document.getElementById('result-screen'),
     
-    appSubTitle: document.getElementById('app-sub-title'),
     welcomeTitle: document.getElementById('welcome-title'),
+    currentMeta: document.getElementById('current-meta'),
+    currentProgressLabel: document.getElementById('current-progress-label'),
+    currentProgressPercent: document.getElementById('current-progress-percent'),
+    currentProgressTrack: document.getElementById('current-progress-track'),
+    currentProgressBar: document.getElementById('current-progress-bar'),
+    currentNext: document.getElementById('current-next'),
+    libraryGrid: document.getElementById('library-grid'),
+    importBookLink: document.getElementById('import-book-link'),
     
     startBtn: document.getElementById('start-btn'),
     readTutorialBtn: document.getElementById('read-tutorial-btn'),
@@ -208,23 +221,8 @@ function syncTocToViewport() {
 }
 
 
-function setAppState(isReady, moduleName = null) {
-    if (dom.appSubTitle && dom.welcomeTitle) {
-        if (moduleName) {
-            dom.appSubTitle.textContent = "Active Module: " + moduleName;
-            dom.welcomeTitle.textContent = moduleName;
-        } else {
-            dom.appSubTitle.textContent = "Education is the movement from darkness to light";
-        }
-    }
-    
-    if (!isReady) {
-        dom.emptyState.classList.remove('hidden-view');
-        dom.welcomeScreen.classList.add('hidden-view');
-    } else {
-        dom.emptyState.classList.add('hidden-view');
-        dom.welcomeScreen.classList.remove('hidden-view');
-    }
+function setAppState(isReady) {
+    dom.welcomeScreen.classList.toggle('hidden-view', !isReady);
     
     const controls = [dom.readTutorialBtn, dom.startBtn];
     controls.forEach(btn => {
@@ -232,7 +230,7 @@ function setAppState(isReady, moduleName = null) {
         btn.disabled = !isReady;
     });
     // A fresh quiz is written by the connected model, so it also needs a provider.
-    if (dom.startGeneratedBtn) dom.startGeneratedBtn.disabled = !isReady || !providerReady;
+    if (dom.startGeneratedBtn) dom.startGeneratedBtn.disabled = !isReady || !aiReady();
 }
 
 // Nav items are a dropdown below md and a row at md+, so the base class string
@@ -260,16 +258,148 @@ function showLandingDashboard() {
     dom.servicesSection.classList.remove('hidden-view');
     dom.settingsScreen.classList.add('hidden-view');
     dom.loadingScreen.classList.add('hidden-view');
-    
-    if(tutorialData.title) {
-        dom.emptyState.classList.add('hidden-view');
-        dom.welcomeScreen.classList.remove('hidden-view');
-    } else {
-        dom.emptyState.classList.remove('hidden-view');
-        dom.welcomeScreen.classList.add('hidden-view');
-    }
+    dom.welcomeScreen.classList.toggle('hidden-view', !tutorialData.title);
+    renderHome();
     window.scrollTo({ top: 0, behavior: 'smooth' });
     updateNavUI('tutorial');
+}
+
+// --- Home -----------------------------------------------------------------------
+// The current book with its progress and the way back in, then the library to pick
+// another (user, 17-09-26: the home page named one book like a hero banner, and
+// "Read Tutorial" did not say what it does).
+const AI_ONLY_ON_LIBRARY_BOOKS = 'AI quizzes need a library book';
+
+function aiReady() {
+    return providerReady && Boolean(activeBookFile);
+}
+
+function plural(count, word) {
+    return `${count.toLocaleString()} ${word}${count === 1 ? '' : 's'}`;
+}
+
+// The first lesson not yet completed, in book order; the last lesson once all are done.
+function nextLesson() {
+    const chapters = theoryChapters();
+    for (let ci = 0; ci < chapters.length; ci += 1) {
+        const blocks = theoryBlocks(ci);
+        for (let bi = 0; bi < blocks.length; bi += 1) {
+            if (!isBlockComplete(ci, bi)) return { chapterIndex: ci, blockIndex: bi, done: false };
+        }
+    }
+    const last = chapters.length - 1;
+    return last >= 0 ? { chapterIndex: last, blockIndex: Math.max(0, theoryBlocks(last).length - 1), done: true } : null;
+}
+
+function renderHome() {
+    if (!tutorialData.title) return;
+    const chapters = theoryChapters().length;
+    const lessons = theoryChapters().reduce((sum, _chapter, index) => sum + theoryBlocks(index).length, 0);
+    const overall = overallProgress();
+    dom.welcomeTitle.textContent = tutorialData.title;
+    dom.currentMeta.textContent = [plural(chapters, 'chapter'), plural(lessons, 'lesson'), plural(quizData.length, 'question')].join(' · ');
+    dom.currentProgressLabel.textContent = `${overall.done} / ${overall.total} lessons done`;
+    dom.currentProgressPercent.textContent = `${overall.percent}%`;
+    dom.currentProgressBar.style.width = `${overall.percent}%`;
+    dom.currentProgressTrack.setAttribute('aria-valuenow', String(overall.percent));
+    const next = nextLesson();
+    if (next) {
+        const block = theoryBlocks(next.chapterIndex)[next.blockIndex];
+        const name = (block && block.term) || `Lesson ${next.blockIndex + 1}`;
+        dom.currentNext.textContent = next.done ? 'All lessons done' : `Next: ${next.chapterIndex + 1}.${next.blockIndex + 1} ${name}`;
+    }
+    dom.readTutorialBtn.textContent = overall.done ? 'Continue reading' : 'Start reading';
+    dom.startGeneratedBtn.disabled = !aiReady();
+    dom.startGeneratedBtn.title = aiReady() ? '' : (providerReady ? AI_ONLY_ON_LIBRARY_BOOKS : 'Connect a model in Settings first');
+    renderLibrary();
+}
+
+async function loadLibrary() {
+    try {
+        const response = await fetch('api/modules', { cache: 'no-store' });
+        if (!response.ok) throw new Error(String(response.status));
+        const data = await response.json();
+        libraryBooks = Array.isArray(data.books) ? data.books : [];
+    } catch (error) {
+        libraryBooks = [];
+    }
+    // Progress of the books that are not open, so every card shows where the learner is.
+    await Promise.all(libraryBooks.map(async book => {
+        try {
+            const id = book.moduleId && !/^t-/.test(book.moduleId) ? book.moduleId : moduleIdFor({}, book.file);
+            book.progressId = id;
+            const response = await fetch(`api/progress?module=${encodeURIComponent(id)}`);
+            const data = response.ok ? await response.json() : {};
+            book.done = data && data.completed ? Object.keys(data.completed).length : 0;
+        } catch (error) {
+            book.done = 0;
+        }
+    }));
+    renderLibrary();
+}
+
+function renderLibrary() {
+    if (!dom.libraryGrid) return;
+    dom.libraryGrid.innerHTML = '';
+    dom.emptyState.classList.toggle('hidden-view', libraryBooks.length > 0 || Boolean(tutorialData.title));
+    // The book being studied first, then the rest by title.
+    const ordered = [...libraryBooks].sort((a, b) => (b.file === activeBookFile) - (a.file === activeBookFile) || a.title.localeCompare(b.title));
+    ordered.forEach(book => {
+        const current = book.file === activeBookFile;
+        const done = current ? overallProgress().done : Math.min(book.done || 0, book.lessons);
+        const percent = book.lessons ? Math.round((done / book.lessons) * 100) : 0;
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.dataset.book = book.file;
+        card.setAttribute('aria-current', current ? 'true' : 'false');
+        card.className = `flex flex-col gap-3 text-left rounded-xl border p-5 min-h-[44px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 ${current ? 'border-brand-600 bg-gray-800' : 'border-gray-700 bg-gray-800/60 hover:border-gray-500 hover:bg-gray-800'}`;
+        const head = document.createElement('div');
+        head.className = 'flex items-start justify-between gap-3';
+        const title = document.createElement('h3');
+        title.className = 'text-white font-semibold leading-snug line-clamp-2';
+        title.textContent = book.title;
+        head.appendChild(title);
+        if (current) {
+            const chip = document.createElement('span');
+            chip.className = 'shrink-0 rounded-full bg-brand-600/15 px-2.5 py-1 text-xs font-semibold text-brand-400';
+            chip.textContent = 'Current';
+            head.appendChild(chip);
+        }
+        const meta = document.createElement('p');
+        meta.className = 'text-xs text-gray-400';
+        meta.textContent = plural(book.chapters, 'chapter');
+        const track = document.createElement('div');
+        track.className = 'h-1.5 rounded-full bg-gray-700 overflow-hidden';
+        track.setAttribute('role', 'progressbar');
+        track.setAttribute('aria-label', `${book.title}: lessons done`);
+        track.setAttribute('aria-valuemin', '0');
+        track.setAttribute('aria-valuemax', '100');
+        track.setAttribute('aria-valuenow', String(percent));
+        const bar = document.createElement('div');
+        bar.className = 'h-full rounded-full bg-brand-600';
+        bar.style.width = `${percent}%`;
+        track.appendChild(bar);
+        const status = document.createElement('p');
+        status.className = 'text-xs text-gray-400 tabular-nums';
+        status.textContent = `${done}/${book.lessons} lessons · ${percent}%`;
+        card.append(head, meta, track, status);
+        dom.libraryGrid.appendChild(card);
+    });
+}
+
+async function openBook(file) {
+    if (file === activeBookFile) {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+    }
+    try {
+        const response = await fetch(`data/${encodeURIComponent(file)}`);
+        if (!response.ok) throw new Error(`Book request failed (${response.status}).`);
+        loadModuleData(await response.json(), 'Book', file);
+        try { localStorage.setItem('eduActiveBook', file); } catch (error) { /* per-viewer convenience */ }
+    } catch (error) {
+        alert(`Could not open the book: ${error.message}`);
+    }
 }
 
 function showTutorial() {
@@ -627,6 +757,7 @@ async function refreshProgress() {
     }
     renderTheoryToc();
     renderTheoryBlock();
+    if (!dom.landingDashboard.classList.contains('hidden-view')) renderHome();
 }
 
 function isBlockComplete(chapterIndex, blockIndex) {
@@ -710,7 +841,15 @@ dom.brandHome.addEventListener('click', () => { showLandingDashboard(); if (!isW
 // Landing card and PRACTICE tab: pick a chapter and block first (user, 17-09-26).
 // The in-reader Begin Assessment button stays the one-click scoped quiz.
 dom.startBtn.addEventListener('click', () => openQuizTab('practice'));
-dom.readTutorialBtn.addEventListener('click', showTutorial);
+dom.readTutorialBtn.addEventListener('click', () => {
+    const next = nextLesson();
+    if (next) selectTheory({ chapterIndex: next.chapterIndex, blockIndex: next.blockIndex });
+    showTutorial();
+});
+dom.libraryGrid.addEventListener('click', event => {
+    const card = event.target.closest('[data-book]');
+    if (card) openBook(card.dataset.book);
+});
 dom.prevBlockBtn.addEventListener('click', () => { const target = previousTheory(); if (target) selectTheory(target); });
 dom.nextBlockBtn.addEventListener('click', () => { const target = nextTheory(); if (target) selectTheory(target); });
 dom.blockAiQuizBtn.addEventListener('click', startBlockAiQuiz);
@@ -732,7 +871,7 @@ window.addEventListener('hashchange', () => {
 dom.tutorialToQuizBtn.addEventListener('click', () => {
     const scoped = currentBlockQuiz();
     if (!scoped.length) {
-        if (providerReady) { startBlockAiQuiz(); }
+        if (aiReady()) { startBlockAiQuiz(); }
         else { setAiBlockStatus('No written questions for this block, and no model is connected to write any. Connect one in Settings.'); }
         return;
     }
@@ -796,7 +935,7 @@ dom.navGeneratedQuiz.addEventListener('click', () => openQuizTab('generate'));
 // The written bank. Opens the picker; an unfinished written quiz is offered as Resume there.
 dom.navQuiz.addEventListener('click', () => openQuizTab('practice'));
 
-function loadModuleData(parsedData, fallbackTitle) {
+function loadModuleData(parsedData, fallbackTitle, bookFile = null) {
     if (!parsedData.tutorialData || !parsedData.quizData || !Array.isArray(parsedData.quizData)) {
         throw new Error("Invalid JSON schema. Must contain 'tutorialData' object and 'quizData' array.");
     }
@@ -806,13 +945,15 @@ function loadModuleData(parsedData, fallbackTitle) {
     generatedQuizData = null;
     setModuleQuiz();
     // A different module starts from its own progress, never the last one's.
-    moduleId = moduleIdFor(parsedData);
+    activeBookFile = bookFile;
+    moduleId = moduleIdFor(parsedData, bookFile);
     loadQuizSessions();
     progress = { completed: {} };
     refreshProgress();
 
     renderTutorial();
-    setAppState(true, tutorialData.title || fallbackTitle);
+    if (!tutorialData.title) tutorialData.title = fallbackTitle;
+    setAppState(true);
     showLandingDashboard();
 }
 
@@ -824,7 +965,7 @@ dom.customDataUpload.addEventListener('change', function(e) {
     reader.onload = function(e) {
         try {
             const parsedData = JSON.parse(e.target.result);
-            loadModuleData(parsedData, 'Custom Course Module');
+            loadModuleData(parsedData, 'Uploaded module', null);
             
         } catch (error) {
             console.error("JSON error:", error);
@@ -1013,11 +1154,27 @@ function assetPanel(block, compact) {
         caption.textContent = block.caption;
         panel.appendChild(caption);
     }
+    // Every symbol explained right under the formula, not in a legend elsewhere
+    // (user, 17-09-26: going back and forth to decode a formula is distracting).
+    if (block.type === 'equation' && block.explain) {
+        const explain = document.createElement('div');
+        explain.className = 'mt-4 pt-4 border-t border-gray-700 text-left text-sm leading-relaxed text-gray-300 max-w-[68ch] mx-auto overflow-x-auto';
+        explain.innerHTML = formatText(block.explain);
+        panel.appendChild(explain);
+    }
     return panel;
 }
 
 function appendTheoryContent(parent, block, theme) {
     if (!block || typeof block !== 'object') return;
+    if (block.type === 'code_cells') {
+        parent.appendChild(renderCodeCells(block));
+        return;
+    }
+    if (block.type === 'deeper') {
+        parent.appendChild(renderDeeper(block));
+        return;
+    }
     if (block.type === 'equation' || (block.type === 'figure' && block.src && !block.svg)) {
         parent.appendChild(assetPanel(block, false));
         return;
@@ -1026,7 +1183,10 @@ function appendTheoryContent(parent, block, theme) {
         const wrapper = document.createElement('div');
         // Capped measure: ~68 characters a line is the readable band. The
         // container is max-w-none so a figure can still go full width.
-        wrapper.className = 'mb-6 leading-relaxed max-w-[68ch]';
+        // overflow-wrap is inherited into the viewer's shadow DOM: a long inline
+        // `code` span (e.g. KNeighborsRegressor(n_neighbors=3)) otherwise pushed
+        // phones 20 px sideways on ch01-b08, measured 17-09-26.
+        wrapper.className = 'mb-6 leading-relaxed max-w-[68ch] [overflow-wrap:anywhere]';
         wrapper.innerHTML = formatText(block.content);
         parent.appendChild(wrapper);
         return;
@@ -1094,6 +1254,390 @@ function appendTheoryContent(parent, block, theme) {
         panel.appendChild(list);
     }
     parent.appendChild(panel);
+}
+
+// --- Interactive code cells (17-09-26) ----------------------------------------
+// A lesson may interleave several `code_cells` blocks with its text and figures.
+// They share ONE kernel per lesson on the runner, and "Run cell N" first runs
+// every earlier cell of the lesson whose current source has not run yet --
+// across all of the lesson's code blocks, in page order. Edited source, output
+// and status live in memory only, keyed by module + lesson + cell, so leaving
+// a lesson and coming back keeps them. Nothing is saved on the server.
+const RUNNER_SESSION_KEY = 'edu-runner-session';
+const codeCellState = new Map();   // `${moduleId}|${lesson}|${cellId}` -> state
+const codeCellViews = new Map();   // same key -> DOM handles of the rendered cell
+const lessonRuns = new Map();      // `${moduleId}|${lesson}` -> running cell id
+let runnerSessionId = '';
+
+function runnerSession() {
+    if (runnerSessionId) return runnerSessionId;
+    try { runnerSessionId = localStorage.getItem(RUNNER_SESSION_KEY) || ''; } catch (error) { /* private mode */ }
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(runnerSessionId)) {
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        runnerSessionId = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+        try { localStorage.setItem(RUNNER_SESSION_KEY, runnerSessionId); } catch (error) { /* in-memory only */ }
+    }
+    return runnerSessionId;
+}
+
+function lessonCodeCells(lesson) {
+    const block = theoryBlocks(currentTheory.chapterIndex)[currentTheory.blockIndex];
+    const blocks = block && Array.isArray(block.blocks) ? block.blocks : [];
+    return blocks
+        .filter(b => b && b.type === 'code_cells' && b.lesson === lesson && Array.isArray(b.cells))
+        .flatMap(b => b.cells)
+        .filter(cell => cell && typeof cell.id === 'string' && typeof cell.source === 'string');
+}
+
+function cellKey(lesson, cellId) { return `${moduleId}|${lesson}|${cellId}`; }
+
+function cellState(lesson, cell) {
+    const key = cellKey(lesson, cell.id);
+    if (!codeCellState.has(key)) {
+        codeCellState.set(key, { original: cell.source, source: cell.source, outputs: [], status: '', tone: 'muted', started: 0 });
+    }
+    return codeCellState.get(key);
+}
+
+const CELL_ICONS = {
+    edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+    done: '<path d="M20 6 9 17l-5-5"/>',
+    reset: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
+    run: '<path d="m6 4 14 8-14 8Z"/>',
+    stop: '<rect x="6" y="6" width="12" height="12" rx="1"/>'
+};
+
+function setCellButton(button, icon, label) {
+    button.innerHTML = `<svg aria-hidden="true" viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${CELL_ICONS[icon]}</svg><span>${label}</span>`;
+}
+
+function cellButton(primary) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 disabled:cursor-not-allowed disabled:opacity-40 '
+        + (primary ? 'bg-brand-600 text-white hover:bg-brand-900' : 'text-gray-300 hover:bg-gray-700 hover:text-white');
+    return button;
+}
+
+// pandas tables arrive as HTML. Rebuild them from a whitelist instead of trusting
+// markup: only table structure and text survive; every attribute, <style> and
+// anything else is dropped.
+const TABLE_TAGS = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TH', 'TD', 'DIV', 'SPAN']);
+function sanitizeTable(html) {
+    const template = document.createElement('template');
+    template.innerHTML = String(html || '');
+    const copy = (source, target) => {
+        source.childNodes.forEach(node => {
+            if (node.nodeType === Node.TEXT_NODE) { target.appendChild(document.createTextNode(node.textContent)); return; }
+            if (node.nodeType !== Node.ELEMENT_NODE || ['STYLE', 'SCRIPT'].includes(node.tagName)) return;
+            if (!TABLE_TAGS.has(node.tagName)) { copy(node, target); return; }
+            const el = document.createElement(node.tagName.toLowerCase());
+            if (node.tagName === 'TABLE') el.className = 'min-w-full border-collapse text-xs tabular-nums';
+            if (node.tagName === 'TH' || node.tagName === 'TD') el.className = 'whitespace-nowrap border-b border-gray-700 px-2 py-1 text-left' + (node.tagName === 'TH' ? ' font-semibold text-gray-200' : '');
+            copy(node, el);
+            target.appendChild(el);
+        });
+    };
+    const holder = document.createElement('div');
+    copy(template.content, holder);
+    return holder;
+}
+
+function renderCellOutputs(view, state, cellNumber) {
+    const running = state.status === 'running';
+    view.output.classList.toggle('hidden-view', !running && !state.status && !state.outputs.length);
+    view.output.setAttribute('aria-busy', running ? 'true' : 'false');
+    if (!running) {
+        view.status.textContent = state.status;
+        view.status.className = 'min-h-[1.25rem] text-xs font-semibold tabular-nums ' + (state.tone === 'bad' ? 'text-brand-400' : 'text-gray-400');
+    }
+    view.items.innerHTML = '';
+    state.outputs.forEach(item => {
+        if (item.kind === 'stream' || item.kind === 'text') {
+            const pre = document.createElement('pre');
+            pre.className = 'm-0 overflow-x-auto whitespace-pre font-mono text-sm leading-6 ' + (item.name === 'stderr' ? 'text-gray-400' : 'text-gray-100');
+            pre.textContent = item.kind === 'stream' ? item.text : item.data;
+            view.items.appendChild(pre);
+        } else if (item.kind === 'image') {
+            const img = document.createElement('img');
+            img.src = `data:image/png;base64,${item.data}`;
+            img.alt = `Cell ${cellNumber} chart`;
+            img.className = 'max-w-full h-auto rounded bg-white';
+            view.items.appendChild(img);
+        } else if (item.kind === 'html') {
+            const box = document.createElement('div');
+            box.className = 'max-w-full overflow-x-auto text-gray-200';
+            box.appendChild(sanitizeTable(item.data));
+            view.items.appendChild(box);
+        } else if (item.kind === 'error') {
+            const title = document.createElement('p');
+            title.className = 'm-0 break-words font-mono text-sm font-semibold text-brand-400';
+            title.textContent = `${item.ename}: ${item.evalue}`;
+            view.items.appendChild(title);
+            if (Array.isArray(item.traceback) && item.traceback.length) {
+                const details = document.createElement('details');
+                const summary = document.createElement('summary');
+                summary.className = 'flex min-h-[44px] cursor-pointer items-center text-xs font-semibold uppercase tracking-wider text-gray-400 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600';
+                summary.textContent = 'Traceback';
+                const pre = document.createElement('pre');
+                pre.className = 'm-0 overflow-x-auto whitespace-pre font-mono text-xs leading-5 text-gray-400';
+                pre.textContent = item.traceback.join('\n');
+                details.append(summary, pre);
+                view.items.appendChild(details);
+            }
+        }
+    });
+}
+
+// `initial` paints a card that is built but not attached yet; later async
+// updates skip cards that have left the page (the reader moved on).
+function syncCellView(lesson, cell, initial = false) {
+    const view = codeCellViews.get(cellKey(lesson, cell.id));
+    if (!view || (!initial && !view.root.isConnected)) return;
+    const state = cellState(lesson, cell);
+    const runningId = lessonRuns.get(`${moduleId}|${lesson}`);
+    const isRunning = runningId === cell.id;
+    setCellButton(view.run, isRunning ? 'stop' : 'run', isRunning ? 'Stop' : 'Run');
+    view.run.setAttribute('aria-label', `${isRunning ? 'Stop' : 'Run'} cell ${view.number}`);
+    view.run.disabled = Boolean(runningId) && !isRunning;
+    view.edit.disabled = isRunning;
+    view.reset.disabled = isRunning;
+    view.edited.classList.toggle('hidden-view', state.source === state.original);
+    if (!view.editing) view.code.textContent = state.source;
+    renderCellOutputs(view, state, view.number);
+}
+
+function renderCodeCells(block) {
+    const lesson = block.lesson;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'not-prose my-6 space-y-4';
+    const all = lessonCodeCells(lesson);
+    (Array.isArray(block.cells) ? block.cells : []).forEach(cell => {
+        if (!cell || typeof cell.id !== 'string' || typeof cell.source !== 'string') return;
+        const number = all.findIndex(c => c.id === cell.id) + 1;
+        const state = cellState(lesson, cell);
+        const card = document.createElement('section');
+        card.className = 'overflow-hidden rounded-xl border border-gray-700 bg-gray-900/60';
+        card.setAttribute('aria-label', `Code cell ${number}`);
+        card.dataset.cell = cell.id;
+
+        const header = document.createElement('div');
+        header.className = 'flex flex-wrap items-center justify-between gap-2 border-b border-gray-700 px-3 py-1';
+        const label = document.createElement('div');
+        label.className = 'flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-gray-400';
+        label.textContent = `Cell ${number}`;
+        const edited = document.createElement('span');
+        edited.className = 'rounded bg-gray-700 px-1.5 py-0.5 text-[0.65rem] normal-case tracking-normal text-gray-200';
+        edited.textContent = 'edited';
+        label.appendChild(edited);
+        const actions = document.createElement('div');
+        actions.className = 'flex items-center gap-1';
+        const edit = cellButton(false);
+        const reset = cellButton(false);
+        const run = cellButton(true);
+        setCellButton(edit, 'edit', 'Edit');
+        setCellButton(reset, 'reset', 'Reset');
+        edit.setAttribute('aria-label', `Edit cell ${number}`);
+        reset.setAttribute('aria-label', `Reset cell ${number}`);
+        actions.append(edit, reset, run);
+        header.append(label, actions);
+
+        const code = document.createElement('code');
+        const pre = document.createElement('pre');
+        pre.className = 'm-0 overflow-x-auto whitespace-pre bg-transparent p-4 font-mono text-sm leading-6 text-gray-100';
+        pre.appendChild(code);
+        const editor = document.createElement('textarea');
+        editor.className = 'hidden-view block w-full resize-y whitespace-pre border-0 bg-gray-900 p-4 font-mono text-sm leading-6 text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-600';
+        editor.spellcheck = false;
+        editor.wrap = 'off';
+        editor.setAttribute('autocapitalize', 'off');
+        editor.setAttribute('autocomplete', 'off');
+        editor.setAttribute('aria-label', `Cell ${number} code`);
+        const hint = document.createElement('span');
+        hint.className = 'sr-only';
+        hint.id = `cell-hint-${lesson}-${cell.id}`;
+        hint.textContent = 'Tab inserts spaces. Escape leaves the editor.';
+        editor.setAttribute('aria-describedby', hint.id);
+
+        const output = document.createElement('div');
+        output.className = 'hidden-view space-y-3 border-t border-gray-700 px-4 py-3';
+        const status = document.createElement('p');
+        status.className = 'min-h-[1.25rem] text-xs font-semibold tabular-nums text-gray-400';
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-atomic', 'true');
+        const items = document.createElement('div');
+        items.className = 'space-y-3';
+        output.append(status, items);
+
+        card.append(header, pre, editor, hint, output);
+        wrapper.appendChild(card);
+
+        const view = { root: card, number, edit, reset, run, code, pre, editor, output, status, items, edited, editing: false };
+        codeCellViews.set(cellKey(lesson, cell.id), view);
+
+        const leaveEditor = () => {
+            view.editing = false;
+            editor.classList.add('hidden-view');
+            pre.classList.remove('hidden-view');
+            setCellButton(edit, 'edit', 'Edit');
+            edit.setAttribute('aria-label', `Edit cell ${number}`);
+            syncCellView(lesson, cell);
+        };
+        edit.addEventListener('click', () => {
+            if (view.editing) { leaveEditor(); edit.focus(); return; }
+            view.editing = true;
+            editor.value = state.source;
+            editor.style.height = `${Math.max(pre.offsetHeight, 96)}px`;
+            pre.classList.add('hidden-view');
+            editor.classList.remove('hidden-view');
+            setCellButton(edit, 'done', 'Done');
+            edit.setAttribute('aria-label', `Done editing cell ${number}`);
+            editor.focus();
+        });
+        editor.addEventListener('input', () => {
+            state.source = editor.value;
+            edited.classList.toggle('hidden-view', state.source === state.original);
+        });
+        editor.addEventListener('keydown', event => {
+            if (event.key === 'Tab' && !event.shiftKey) {
+                event.preventDefault();
+                editor.setRangeText('    ', editor.selectionStart, editor.selectionEnd, 'end');
+                editor.dispatchEvent(new Event('input'));
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                leaveEditor();
+                edit.focus();
+            }
+        });
+        reset.addEventListener('click', () => {
+            state.source = state.original;
+            state.outputs = [];
+            state.status = '';
+            state.tone = 'muted';
+            if (view.editing) editor.value = state.source;
+            syncCellView(lesson, cell);
+        });
+        run.addEventListener('click', () => {
+            if (lessonRuns.get(`${moduleId}|${lesson}`) === cell.id) stopCell(lesson, cell);
+            else runCell(lesson, cell);
+        });
+        syncCellView(lesson, cell, true);
+    });
+    return wrapper;
+}
+
+function syncLessonCells(lesson) {
+    lessonCodeCells(lesson).forEach(cell => syncCellView(lesson, cell));
+}
+
+async function runCell(lesson, cell) {
+    const runKey = `${moduleId}|${lesson}`;
+    if (lessonRuns.has(runKey)) return;
+    const cells = lessonCodeCells(lesson);
+    const upTo = cells.findIndex(c => c.id === cell.id);
+    if (upTo < 0) return;
+    const payloadCells = cells.slice(0, upTo + 1).map(c => ({ id: c.id, source: cellState(lesson, c).source }));
+    const state = cellState(lesson, cell);
+    state.status = 'running';
+    state.started = performance.now();
+    state.stopRequested = false;
+    state.outputs = [];
+    lessonRuns.set(runKey, cell.id);
+    syncLessonCells(lesson);
+
+    const tick = () => {
+        const view = codeCellViews.get(cellKey(lesson, cell.id));
+        if (view && view.root.isConnected && state.status === 'running') {
+            view.status.textContent = `Running… ${Math.floor((performance.now() - state.started) / 1000)} s`;
+            view.status.className = 'min-h-[1.25rem] text-xs font-semibold tabular-nums text-gray-400';
+        }
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+
+    let result = null;
+    let failure = '';
+    try {
+        const response = await fetch('/api/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ module: moduleId, lesson, session: runnerSession(), target: cell.id, cells: payloadCells })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok) result = data;
+        else if (response.status === 502) failure = 'Runner offline';
+        else if (response.status === 429) failure = 'Too many runs';
+        else failure = data.error || `Error ${response.status}`;
+    } catch (error) {
+        failure = 'Runner offline';
+    } finally {
+        clearInterval(timer);
+        lessonRuns.delete(runKey);
+    }
+
+    const seconds = ((performance.now() - state.started) / 1000).toFixed(1);
+    if (!result) {
+        state.status = failure;
+        state.tone = 'bad';
+    } else {
+        const byCell = new Map();
+        (Array.isArray(result.outputs) ? result.outputs : []).forEach(item => {
+            if (!byCell.has(item.cell)) byCell.set(item.cell, []);
+            byCell.get(item.cell).push(item);
+        });
+        (Array.isArray(result.ran) ? result.ran : []).forEach(id => {
+            const ranCell = cells.find(c => c.id === id);
+            if (!ranCell) return;
+            const ranState = cellState(lesson, ranCell);
+            ranState.outputs = byCell.get(id) || [];
+            if (id !== result.cell) { ranState.status = 'Done'; ranState.tone = 'muted'; }
+        });
+        const endState = cellState(lesson, cells.find(c => c.id === result.cell) || cell);
+        if (result.status === 'ok') { endState.status = `Done in ${seconds} s`; endState.tone = 'muted'; }
+        else if (result.status === 'error') {
+            const stopped = state.stopRequested && endState.outputs.some(o => o.kind === 'error' && o.ename === 'KeyboardInterrupt');
+            endState.status = stopped ? 'Stopped' : 'Error';
+            endState.tone = stopped ? 'muted' : 'bad';
+        } else if (result.status === 'timeout') { endState.status = 'Timed out'; endState.tone = 'bad'; }
+        else if (result.status === 'restarted') { endState.status = 'Kernel restarted'; endState.tone = 'bad'; }
+        else if (result.status === 'busy') { endState.status = 'Busy'; endState.tone = 'bad'; }
+        if (endState !== state && state.status === 'running') { state.status = ''; }
+    }
+    syncLessonCells(lesson);
+}
+
+async function stopCell(lesson, cell) {
+    const state = cellState(lesson, cell);
+    state.stopRequested = true;
+    try {
+        await fetch('/api/run/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ module: moduleId, lesson, session: runnerSession() })
+        });
+    } catch (error) {
+        // The run request itself reports what happened.
+    }
+}
+
+function renderDeeper(block) {
+    const details = document.createElement('details');
+    details.className = 'not-prose group my-6 rounded-xl border border-gray-700 bg-gray-900/60';
+    const summary = document.createElement('summary');
+    summary.className = 'flex min-h-[44px] cursor-pointer select-none items-center gap-2 rounded-xl px-4 text-sm font-semibold text-gray-200 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 [&::-webkit-details-marker]:hidden';
+    summary.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" class="h-4 w-4 shrink-0 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg><span>Go deeper</span>';
+    details.appendChild(summary);
+    const list = document.createElement('ul');
+    list.className = 'm-0 space-y-3 px-4 pb-4 pt-1 text-gray-300 [overflow-wrap:anywhere]';
+    (Array.isArray(block.items) ? block.items : []).forEach(entry => {
+        if (!entry || !entry.text) return;
+        const liClone = templates.tutorialListItem.content.cloneNode(true);
+        liClone.querySelector('span').innerHTML = formatText(`**${entry.term || ''}** — ${entry.text}`);
+        list.appendChild(liClone);
+    });
+    details.appendChild(list);
+    return details;
 }
 
 function renderTheoryToc() {
@@ -1366,7 +1910,7 @@ function generationToken() {
 }
 
 async function startGeneratedQuiz(selection = []) {
-    if (!tutorialData.title || !providerReady) return;
+    if (!tutorialData.title || !aiReady()) return;
     const token = generationToken();
     if (token === null) return;
 
@@ -1386,8 +1930,8 @@ async function startGeneratedQuiz(selection = []) {
     const picked = selection.map(blockFromId).filter(Boolean);
     const oneBlock = picked.length === 1 ? picked[0] : null;
     const request = oneBlock
-        ? { url: 'api/quiz', body: { chapter: oneBlock.chapterIndex + 1, block: oneBlock.blockIndex + 1, count: aiQuestionCount } }
-        : { url: 'api/quiz/fresh', body: { count: generatedCountFor(picked.length),
+        ? { url: 'api/quiz', body: { module: activeBookFile, chapter: oneBlock.chapterIndex + 1, block: oneBlock.blockIndex + 1, count: aiQuestionCount } }
+        : { url: 'api/quiz/fresh', body: { module: activeBookFile, count: generatedCountFor(picked.length),
                                            ...(picked.length ? { blocks: picked.map(b => [b.chapterIndex + 1, b.blockIndex + 1]) } : {}) } };
     try {
         const response = await fetch(request.url, {
@@ -1434,12 +1978,12 @@ const setupSelected = new Set();
 const CHECKBOX_CLASS = 'h-5 w-5 shrink-0 cursor-pointer rounded accent-brand-600';
 
 function readSetupChoice(mode) {
-    try { const saved = JSON.parse(localStorage.getItem(`eduQuizSetup.${mode}`) || '[]'); return Array.isArray(saved) ? saved : []; }
+    try { const saved = JSON.parse(localStorage.getItem(`eduQuizSetup.${moduleId}.${mode}`) || '[]'); return Array.isArray(saved) ? saved : []; }
     catch (error) { return []; }
 }
 
 function saveSetupChoice(mode, ids) {
-    try { localStorage.setItem(`eduQuizSetup.${mode}`, JSON.stringify(ids)); } catch (error) { /* per-viewer convenience only */ }
+    try { localStorage.setItem(`eduQuizSetup.${moduleId}.${mode}`, JSON.stringify(ids)); } catch (error) { /* per-viewer convenience only */ }
 }
 
 // Every block id in reading order, so a selection always runs in book order.
@@ -1555,8 +2099,8 @@ function renderSetupCount() {
         const count = practiceQuestionsFor(ids).length;
         text = `${blocks} · ${count} question${count === 1 ? '' : 's'}`;
         ready = count > 0;
-    } else if (!providerReady) {
-        text = 'No model connected';
+    } else if (!aiReady()) {
+        text = providerReady ? AI_ONLY_ON_LIBRARY_BOOKS : 'No model connected';
         ready = false;
     } else {
         const count = ids.length === 1 ? aiQuestionCount : generatedCountFor(ids.length);
@@ -1649,19 +2193,24 @@ dom.setupStartBtn.addEventListener('click', () => {
     startQuiz();
 });
 
+// Opens the book this viewer last chose, or the default book.
 async function loadBundledModule() {
-    setAppState(false); 
-
-    try {
-        const response = await fetch(BUNDLED_MODULE_URL);
-        if (!response.ok) {
-            throw new Error(`Bundled module request failed with status ${response.status}.`);
+    setAppState(false);
+    if (dom.importBookLink) dom.importBookLink.href = `${location.protocol}//${location.hostname}:8769/`;
+    let saved = null;
+    try { saved = localStorage.getItem('eduActiveBook'); } catch (error) { /* storage blocked */ }
+    for (const file of [...new Set([saved, DEFAULT_BOOK].filter(Boolean))]) {
+        try {
+            const response = await fetch(`data/${encodeURIComponent(file)}`);
+            if (!response.ok) throw new Error(`Book request failed with status ${response.status}.`);
+            loadModuleData(await response.json(), 'Book', file);
+            break;
+        } catch (error) {
+            console.error(`Failed to open ${file}:`, error);
         }
-        loadModuleData(await response.json(), 'Hands-On Machine Learning');
-    } catch (error) {
-        console.error('Failed to load bundled learning module:', error);
-        setAppState(false);
     }
+    await loadLibrary();
+    if (!tutorialData.title) setAppState(false);
 }
 
 document.addEventListener('DOMContentLoaded', loadBundledModule);
@@ -1681,21 +2230,20 @@ async function refreshProviderStatus() {
         providerReady = Boolean(data.ready);
         providerTokenRequired = Boolean(data.token_required);
         providerModel = data.model || '';
-        dom.blockAiQuizBtn.disabled = !providerReady;
-        dom.blockAiQuizBtn.title = providerReady
+        dom.blockAiQuizBtn.disabled = !aiReady();
+        dom.blockAiQuizBtn.title = aiReady()
             ? `Generate questions with ${data.model}`
-            : 'Unavailable until an operator configures a provider on the server';
+            : (providerReady ? AI_ONLY_ON_LIBRARY_BOOKS : 'Unavailable until an operator configures a provider on the server');
     } catch (error) {
         providerReady = false;
         dom.blockAiQuizBtn.disabled = true;
         dom.blockAiQuizBtn.title = 'Provider status unavailable; the book quizzes still work';
     }
-    dom.startGeneratedBtn.disabled = !tutorialData.title || !providerReady;
-    dom.startGeneratedBtn.title = providerReady ? '' : 'Connect a model in Settings first';
+    if (tutorialData.title) renderHome();
 }
 
 async function startBlockAiQuiz() {
-    if (!providerReady) return;
+    if (!aiReady()) return;
     const token = generationToken();
     if (token === null) return;
     setAiBlockStatus('Generating questions from this block...');
@@ -1705,6 +2253,7 @@ async function startBlockAiQuiz() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Edu-Quiz-Token': token },
             body: JSON.stringify({
+                module: activeBookFile,
                 chapter: currentTheory.chapterIndex + 1,
                 block: currentTheory.blockIndex + 1,
                 count: aiQuestionCount

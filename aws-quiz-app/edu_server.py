@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import time
+import unicodedata
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
@@ -34,6 +35,20 @@ PROVIDER_TIMEOUT_SECONDS = 120
 RATE_LIMIT_REQUESTS = 20
 RATE_LIMIT_SECONDS = 3_600
 REQUEST_HISTORY: dict[str, deque[float]] = defaultdict(deque)
+
+# Code runner proxy (17-09-26). Lesson code cells run in Jupyter kernels on dn2;
+# the page only ever talks to this server. Runs have their own rate bucket so
+# they never use up the AI quiz generation quota, and they need no provider.
+RUN_ROUTES = ("/api/run", "/api/run/stop", "/api/run/reset-kernel")
+RUN_UPSTREAM = {"/api/run": "/run", "/api/run/stop": "/interrupt", "/api/run/reset-kernel": "/restart"}
+RUN_MAX_REQUEST_BYTES = 256 * 1024
+RUN_TIMEOUT_SECONDS = 90
+RUN_RATE_LIMIT_REQUESTS = 120
+RUN_RATE_LIMIT_SECONDS = 60
+RUN_HISTORY: dict[str, deque[float]] = defaultdict(deque)
+RUN_MODULES = {"geron-homl3"}
+RUN_SESSION = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+RUN_CELL_ID = re.compile(r"^[a-z0-9_-]{1,32}$")
 
 # The provider env file and the general-settings file BOTH live outside
 # /srv/foxai/edu-argumentation. That tree is deployed with `rsync --delete`, so
@@ -168,6 +183,12 @@ def write_env_file(values: dict[str, str]) -> None:
     admin = os.getenv("EDU_ADMIN_TOKEN", "")
     if admin:
         lines.append(f"EDU_ADMIN_TOKEN={admin}")
+    # The code runner's lines share this file. Settings rewrites the whole file,
+    # so without this a Save would silently disconnect the runner.
+    for field in ("EDU_RUNNER_URL", "EDU_RUNNER_KEY"):
+        value = os.getenv(field, "")
+        if value:
+            lines.append(f"{field}={value}")
     write_atomic(ENV_PATH, "\n".join(lines) + "\n")
 
 
@@ -208,10 +229,10 @@ class ProviderConfig:
         return cls(**values, json_mode=os.getenv("EDU_QUIZ_JSON_MODE", "true").lower() != "false")
 
 
-def read_json(handler: SimpleHTTPRequestHandler) -> dict[str, Any]:
+def read_json(handler: SimpleHTTPRequestHandler, limit: int = MAX_REQUEST_BYTES) -> dict[str, Any]:
     length = int(handler.headers.get("Content-Length", "0"))
-    if length <= 0 or length > MAX_REQUEST_BYTES:
-        raise ValueError("Request body must be a JSON object smaller than 2 KB.")
+    if length <= 0 or length > limit:
+        raise ValueError(f"Request body must be a JSON object smaller than {limit // 1024} KB.")
     payload = json.loads(handler.rfile.read(length))
     if not isinstance(payload, dict):
         raise ValueError("Request body must be a JSON object.")
@@ -227,25 +248,94 @@ def strip_code_fence(text: str) -> str:
     return value.strip()
 
 
-def load_module(root: Path) -> dict[str, Any]:
-    return json.loads((root / "data" / "geron_hands_on_ml_ch01_ch09.json").read_text(encoding="utf-8"))
+DEFAULT_MODULE = "geron_hands_on_ml_ch01_ch09.json"
+MODULE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.json")
+_MODULE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
-def all_theory_blocks(root: Path) -> list[tuple[int, int]]:
+def module_path(root: Path, name: str | None = None) -> Path:
+    """A book is a JSON module in data/. Test fixtures and anything outside data/ are not books."""
+    name = name or DEFAULT_MODULE
+    data_dir = (root / "data").resolve()
+    path = (data_dir / name).resolve()
+    if not MODULE_NAME.fullmatch(name) or name.startswith("test_") or path.parent != data_dir or not path.is_file():
+        raise ValueError("Unknown book.")
+    return path
+
+
+def load_module(root: Path, name: str | None = None) -> dict[str, Any]:
+    path = module_path(root, name)
+    mtime = path.stat().st_mtime
+    cached = _MODULE_CACHE.get(str(path))
+    if cached and cached[0] == mtime:
+        return cached[1]
+    data = json.loads(path.read_text(encoding="utf-8"))
+    _MODULE_CACHE[str(path)] = (mtime, data)
+    return data
+
+
+def module_id_for(data: dict[str, Any]) -> str:
+    """Same rule as moduleIdFor() in app.js, so the home page reads the right progress."""
+    tutorial = data.get("tutorialData") if isinstance(data.get("tutorialData"), dict) else {}
+    explicit = str(data.get("moduleId") or tutorial.get("moduleId") or "").strip().lower()
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]{1,63}", explicit):
+        return explicit
+    title = unicodedata.normalize("NFKD", str(tutorial.get("title") or "module").lower())
+    slug = re.sub(r"[^a-z0-9]+", "-", title).strip("-")[:56]
+    return f"t-{slug}" if re.match(r"[a-z0-9]", slug) and len(slug) >= 2 else "module"
+
+
+def list_modules(root: Path) -> list[dict[str, Any]]:
+    books = []
+    for path in sorted((root / "data").glob("*.json")):
+        try:
+            data = load_module(root, path.name)
+        except (ValueError, OSError, json.JSONDecodeError):
+            continue
+        tutorial = data.get("tutorialData")
+        sections = tutorial.get("sections") if isinstance(tutorial, dict) else None
+        if not isinstance(sections, list) or not isinstance(data.get("quizData"), list):
+            continue
+        books.append({
+            "file": path.name,
+            "moduleId": module_id_for(data),
+            "title": str(tutorial.get("title") or path.stem),
+            "chapters": len(sections),
+            "lessons": sum(len(section.get("items") or []) for section in sections if isinstance(section, dict)),
+            "questions": len(data["quizData"]),
+            "default": path.name == DEFAULT_MODULE,
+        })
+    return books
+
+
+def all_theory_blocks(root: Path, name: str | None = None) -> list[tuple[int, int]]:
     """Every (chapter, block) pair, 1-based, that a fresh quiz may draw from."""
-    sections = load_module(root)["tutorialData"]["sections"]
+    sections = load_module(root, name)["tutorialData"]["sections"]
     return [(chapter, block) for chapter, section in enumerate(sections, 1) for block in range(1, len(section["items"]) + 1)]
 
 
-def source_for_block(root: Path, chapter_number: int, block_number: int) -> tuple[str, str]:
-    module = load_module(root)
+def source_for_block(root: Path, chapter_number: int, block_number: int, name: str | None = None) -> tuple[str, str]:
+    module = load_module(root, name)
     chapter = module["tutorialData"]["sections"][chapter_number - 1]
     item = chapter["items"][block_number - 1]
+    if isinstance(item, str):
+        # Older modules store a block as one plain string.
+        return chapter["title"], item
     parts: list[str] = []
     for content in item.get("blocks", []):
         if content.get("content"):
             parts.append(content["content"])
-        parts.extend(content.get("items", []))
+        for entry in content.get("items", []):
+            # Callout items are strings; "Go deeper" items are {term, text}.
+            if isinstance(entry, str):
+                parts.append(entry)
+            elif isinstance(entry, dict) and entry.get("text"):
+                parts.append(f"{entry.get('term', '')} — {entry['text']}")
+        # Interactive code cells replaced a code card; keep their code in the
+        # quiz source so the lesson does not lose it for AI question generation.
+        for cell in content.get("cells", []) if content.get("type") == "code_cells" else []:
+            if isinstance(cell, dict) and cell.get("source"):
+                parts.append(f"```python\n{cell['source']}\n```")
     source = "\n\n".join(parts)
     if not source:
         raise ValueError("That theory block has no source text for AI generation.")
@@ -373,14 +463,14 @@ def shuffled_question(question: dict[str, Any]) -> dict[str, Any]:
 
 
 def fresh_questions(config: ProviderConfig, root: Path, count: int,
-                    blocks: set[tuple[int, int]] | None = None) -> tuple[list[dict[str, Any]], list[str]]:
+                    blocks: set[tuple[int, int]] | None = None, name: str | None = None) -> tuple[list[dict[str, Any]], list[str]]:
     """Write a new quiz with the model from randomly chosen book sections.
 
     Sections are drawn without replacement; a couple of spares are held back so a
     section whose call fails is replaced instead of shrinking the quiz. Returns the
     questions (shuffled) and the error messages of any calls that failed.
     """
-    pool = all_theory_blocks(root)
+    pool = all_theory_blocks(root, name)
     if blocks:
         # The learner ticked chapters and blocks on the quiz setup screen (17-09-26).
         pool = [target for target in pool if target in blocks]
@@ -391,7 +481,7 @@ def fresh_questions(config: ProviderConfig, root: Path, count: int,
     spares = picks[len(plan):]
 
     def one(target: tuple[int, int], size: int) -> list[dict[str, Any]]:
-        chapter_title, source = source_for_block(root, *target)
+        chapter_title, source = source_for_block(root, *target, name)
         return provider_questions(config, chapter_title, source, size, exact=False)
 
     questions: list[dict[str, Any]] = []
@@ -503,6 +593,9 @@ class EduHandler(SimpleHTTPRequestHandler):
         if route == "/api/general":
             self.send_json(HTTPStatus.OK, read_general_settings())
             return
+        if route == "/api/modules":
+            self.send_json(HTTPStatus.OK, {"books": list_modules(self.root)})
+            return
         if route == "/api/progress":
             query = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
             self.send_json(HTTPStatus.OK, read_progress(module_key((query.get("module") or [""])[0])))
@@ -586,13 +679,80 @@ class EduHandler(SimpleHTTPRequestHandler):
             return
         self.send_json(HTTPStatus.OK, {**mark_block_complete(module, block, score, total, source), "marked": True})
 
+    def proxy_run(self, route: str) -> None:
+        """Validate, rate-limit and forward a code-runner call to dn2."""
+        now = time.monotonic()
+        history = RUN_HISTORY[self.client_address[0]]
+        while history and history[0] <= now - RUN_RATE_LIMIT_SECONDS:
+            history.popleft()
+        if len(history) >= RUN_RATE_LIMIT_REQUESTS:
+            self.send_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "Too many runs. Wait a minute."})
+            return
+        history.append(now)
+        try:
+            payload = read_json(self, RUN_MAX_REQUEST_BYTES)
+            body: dict[str, Any] = {
+                "module": str(payload.get("module", "")),
+                "lesson": str(payload.get("lesson", "")),
+                "session": str(payload.get("session", "")),
+            }
+            if body["module"] not in RUN_MODULES or not BLOCK_ID.match(body["lesson"]) or not RUN_SESSION.match(body["session"]):
+                raise ValueError("module, lesson or session is invalid.")
+            if route == "/api/run":
+                cells = payload.get("cells")
+                if not isinstance(cells, list) or not 1 <= len(cells) <= 50:
+                    raise ValueError("cells must be a non-empty list.")
+                body["cells"] = []
+                for cell in cells:
+                    if not isinstance(cell, dict) or not RUN_CELL_ID.match(str(cell.get("id", ""))) or not isinstance(cell.get("source"), str):
+                        raise ValueError("a cell is invalid.")
+                    body["cells"].append({"id": cell["id"], "source": cell["source"]})
+                body["target"] = str(payload.get("target", ""))
+                if body["target"] not in {cell["id"] for cell in body["cells"]}:
+                    raise ValueError("target must be one of the cells.")
+        except (ValueError, TypeError, json.JSONDecodeError) as error:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        base, key = os.getenv("EDU_RUNNER_URL", "").strip().rstrip("/"), os.getenv("EDU_RUNNER_KEY", "").strip()
+        if not base.startswith("http://") or not key:
+            self.send_json(HTTPStatus.BAD_GATEWAY, {"error": "Runner unavailable"})
+            return
+        request = Request(base + RUN_UPSTREAM[route], data=json.dumps(body).encode("utf-8"), method="POST",
+                          headers={"Content-Type": "application/json", "X-Edu-Runner-Key": key})
+        try:
+            with urlopen(request, timeout=RUN_TIMEOUT_SECONDS) as response:
+                result = json.loads(response.read())
+        except HTTPError as error:
+            # Runner input errors and busy/full answers pass through; auth or
+            # anything else is a broken link between the two hosts.
+            try:
+                detail = json.loads(error.read()).get("error", "")
+            except (ValueError, OSError):
+                detail = ""
+            if error.code in (400, 409, 503):
+                self.send_json(HTTPStatus(error.code), {"error": detail or "Runner refused the request."})
+            else:
+                self.send_json(HTTPStatus.BAD_GATEWAY, {"error": "Runner unavailable"})
+            return
+        except (URLError, TimeoutError, OSError, ValueError):
+            self.send_json(HTTPStatus.BAD_GATEWAY, {"error": "Runner unavailable"})
+            return
+        if route != "/api/run":
+            result = {"ok": True}
+        self.send_json(HTTPStatus.OK, result)
+
     def do_POST(self) -> None:
         route = self.path.split("?", 1)[0]
-        if route not in ("/api/quiz", "/api/quiz/fresh", "/api/settings", "/api/progress"):
+        if route not in ("/api/quiz", "/api/quiz/fresh", "/api/settings", "/api/progress") + RUN_ROUTES:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "Unknown API route."})
             return
         if not self.same_origin():
             self.send_json(HTTPStatus.FORBIDDEN, {"error": "Cross-origin requests are not allowed."})
+            return
+
+        if route in RUN_ROUTES:
+            self.proxy_run(route)
             return
 
         if route == "/api/progress":
@@ -631,13 +791,15 @@ class EduHandler(SimpleHTTPRequestHandler):
         if route == "/api/quiz/fresh":
             try:
                 payload = read_json(self)
+                book = str(payload.get("module") or DEFAULT_MODULE)
+                module_path(self.root, book)
                 count = int(payload.get("count", general["fresh_quiz_size"]))
                 if not MIN_FRESH_QUESTIONS <= count <= MAX_FRESH_QUESTIONS:
                     raise ValueError(f"A fresh quiz must have between {MIN_FRESH_QUESTIONS} and {MAX_FRESH_QUESTIONS} questions.")
                 blocks = None
                 if payload.get("blocks") is not None:
                     raw = payload["blocks"]
-                    valid = set(all_theory_blocks(self.root))
+                    valid = set(all_theory_blocks(self.root, book))
                     if not isinstance(raw, list) or not raw or len(raw) > len(valid):
                         raise ValueError("Blocks must be a non-empty list.")
                     blocks = {(int(pair[0]), int(pair[1])) for pair in raw}
@@ -649,7 +811,7 @@ class EduHandler(SimpleHTTPRequestHandler):
             # One fresh quiz is one learner action, so it takes one rate-limit slot
             # even though it fans out into several provider calls.
             history.append(now)
-            questions, errors = fresh_questions(config, self.root, count, blocks)
+            questions, errors = fresh_questions(config, self.root, count, blocks, book)
             if not questions:
                 self.send_json(HTTPStatus.BAD_GATEWAY, {"error": errors[0] if errors else "The model returned no questions."})
                 return
@@ -658,11 +820,12 @@ class EduHandler(SimpleHTTPRequestHandler):
 
         try:
             payload = read_json(self)
+            book = str(payload.get("module") or DEFAULT_MODULE)
             chapter, block = int(payload.get("chapter")), int(payload.get("block"))
             count = int(payload.get("count", general["ai_question_count"]))
             if chapter < 1 or block < 1 or not 3 <= count <= MAX_QUESTIONS:
                 raise ValueError("Chapter, block, or question count is invalid.")
-            chapter_title, source = source_for_block(self.root, chapter, block)
+            chapter_title, source = source_for_block(self.root, chapter, block, book)
             questions = provider_questions(config, chapter_title, source, count)
         except (ValueError, IndexError, KeyError, json.JSONDecodeError) as error:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
