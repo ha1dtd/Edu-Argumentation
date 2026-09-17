@@ -1282,9 +1282,13 @@ function runnerSession() {
 }
 
 function lessonCodeCells(lesson) {
-    const block = theoryBlocks(currentTheory.chapterIndex)[currentTheory.blockIndex];
-    const blocks = block && Array.isArray(block.blocks) ? block.blocks : [];
-    return blocks
+    // Scans the WHOLE CHAPTER, not just the page on screen. A long walkthrough is
+    // split into several lessons (Rule 12: one lesson = one idea), but its cells
+    // still share one kernel because every code_cells block keeps the PARENT
+    // `lesson` id. Without this, `ch01-b08d`'s predict cell would run in a page
+    // that never executed `ch01-b08c`'s fit, and die with `NameError: model`.
+    return theoryBlocks(currentTheory.chapterIndex)
+        .flatMap(item => (item && Array.isArray(item.blocks) ? item.blocks : []))
         .filter(b => b && b.type === 'code_cells' && b.lesson === lesson && Array.isArray(b.cells))
         .flatMap(b => b.cells)
         .filter(cell => cell && typeof cell.id === 'string' && typeof cell.source === 'string');
@@ -1626,7 +1630,15 @@ function renderDeeper(block) {
     details.className = 'not-prose group my-6 rounded-xl border border-gray-700 bg-gray-900/60';
     const summary = document.createElement('summary');
     summary.className = 'flex min-h-[44px] cursor-pointer select-none items-center gap-2 rounded-xl px-4 text-sm font-semibold text-gray-200 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 [&::-webkit-details-marker]:hidden';
-    summary.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" class="h-4 w-4 shrink-0 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg><span>Go deeper</span>';
+    // Rule 15: a `deeper` panel is either reasoning or API notes, and the label has
+    // to say which. Every panel in the book used to be a Python glossary under a
+    // bare "Go deeper", so the one affordance for "explain more" always returned
+    // syntax. Untagged blocks are syntax, which is what they historically were.
+    const deeperKind = block.kind === 'concept' ? 'concept' : 'syntax';
+    const deeperLabel = deeperKind === 'concept' ? 'Go deeper · why it works' : 'Go deeper · Python notes';
+    details.dataset.deeper = deeperKind;
+    summary.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" class="h-4 w-4 shrink-0 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg><span></span>';
+    summary.querySelector('span').textContent = deeperLabel;
     details.appendChild(summary);
     const list = document.createElement('ul');
     list.className = 'm-0 space-y-3 px-4 pb-4 pt-1 text-gray-300 [overflow-wrap:anywhere]';
@@ -2386,3 +2398,157 @@ dom.settingsUnlockBtn.addEventListener('click', () => {
 dom.settingsSaveBtn.addEventListener('click', saveSettings);
 document.addEventListener('DOMContentLoaded', syncMenuToViewport);
 document.addEventListener('DOMContentLoaded', loadGeneralSettings);
+
+// --- Ask about this lesson ---------------------------------------------------
+// The learner studies here instead of beside the paper book, so "I don't get
+// this" has to be answerable without leaving the page. The server grounds the
+// reply in the open lesson first, then the book, then the model's own knowledge,
+// and labels which of those it used -- a quoted fact and a recalled one must not
+// look the same to someone who cannot yet tell them apart.
+const askDom = {
+    fab: document.getElementById('ask-fab'),
+    panel: document.getElementById('ask-panel'),
+    close: document.getElementById('ask-close'),
+    log: document.getElementById('ask-log'),
+    form: document.getElementById('ask-form'),
+    input: document.getElementById('ask-input'),
+    send: document.getElementById('ask-send'),
+    context: document.getElementById('ask-context')
+};
+const askHistory = [];          // {role, content} -- reset when the lesson changes
+let askKey = '';
+let askBusy = false;
+
+const ASK_BADGE = {
+    lesson: ['This lesson', 'bg-green-500/15 text-green-300 border-green-500/30'],
+    book: ['From the book', 'bg-blue-500/15 text-blue-300 border-blue-500/30'],
+    general: ['Outside the book', 'bg-amber-500/15 text-amber-300 border-amber-500/30']
+};
+
+function askLessonLabel() {
+    const chapters = typeof theoryChapters === 'function' ? theoryChapters() : [];
+    const chapter = chapters[currentTheory.chapterIndex];
+    if (!chapter) return '';
+    const block = (theoryBlocks(currentTheory.chapterIndex) || [])[currentTheory.blockIndex];
+    const term = block && (block.term || '');
+    return [chapter.title, term].filter(Boolean).join(' · ');
+}
+
+function askSyncLesson() {
+    const key = `${currentTheory.chapterIndex}:${currentTheory.blockIndex}`;
+    if (key === askKey) return;
+    askKey = key;
+    askHistory.length = 0;                       // a new lesson is a new conversation
+    if (askDom.log) askDom.log.innerHTML = '';
+    if (askDom.context) askDom.context.textContent = askLessonLabel();
+}
+
+function askBubble(role, text, badge, asHtml) {
+    const wrap = document.createElement('div');
+    wrap.className = role === 'user' ? 'flex justify-end' : '';
+    const bubble = document.createElement('div');
+    bubble.className = role === 'user'
+        ? 'max-w-[85%] rounded-xl bg-brand-600 text-white px-3 py-2'
+        : 'rounded-xl bg-gray-900/60 border border-gray-700 px-3 py-2 text-gray-200';
+    if (badge) {
+        const [label, classes] = ASK_BADGE[badge.source] || ASK_BADGE.general;
+        const tag = document.createElement('span');
+        tag.className = `inline-block mb-2 rounded border px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wider ${classes}`;
+        tag.textContent = badge.page ? `${label} · p.${badge.page}` : label;
+        bubble.appendChild(tag);
+    }
+    const body = document.createElement('div');
+    // textContent by default: the question is learner input and must never be
+    // parsed as markup. innerHTML only for trusted, model-rendered markdown.
+    if (asHtml) body.innerHTML = text; else body.textContent = text;
+    bubble.appendChild(body);
+    wrap.appendChild(bubble);
+    askDom.log.appendChild(wrap);
+    askDom.log.scrollTop = askDom.log.scrollHeight;
+    return bubble;
+}
+
+function askSetOpen(open) {
+    if (!askDom.panel) return;
+    askDom.panel.classList.toggle('hidden-view', !open);
+    askDom.fab.setAttribute('aria-expanded', String(open));
+    if (open) { askSyncLesson(); askDom.input.focus(); }
+}
+
+async function askSubmit(event) {
+    event.preventDefault();
+    if (askBusy) return;
+    const question = (askDom.input.value || '').trim();
+    if (!question) return;
+    const token = typeof generationToken === 'function' ? generationToken() : '';
+    if (token === null) return;
+    askBusy = true;
+    askDom.send.disabled = true;
+    askDom.input.value = '';
+    askBubble('user', question);
+    const pending = askBubble('assistant', 'Reading the lesson…');
+    pending.firstChild.className = 'text-gray-500';
+    try {
+        const response = await fetch('api/ask', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Edu-Quiz-Token': token || '' },
+            body: JSON.stringify({
+                module: activeBookFile,
+                chapter: currentTheory.chapterIndex + 1,
+                block: currentTheory.blockIndex + 1,
+                question,
+                history: askHistory.slice(-6)
+            })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `Error ${response.status}`);
+        pending.innerHTML = '';
+        const [label, classes] = ASK_BADGE[data.source] || ASK_BADGE.general;
+        const tag = document.createElement('span');
+        tag.className = `inline-block mb-2 rounded border px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wider ${classes}`;
+        tag.textContent = data.page ? `${label} · p.${data.page}` : label;
+        const body = document.createElement('div');
+        if (typeof formatText === 'function') body.innerHTML = formatText(data.answer);
+        else body.textContent = data.answer;
+        pending.append(tag, body);
+        askHistory.push({ role: 'user', content: question }, { role: 'assistant', content: data.answer });
+    } catch (error) {
+        pending.innerHTML = '';
+        const failed = document.createElement('span');
+        failed.className = 'text-red-300';
+        failed.textContent = error.message || 'Could not reach the tutor.';
+        pending.appendChild(failed);
+    } finally {
+        askBusy = false;
+        askDom.send.disabled = false;
+        askDom.log.scrollTop = askDom.log.scrollHeight;
+    }
+}
+
+function askInit() {
+    if (!askDom.fab || !askDom.panel) return;
+    askDom.fab.addEventListener('click', () => askSetOpen(askDom.panel.classList.contains('hidden-view')));
+    askDom.close.addEventListener('click', () => askSetOpen(false));
+    askDom.form.addEventListener('submit', askSubmit);
+    askDom.input.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); askDom.form.requestSubmit(); }
+    });
+    askDom.input.addEventListener('input', () => {
+        askDom.input.style.height = 'auto';
+        askDom.input.style.height = `${Math.min(askDom.input.scrollHeight, 128)}px`;
+    });
+    // Track the tutorial screen by observing it, rather than patching the five
+    // places that show or hide it -- one of those would eventually be missed.
+    const screen = document.getElementById('tutorial-screen');
+    if (screen) {
+        const sync = () => {
+            const reading = !screen.classList.contains('hidden-view');
+            askDom.fab.classList.toggle('hidden-view', !reading);
+            if (!reading) askSetOpen(false); else askSyncLesson();
+        };
+        new MutationObserver(sync).observe(screen, { attributes: true, attributeFilter: ['class'] });
+        sync();
+    }
+}
+
+document.addEventListener('DOMContentLoaded', askInit);

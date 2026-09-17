@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import secrets
@@ -40,6 +41,34 @@ REQUEST_HISTORY: dict[str, deque[float]] = defaultdict(deque)
 # the page only ever talks to this server. Runs have their own rate bucket so
 # they never use up the AI quiz generation quota, and they need no provider.
 RUN_ROUTES = ("/api/run", "/api/run/stop", "/api/run/reset-kernel")
+
+# --- Ask the book: a tutor grounded in the lesson, then the book -------------
+# The learner reads here instead of beside the paper book, so "I don't get this"
+# has to be answerable in place. Sources are ranked lesson -> book -> the model's
+# own knowledge, and the answer says which one it used so the reader can tell a
+# quoted fact from a recalled one.
+BOOK_ROOT = Path(os.getenv("EDU_BOOK_ROOT", "/home/ubuntu/foxai-data/edu-argumentation/books"))
+BOOK_FILES = {"geron-homl3": "homl3.pages.json"}
+ASK_MAX_QUESTION = 600
+ASK_HISTORY_TURNS = 6
+ASK_BOOK_PAGES = 3
+ASK_EXCERPT_CHARS = 1_100
+ASK_RATE_LIMIT_REQUESTS = 60
+ASK_RATE_LIMIT_SECONDS = 600
+ASK_HISTORY: dict[str, deque] = defaultdict(deque)
+_BOOK_CACHE: dict[str, tuple[float, list[str]]] = {}
+_BOOK_DF: dict[str, tuple[int, dict[str, int]]] = {}
+_BOOK_CHAPTERS: dict[str, list[tuple[int, int, int]]] = {}
+ASK_SAME_CHAPTER_BOOST = 2.5
+ASK_NEAR_CHAPTER_BOOST = 1.4
+ASK_COMMON_TERM_SHARE = 0.12
+ASK_STOPWORDS = frozenset("""a an the and or but if then than that this these those is are was were be been being
+do does did of in on at to for from by with as it its he she they we you i what why how when which who whom can
+could should would may might will just not no nor so such about into over under again further once here there all
+any both each few more most other some only own same too very s t don now me my mine your yours
+explain explains simply simple mean means meaning tell show shows understand difference between work works
+working use used using need needs want get got make makes made thing things way ways lot really actually""".split())
+
 RUN_UPSTREAM = {"/api/run": "/run", "/api/run/stop": "/interrupt", "/api/run/reset-kernel": "/restart"}
 RUN_MAX_REQUEST_BYTES = 256 * 1024
 RUN_TIMEOUT_SECONDS = 90
@@ -502,6 +531,189 @@ def fresh_questions(config: ProviderConfig, root: Path, count: int,
     return questions[:count], errors
 
 
+
+def book_pages(module_id: str) -> list[str]:
+    """The book's page text, cached by mtime. Empty list when a module has no book."""
+    name = BOOK_FILES.get(module_id)
+    if not name:
+        return []
+    path = BOOK_ROOT / name
+    try:
+        stamp = path.stat().st_mtime
+    except OSError:
+        return []
+    cached = _BOOK_CACHE.get(module_id)
+    if cached and cached[0] == stamp:
+        return cached[1]
+    try:
+        pages = json.loads(path.read_text(encoding="utf-8")).get("pages") or []
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return []
+    pages = [str(p or "") for p in pages]
+    _BOOK_CACHE[module_id] = (stamp, pages)
+    return pages
+
+
+def book_document_frequency(module_id: str) -> dict[str, int]:
+    """How many pages each word appears on, cached per book."""
+    cached = _BOOK_DF.get(module_id)
+    pages = book_pages(module_id)
+    if cached and cached[0] == len(pages):
+        return cached[1]
+    df: dict[str, int] = defaultdict(int)
+    for text in pages:
+        for word in set(re.findall(r"[a-z0-9]+", text.lower())):
+            df[word] += 1
+    _BOOK_DF[module_id] = (len(pages), df)
+    return df
+
+
+def book_chapters(module_id: str) -> list[tuple[int, int, int]]:
+    """(chapter number, first page, last page) from the book's own outline.
+
+    Used to keep the search inside the body -- the index and the table of contents
+    are dense with rare words and otherwise win every query -- and to prefer the
+    chapter the learner is actually reading.
+    """
+    cached = _BOOK_CHAPTERS.get(module_id)
+    if cached is not None:
+        return cached
+    name = BOOK_FILES.get(module_id)
+    rows: list[tuple[int, int, int]] = []
+    if name:
+        try:
+            outline = json.loads((BOOK_ROOT / name).read_text(encoding="utf-8")).get("outline") or []
+        except (OSError, json.JSONDecodeError, AttributeError):
+            outline = []
+        starts: list[tuple[int, int]] = []
+        tail = len(book_pages(module_id))
+        for entry in outline:
+            if not isinstance(entry, dict):
+                continue
+            found = re.match(r"^\s*(\d{1,2})\.\s", str(entry.get("title") or ""))
+            page = entry.get("page")
+            if found and isinstance(page, int):
+                starts.append((int(found.group(1)), page))
+            elif isinstance(page, int) and starts and re.match(r"^\s*(Appendix|Index)\b", str(entry.get("title") or ""), re.I):
+                tail = min(tail, page)
+        starts.sort()
+        for i, (number, start) in enumerate(starts):
+            end = starts[i + 1][1] - 1 if i + 1 < len(starts) else tail - 1
+            rows.append((number, start, end))
+    _BOOK_CHAPTERS[module_id] = rows
+    return rows
+
+
+def book_search(module_id: str, query: str, limit: int = ASK_BOOK_PAGES, chapter: int | None = None) -> list[dict[str, Any]]:
+    """Keyword search over the book, weighted by how rare each word is.
+
+    Deliberately not embeddings: the book is ~1.8 MB, the lesson already pins the
+    topic, and a vector store would add a dependency and a build step for recall
+    this does not need.
+
+    Plain term-frequency was measured returning pages 877/554/256 for "why is the
+    error squared" -- the filler words carried the match. Weighting each term by
+    1/document-frequency makes a word that appears on 40 pages outrank one that
+    appears on 600, which is what puts the right chapter first.
+    """
+    pages = book_pages(module_id)
+    terms = {w for w in re.findall(r"[a-z0-9]+", query.lower()) if len(w) > 2 and w not in ASK_STOPWORDS}
+    if not pages or not terms:
+        return []
+    chapters = book_chapters(module_id)
+    body = (chapters[0][1], chapters[-1][2]) if chapters else (0, len(pages) - 1)
+    here = next(((a, b) for n, a, b in chapters if n == chapter), None)
+    df = book_document_frequency(module_id)
+    total = len(pages)
+    weights = {t: math.log(1 + total / (1 + df.get(t, 0))) for t in terms}
+    # A term on more than this share of pages says nothing about which page to pick.
+    common = {t for t in terms if df.get(t, 0) > total * ASK_COMMON_TERM_SHARE}
+    useful = {t for t in terms if t not in common} or terms
+    scored: list[tuple[float, int, int]] = []
+    for index, text in enumerate(pages):
+        if not body[0] <= index <= body[1]:
+            continue                       # front matter, appendices and the index
+        low = text.lower()
+        score = sum(low.count(term) * weights[term] for term in useful if term in low)
+        if not score:
+            continue
+        if here and here[0] <= index <= here[1]:
+            score *= ASK_SAME_CHAPTER_BOOST          # what they are reading now
+        elif here and here[0] - 40 <= index <= here[1] + 40:
+            score *= ASK_NEAR_CHAPTER_BOOST
+        scored.append((round(score, 4), len({t for t in useful if t in low}), index))
+    scored.sort(reverse=True)
+    out: list[dict[str, Any]] = []
+    for _score, _distinct, index in scored[:limit]:
+        text = pages[index]
+        low = text.lower()
+        first = min((low.find(t) for t in useful if t in low), default=0)
+        start = max(0, first - ASK_EXCERPT_CHARS // 3)
+        out.append({"page": index, "text": " ".join(text[start:start + ASK_EXCERPT_CHARS].split())})
+    return out
+
+
+ASK_SYSTEM = (
+    "You are the learner's tutor inside a study app. They are a junior data engineer: strong on SQL, "
+    "tables, Spark and ETL, new to machine learning, and weak on Python, pandas and NumPy.\n\n"
+    "HOW TO TALK. Like a person explaining to a colleague at a desk, not like a textbook. Short "
+    "sentences. One idea at a time. Answer the actual question in the first sentence, then explain. "
+    "Gloss every piece of jargon the first time you use it. Use an analogy from their world - a table, "
+    "a SELECT, a GROUP BY, a full refresh versus an incremental load - whenever it is genuinely "
+    "accurate, and skip it when it is not. Plain words over precise-sounding ones. No preamble, no "
+    "'great question', no bullet-point dumps, no emoji. If they ask something short, answer short.\n\n"
+    "WHERE ANSWERS COME FROM, in this order:\n"
+    "1. THE LESSON they are reading. Use it first - it is on their screen.\n"
+    "2. THE BOOK EXCERPTS supplied. Use these when the lesson does not cover it. It is fine to reach "
+    "ahead of where they are; say so plainly when you do.\n"
+    "3. YOUR OWN KNOWLEDGE, when neither covers it. Say that is what you are doing.\n\n"
+    "FIRST LINE OF YOUR REPLY must be exactly one of:\n"
+    "SOURCE: lesson\n"
+    "SOURCE: book p.<page number>\n"
+    "SOURCE: general\n"
+    "Then a blank line, then the answer. Never invent a page number, a paper, an author or a URL. "
+    "If you are unsure, say you are unsure - that is more useful to them than a confident guess."
+)
+SOURCE_LINE = re.compile(r"^\s*SOURCE:\s*(lesson|book|general)\b[^\n]*", re.I)
+
+
+def ask_tutor(config: "ProviderConfig", chapter_title: str, lesson_term: str, lesson: str,
+              question: str, history: list[dict[str, str]], excerpts: list[dict[str, Any]]) -> dict[str, Any]:
+    context = [f"THE LESSON THEY ARE READING\nChapter: {chapter_title}\nLesson: {lesson_term}\n\n{lesson}"]
+    if excerpts:
+        joined = "\n\n".join(f"[book page {e['page']}]\n{e['text']}" for e in excerpts)
+        context.append("BOOK EXCERPTS THAT MAY BE RELEVANT\n\n" + joined)
+    messages: list[dict[str, str]] = [{"role": "system", "content": ASK_SYSTEM},
+                                      {"role": "system", "content": "\n\n".join(context)}]
+    messages.extend(history[-ASK_HISTORY_TURNS:])
+    messages.append({"role": "user", "content": question})
+    body = {"model": config.model, "messages": messages, "temperature": 0.4, "stream": True}
+    request = Request(config.api_url, data=json.dumps(body).encode("utf-8"),
+                      headers={"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"},
+                      method="POST")
+    try:
+        with urlopen(request, timeout=PROVIDER_TIMEOUT_SECONDS) as response:
+            content = response_content(response.read(), response.headers.get("Content-Type", ""))
+    except HTTPError as error:
+        raise ValueError(f"Provider request failed ({error.code}).") from error
+    except (URLError, TimeoutError, OSError) as error:
+        raise ValueError("Provider could not be reached.") from error
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError("Provider returned an invalid response.") from error
+    content = (content or "").strip()
+    if not content:
+        raise ValueError("The model returned an empty answer.")
+    source, page = "general", None
+    match = SOURCE_LINE.match(content)
+    if match:
+        source = match.group(1).lower()
+        found = re.search(r"p\.?\s*(\d{1,4})", match.group(0))
+        page = int(found.group(1)) if found else None
+        content = content[match.end():].lstrip("\n").strip()
+    return {"answer": content, "source": source, "page": page,
+            "pages": [e["page"] for e in excerpts]}
+
+
 class EduHandler(SimpleHTTPRequestHandler):
     server_version = "EduArgumentation/1.0"
 
@@ -744,7 +956,7 @@ class EduHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         route = self.path.split("?", 1)[0]
-        if route not in ("/api/quiz", "/api/quiz/fresh", "/api/settings", "/api/progress") + RUN_ROUTES:
+        if route not in ("/api/quiz", "/api/quiz/fresh", "/api/ask", "/api/settings", "/api/progress") + RUN_ROUTES:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "Unknown API route."})
             return
         if not self.same_origin():
@@ -781,6 +993,49 @@ class EduHandler(SimpleHTTPRequestHandler):
             if not secrets.compare_digest(self.headers.get("X-Edu-Quiz-Token", ""), config.access_token):
                 self.send_json(HTTPStatus.UNAUTHORIZED, {"error": "A valid generation access token is required."})
                 return
+        if route == "/api/ask":
+            # Its own budget: asking a follow-up is a normal part of reading, so it
+            # must not burn the hourly quiz allowance.
+            moment = time.monotonic()
+            asked = ASK_HISTORY[self.client_address[0]]
+            while asked and asked[0] <= moment - ASK_RATE_LIMIT_SECONDS:
+                asked.popleft()
+            if len(asked) >= ASK_RATE_LIMIT_REQUESTS:
+                self.send_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "Too many questions just now. Try again shortly."})
+                return
+            try:
+                payload = read_json(self)
+                book = str(payload.get("module") or DEFAULT_MODULE)
+                chapter, block = int(payload.get("chapter")), int(payload.get("block"))
+                question = str(payload.get("question") or "").strip()
+                if not question:
+                    raise ValueError("Ask a question first.")
+                if len(question) > ASK_MAX_QUESTION:
+                    raise ValueError(f"Keep the question under {ASK_MAX_QUESTION} characters.")
+                if chapter < 1 or block < 1:
+                    raise ValueError("Chapter or lesson is invalid.")
+                turns: list[dict[str, str]] = []
+                for entry in (payload.get("history") or [])[-ASK_HISTORY_TURNS:]:
+                    role = str((entry or {}).get("role") or "")
+                    text = str((entry or {}).get("content") or "").strip()
+                    if role in ("user", "assistant") and text:
+                        turns.append({"role": role, "content": text[:2_000]})
+                chapter_title, lesson = source_for_block(self.root, chapter, block, book)
+                module = load_module(self.root, book)
+                term = module["tutorialData"]["sections"][chapter - 1]["items"][block - 1].get("term", "")
+                excerpts = book_search(module_id_for(module), f"{question} {term}", chapter=chapter)
+            except (ValueError, TypeError, IndexError, KeyError, AttributeError, json.JSONDecodeError) as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
+            asked.append(moment)
+            try:
+                reply = ask_tutor(config, chapter_title, term, lesson, question, turns, excerpts)
+            except ValueError as error:
+                self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+                return
+            self.send_json(HTTPStatus.OK, reply)
+            return
+
         now = time.monotonic()
         history = REQUEST_HISTORY[self.client_address[0]]
         while history and history[0] <= now - RATE_LIMIT_SECONDS:

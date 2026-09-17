@@ -208,16 +208,16 @@
         <!-- ======================= -->
         <!-- 2. CONTENT VIEWS        -->
         <!-- ======================= -->
-        <div id="content-section" class="w-full bg-gray-900 flex-grow flex-col items-center py-24 px-4 hidden-view">
+        <div id="content-section" class="w-full bg-gray-900 flex-grow flex flex-col items-center py-6 px-4 hidden-view">
             
             <!-- Tutorial View -->
-            <div id="tutorial-screen" class="hidden-view w-full max-w-7xl mx-auto flex flex-col lg:flex-row gap-6 lg:h-[calc(100vh-12rem)] lg:min-h-[34rem]">
+            <div id="tutorial-screen" class="hidden-view w-full flex flex-col lg:flex-row lg:items-start gap-6">
 
                 <!-- Backdrop: mobile drawer only; lg:hidden keeps it out of the desktop layout -->
                 <div id="toc-backdrop" class="hidden-view fixed inset-0 z-40 bg-black/60 lg:hidden"></div>
 
                 <!-- Table of contents. Overlay drawer below lg, static column at lg+. -->
-                <aside id="toc-panel" class="fixed lg:static inset-y-0 left-0 z-50 w-80 max-w-[85vw] lg:w-72 lg:max-w-none shrink-0 flex flex-col bg-gray-800 border border-gray-700 lg:rounded-2xl lg:h-full" aria-label="Table of contents">
+                <aside id="toc-panel" class="fixed lg:static inset-y-0 left-0 z-50 w-80 max-w-[85vw] lg:w-72 lg:max-w-none shrink-0 flex flex-col bg-gray-800 border border-gray-700 lg:rounded-2xl lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)]" aria-label="Table of contents">
                     <div class="px-5 py-4 border-b border-gray-700 flex items-start justify-between gap-3 shrink-0">
                         <div>
                             <p class="text-white font-semibold text-sm uppercase tracking-widest">Contents</p>
@@ -231,8 +231,8 @@
                 </aside>
 
                 <!-- One theory block at a time -->
-                <article class="min-w-0 flex-1 flex flex-col bg-gray-800 border border-gray-700 shadow-xl rounded-2xl lg:h-full">
-                    <div class="flex-1 lg:overflow-y-auto p-6 sm:p-8 lg:p-10">
+                <article class="min-w-0 flex-1 flex flex-col bg-gray-800 border border-gray-700 shadow-xl rounded-2xl">
+                    <div class="flex-1 p-6 sm:p-8 lg:p-10">
                         <div class="flex items-center gap-3 mb-4">
                             <button id="toc-toggle-btn" class="min-h-[44px] px-4 rounded-lg border border-gray-600 text-gray-300 hover:text-white hover:border-brand-600 transition-colors active:scale-95 flex items-center gap-2 shrink-0" aria-controls="toc-panel" aria-expanded="true">
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
@@ -425,6 +425,32 @@
             </div>
         </div>
     </div>
+
+    <!-- Ask about this lesson: a tutor that reads what you are reading. -->
+    <button id="ask-fab" type="button" aria-label="Ask about this lesson" aria-expanded="false" aria-controls="ask-panel"
+            class="hidden-view fixed bottom-6 right-6 z-40 h-14 w-14 rounded-full bg-brand-600 text-white shadow-xl flex items-center justify-center transition-transform hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 10h8M8 14h5M21 12a8 8 0 0 1-8 8H7l-4 3v-6.5A8 8 0 1 1 21 12z"/>
+        </svg>
+    </button>
+
+    <section id="ask-panel" aria-label="Ask about this lesson" class="hidden-view fixed bottom-24 right-6 z-40 flex flex-col w-[26rem] max-w-[calc(100vw-3rem)] max-h-[70vh] rounded-2xl border border-gray-700 bg-gray-800 shadow-2xl">
+        <header class="flex items-start justify-between gap-3 px-4 py-3 border-b border-gray-700 shrink-0">
+            <div class="min-w-0">
+                <p class="text-white font-semibold text-sm">Ask about this lesson</p>
+                <p id="ask-context" class="text-xs text-gray-400 truncate"></p>
+            </div>
+            <button id="ask-close" type="button" aria-label="Close" class="min-h-[44px] min-w-[44px] -mr-2 -mt-1 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors">
+                <svg class="w-5 h-5 mx-auto" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </header>
+        <div id="ask-log" class="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-sm [overflow-wrap:anywhere]"></div>
+        <form id="ask-form" class="shrink-0 border-t border-gray-700 p-3 flex items-end gap-2">
+            <label class="sr-only" for="ask-input">Your question</label>
+            <textarea id="ask-input" rows="1" maxlength="600" placeholder="What don't you get?" class="flex-1 resize-none rounded-lg bg-gray-900 border border-gray-600 px-3 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-brand-600 max-h-32"></textarea>
+            <button id="ask-send" type="submit" class="min-h-[44px] px-4 rounded-lg bg-brand-600 text-white text-sm font-semibold hover:bg-brand-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">Ask</button>
+        </form>
+    </section>
 
     <!-- Progress Bar -->
     <div id="progress-container" class="fixed bottom-0 left-0 w-full h-1.5 bg-gray-800 hidden-view z-50">
