@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Edu-Argumentation Platform</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="mask-icon" href="favicon.svg" color="#ef5b5b">
     <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     
@@ -45,6 +47,58 @@
         .service-card:hover:not(:disabled) .icon-circle { border-color: #ef5b5b; color: #ef5b5b; }
         
         .hidden-view { display: none !important; }
+
+        /* --- Reading scale -------------------------------------------------
+           One knob for the whole reading surface. The default 16px is fine for
+           chrome and far too small for sustained reading, which is what this
+           page is for. Everything below is relative to it, so nothing drifts
+           out of proportion when it changes. */
+        :root { --reading-size: 1.1875rem; --reading-leading: 1.8; }
+        @media (min-width: 1280px) { :root { --reading-size: 1.25rem; } }
+
+        #tutorial-content { font-size: var(--reading-size); line-height: var(--reading-leading); }
+        #tutorial-content rich-text-viewer { font-size: inherit; line-height: inherit; }
+        #tutorial-content li { line-height: var(--reading-leading); }
+        #tutorial-content h2, #tutorial-content h3 { font-size: 1.15em; line-height: 1.35; }
+        /* Prose sets its own 1rem; an ID beats it without !important. */
+        #tutorial-content.prose :where(p, ul, ol, li, blockquote) { font-size: inherit; line-height: inherit; }
+
+        /* Figures. A diagram SVG carries explicit width/height attributes so its
+           aspect ratio is known; these two rules are what let it scale down on a
+           phone. Written as plain CSS on purpose -- relying on a Tailwind
+           arbitrary variant here would put the mobile layout at the mercy of the
+           CDN build. The figure's own overflow-x-auto stays as the last resort. */
+        #tutorial-content figure svg { max-width: 100%; height: auto; display: block; }
+        #tutorial-content figure img { max-width: 100%; height: auto; }
+        /* The reading measure is capped per text block, but a figure caption and
+           the figure itself are allowed the full column. */
+        #tutorial-content figure { font-size: 1rem; line-height: 1.5; }
+
+        #toc-nav button { font-size: 0.95rem; line-height: 1.45; }
+        #question-text { font-size: 1.4rem; line-height: 1.5; }
+        .option-text { font-size: 1.0625rem; line-height: 1.55; }
+        .explanation-text { font-size: 0.975rem; line-height: 1.6; }
+
+        /* --- Print ----------------------------------------------------------
+           The reader is a fixed-height two-pane shell with its own scrollbars,
+           which prints as one clipped page. Printing has to unpick that: drop
+           the height cap, release the overflow, and let the text flow. */
+        @media print {
+            :root { --reading-size: 11.5pt; --reading-leading: 1.55; }
+            body { background: #fff !important; color: #000 !important; }
+            header, #toc-panel, #toc-backdrop, #progress-container,
+            #prev-block-btn, #next-block-btn, #toc-toggle-btn,
+            #tutorial-to-quiz-btn, #block-ai-quiz-btn, #ai-block-status { display: none !important; }
+            #tutorial-screen { display: block !important; height: auto !important; max-width: none !important; }
+            #tutorial-screen article { height: auto !important; border: 0 !important; box-shadow: none !important;
+                                       background: #fff !important; padding: 0 !important; }
+            #tutorial-screen article > div { overflow: visible !important; height: auto !important; padding: 0 !important; }
+            #content-section { padding: 0 !important; display: block !important; }
+            #tutorial-main-title, #tutorial-content, #tutorial-content * { color: #000 !important; }
+            #tutorial-content section { border: 1px solid #bbb !important; background: #f6f6f6 !important;
+                                        break-inside: avoid; page-break-inside: avoid; }
+            @page { margin: 16mm; }
+        }
         .explanation-text { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.4s; }
         .explanation-text.expanded { grid-template-rows: 1fr; }
         .explanation-inner { overflow: hidden; }
@@ -53,19 +107,32 @@
 <body class="min-h-screen flex flex-col">
     
     <!-- Dark Transparent Header -->
-    <header class="glass-header fixed top-0 left-0 right-0 z-50 px-6 sm:px-12 py-5 flex justify-between items-center text-white">
-        <div class="flex items-center gap-3">
-            <div class="w-8 h-8 flex items-center justify-center border-2 border-white font-bold text-xl leading-none rounded-md">E</div>
+    <header class="glass-header fixed top-0 left-0 right-0 z-50 px-6 sm:px-12 py-5 flex justify-between items-center text-white relative">
+        <button id="brand-home" class="flex items-center gap-3 min-h-[44px] rounded-lg pr-2 text-white transition-colors hover:text-brand-400 active:scale-95" aria-label="Back to the main menu">
+            <svg class="w-8 h-8 shrink-0" viewBox="0 0 40 40" aria-hidden="true">
+                <rect x="2" y="2" width="36" height="36" rx="9" fill="none" stroke="currentColor" stroke-width="2.5"/>
+                <g fill="currentColor">
+                    <rect x="13" y="11" width="4.5" height="18" rx="1"/>
+                    <rect x="13" y="11" width="14" height="4.5" rx="1"/>
+                    <rect x="13" y="24.5" width="14" height="4.5" rx="1"/>
+                </g>
+                <rect x="13" y="17.75" width="10" height="4.5" rx="1" fill="#ef5b5b"/>
+            </svg>
             <h1 class="text-2xl font-bold tracking-widest uppercase">Edu-Arg</h1>
-        </div>
+        </button>
         
-        <nav class="hidden md:flex gap-8 text-sm font-semibold tracking-wider">
-            <button id="nav-tutorial" class="pb-1 border-b-2 border-brand-600 text-white transition-colors hover:text-brand-400">HOME</button>
-            <button id="nav-quiz" class="pb-1 border-b-2 border-transparent text-gray-400 transition-colors hover:text-white">PRACTICE</button>
-            <button id="nav-ai-quiz" class="pb-1 border-b-2 border-transparent text-gray-400 transition-colors hover:text-white">AI QUIZ</button>
+        <nav id="primary-nav" class="absolute md:static top-full right-4 md:right-auto mt-2 md:mt-0 flex flex-col md:flex-row items-stretch md:items-center gap-1 md:gap-8 text-sm font-semibold tracking-wider bg-gray-800 md:bg-transparent border md:border-0 border-gray-700 rounded-xl md:rounded-none p-2 md:p-0 shadow-2xl md:shadow-none min-w-[13rem] md:min-w-0 z-50">
+            <button id="nav-tutorial" class="min-h-[44px] px-3 md:px-0 text-left md:text-center rounded-lg md:rounded-none pb-0 md:pb-1 border-b-2 border-brand-600 text-white transition-colors hover:text-brand-400">HOME</button>
+            <button id="nav-learn" class="min-h-[44px] px-3 md:px-0 text-left md:text-center rounded-lg md:rounded-none pb-0 md:pb-1 border-b-2 border-transparent text-gray-400 transition-colors hover:text-white">LEARN</button>
+            <button id="nav-quiz" class="min-h-[44px] px-3 md:px-0 text-left md:text-center rounded-lg md:rounded-none pb-0 md:pb-1 border-b-2 border-transparent text-gray-400 transition-colors hover:text-white">PRACTICE</button>
+            <button id="nav-generated-quiz" class="min-h-[44px] px-3 md:px-0 text-left md:text-center rounded-lg md:rounded-none pb-0 md:pb-1 border-b-2 border-transparent text-gray-400 transition-colors hover:text-white">GENERATE QUIZ</button>
+            <button id="nav-settings" class="min-h-[44px] px-3 md:px-0 text-left md:text-center rounded-lg md:rounded-none pb-0 md:pb-1 border-b-2 border-transparent text-gray-400 transition-colors hover:text-white">SETTINGS</button>
         </nav>
         
         <div class="flex items-center gap-4">
+            <button id="menu-btn" class="md:hidden min-h-[44px] min-w-[44px] rounded-lg text-gray-300 hover:text-white hover:bg-gray-700 transition-colors active:scale-95" aria-controls="primary-nav" aria-expanded="false" aria-label="Open menu">
+                <svg class="w-6 h-6 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+            </button>
             <input type="file" id="custom-data-upload" accept=".json" class="hidden-view" />
             <label for="custom-data-upload" class="cursor-pointer text-gray-300 hover:text-white transition-colors" title="Load Course JSON">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
@@ -101,18 +168,19 @@
                     <h2 id="welcome-title" class="text-5xl md:text-7xl font-light text-white mb-4">Module <span class="font-bold">Loaded</span></h2>
                     <p id="app-sub-title" class="text-brand-600 text-lg md:text-xl uppercase tracking-widest font-semibold mb-6">Ready to begin your journey</p>
                     <p class="text-gray-300 max-w-2xl mx-auto mb-10 text-sm md:text-base leading-relaxed">
-                        Your learning materials have been successfully parsed. Select a service below to start exploring the context, testing your knowledge, or generating dynamic AI scenarios.
+                        Your learning materials are ready. Read the chapters, take the full objective bank, or have the AI write a fresh practice quiz.
                     </p>
                 </div>
 
                 <!-- Loading Content -->
-                <div id="loading-screen" class="hidden-view flex-col items-center justify-center animate-fade-in w-full max-w-3xl">
+                <div id="loading-screen" class="hidden-view flex flex-col items-center justify-center animate-fade-in w-full max-w-3xl">
                     <div class="relative w-16 h-16 mb-6 mx-auto">
                         <div class="absolute inset-0 border-4 border-gray-700 rounded-full"></div>
                         <div class="absolute inset-0 border-4 border-brand-600 rounded-full border-t-transparent animate-spin"></div>
                     </div>
-                    <h2 class="text-3xl text-white font-light mb-2">Architecting <span class="font-bold">Scenarios...</span></h2>
-                    <p class="text-brand-600 uppercase tracking-widest text-sm font-semibold">Gemini AI is crafting your quiz</p>
+                    <h2 class="text-3xl text-white font-light mb-2">Writing a <span class="font-bold">Fresh Quiz...</span></h2>
+                    <p id="loading-scope" class="text-brand-600 uppercase tracking-widest text-sm font-semibold">AI is reading random book sections · up to a minute</p>
+                    <p id="loading-model" class="mt-2 text-gray-500 text-xs"></p>
                 </div>
             </div>
 
@@ -126,7 +194,7 @@
                 <h2 class="text-4xl text-white font-light mb-2">Our <span class="text-brand-600">Platform</span> Services</h2>
                 <p class="text-brand-600 uppercase tracking-widest text-sm mb-6 font-semibold">The best tools for your learning</p>
                 <p class="text-gray-400 text-center max-w-2xl mb-16 text-sm">
-                    Select one of the learning paths below to interact with the loaded module. You can read the materials, take a standard quiz, or generate dynamic content.
+                    Select a learning path below. The bundled Géron module loads automatically, and you can still upload another compatible JSON module.
                 </p>
                 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl w-full">
@@ -146,18 +214,18 @@
                             <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
                         </div>
                         <h3 class="text-xl text-white font-semibold mb-4">Practice Quiz</h3>
-                        <p class="text-gray-400 text-sm mb-6 leading-relaxed">Test your fundamental knowledge with the curated set of static questions attached to this module.</p>
+                        <p class="text-gray-400 text-sm mb-6 leading-relaxed">Written questions. Pick a chapter and block.</p>
                         <span class="text-gray-500 italic text-sm border-b border-gray-600 group-hover:text-brand-600 group-hover:border-brand-600 pb-0.5 transition-colors">Take Quiz</span>
                     </button>
                     
-                    <!-- AI Quiz Card -->
-                    <button id="start-ai-btn" class="service-card p-10 flex flex-col items-center text-center group disabled:opacity-50 disabled:cursor-not-allowed outline-none rounded-xl">
+                    <!-- Generated Quiz Card -->
+                    <button id="start-generated-btn" class="service-card p-10 flex flex-col items-center text-center group disabled:opacity-50 disabled:cursor-not-allowed outline-none rounded-xl">
                         <div class="icon-circle w-20 h-20 rounded-full border-2 border-gray-600 flex items-center justify-center text-gray-400 transition-colors mb-6">
                             <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                         </div>
-                        <h3 class="text-xl text-white font-semibold mb-4">AI Scenarios</h3>
-                        <p class="text-gray-400 text-sm mb-6 leading-relaxed">Challenge yourself with dynamic, scenario-based questions generated instantly by Google Gemini.</p>
-                        <span class="text-gray-500 italic text-sm border-b border-gray-600 group-hover:text-brand-600 group-hover:border-brand-600 pb-0.5 transition-colors">Generate Now</span>
+                        <h3 class="text-xl text-white font-semibold mb-4">Fresh AI Quiz</h3>
+                        <p class="text-gray-400 text-sm mb-6 leading-relaxed">New AI questions. Pick a chapter and block.</p>
+                        <span class="text-gray-500 italic text-sm border-b border-gray-600 group-hover:text-brand-600 group-hover:border-brand-600 pb-0.5 transition-colors">Build Quiz</span>
                     </button>
                 </div>
             </div>
@@ -169,27 +237,178 @@
         <div id="content-section" class="w-full bg-gray-900 flex-grow flex-col items-center py-24 px-4 hidden-view">
             
             <!-- Tutorial View -->
-            <div id="tutorial-screen" class="hidden-view w-full max-w-4xl bg-gray-800 p-8 md:p-12 border border-gray-700 shadow-xl rounded-2xl mx-auto">
-                <h2 id="tutorial-main-title" class="text-3xl text-white font-light mb-2"></h2>
-                <p id="tutorial-lead" class="text-brand-600 uppercase tracking-widest text-sm mb-8 font-semibold"></p>
-                <div id="tutorial-content" class="text-gray-300 prose prose-invert max-w-none"></div>
-                <div class="mt-12 text-center pt-8 border-t border-gray-700">
-                    <button id="tutorial-to-quiz-btn" class="bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider py-4 px-10 transition-colors rounded-lg">
-                        Begin Assessment
-                    </button>
+            <div id="tutorial-screen" class="hidden-view w-full max-w-7xl mx-auto flex flex-col lg:flex-row gap-6 lg:h-[calc(100vh-12rem)] lg:min-h-[34rem]">
+
+                <!-- Backdrop: mobile drawer only; lg:hidden keeps it out of the desktop layout -->
+                <div id="toc-backdrop" class="hidden-view fixed inset-0 z-40 bg-black/60 lg:hidden"></div>
+
+                <!-- Table of contents. Overlay drawer below lg, static column at lg+. -->
+                <aside id="toc-panel" class="fixed lg:static inset-y-0 left-0 z-50 w-80 max-w-[85vw] lg:w-72 lg:max-w-none shrink-0 flex flex-col bg-gray-800 border border-gray-700 lg:rounded-2xl lg:h-full" aria-label="Table of contents">
+                    <div class="px-5 py-4 border-b border-gray-700 flex items-start justify-between gap-3 shrink-0">
+                        <div>
+                            <p class="text-white font-semibold text-sm uppercase tracking-widest">Contents</p>
+                            <p id="toc-summary" class="text-xs text-gray-400 mt-1"></p>
+                        </div>
+                        <button id="toc-close-btn" class="min-h-[44px] min-w-[44px] -mr-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors active:scale-95" aria-label="Hide contents">
+                            <svg class="w-5 h-5 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                    <nav id="toc-nav" class="p-2 flex-1 overflow-y-auto"></nav>
+                </aside>
+
+                <!-- One theory block at a time -->
+                <article class="min-w-0 flex-1 flex flex-col bg-gray-800 border border-gray-700 shadow-xl rounded-2xl lg:h-full">
+                    <div class="flex-1 lg:overflow-y-auto p-6 sm:p-8 lg:p-10">
+                        <div class="flex items-center gap-3 mb-4">
+                            <button id="toc-toggle-btn" class="min-h-[44px] px-4 rounded-lg border border-gray-600 text-gray-300 hover:text-white hover:border-brand-600 transition-colors active:scale-95 flex items-center gap-2 shrink-0" aria-controls="toc-panel" aria-expanded="true">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+                                <span class="text-xs font-semibold uppercase tracking-wider">Contents</span>
+                            </button>
+                            <p class="text-[0.8rem] uppercase tracking-widest text-gray-400 min-w-0 truncate">
+                                <span id="theory-chapter-label"></span><span class="text-gray-600" aria-hidden="true"> / </span><span id="theory-block-position"></span>
+                            </p>
+                        </div>
+
+                        <h2 id="tutorial-main-title" class="text-[1.875rem] sm:text-4xl text-white font-light mb-2"></h2>
+                        <p id="tutorial-lead" class="text-brand-600 uppercase tracking-widest text-[0.9rem] mb-8 font-semibold"></p>
+                        <div id="tutorial-content" class="text-gray-300 prose prose-invert max-w-none"></div>
+
+                        <div class="mt-10 pt-6 border-t border-gray-700 flex flex-col sm:flex-row gap-3 sm:justify-between">
+                            <button id="prev-block-btn" class="min-h-[44px] px-6 rounded-lg border border-gray-600 text-gray-200 font-semibold uppercase tracking-wider text-sm transition-colors hover:bg-gray-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed">Previous</button>
+                            <button id="next-block-btn" class="min-h-[44px] px-6 rounded-lg bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider text-sm transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed">Next</button>
+                        </div>
+
+                        <div class="mt-4 flex flex-col sm:flex-row gap-3">
+                            <button id="tutorial-to-quiz-btn" class="min-h-[44px] px-6 rounded-lg border border-brand-600 text-brand-400 hover:bg-brand-600 hover:text-white font-bold uppercase tracking-wider text-sm transition-colors active:scale-95">
+                                <span id="tutorial-to-quiz-label">Begin Assessment</span>
+                            </button>
+                            <button id="block-ai-quiz-btn" class="min-h-[44px] px-6 rounded-lg border border-gray-600 text-gray-300 hover:border-brand-600 hover:text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed">
+                                AI quiz on this block
+                            </button>
+                        </div>
+                        <p id="ai-block-status" class="mt-3 text-xs text-gray-500" role="status"></p>
+                    </div>
+                </article>
+            </div>
+
+            <!-- Settings View -->
+            <div id="settings-screen" class="hidden-view w-full max-w-3xl mx-auto space-y-6">
+
+                <div class="bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8">
+                    <h2 class="text-3xl text-white font-light mb-2">Settings</h2>
+                    <p class="text-brand-600 uppercase tracking-widest text-sm font-semibold">Connect an AI model to generate quizzes</p>
+                    <p id="settings-lock-status" class="mt-4 text-sm text-gray-400" role="status"></p>
+                </div>
+
+                <!-- Only shown when someone has deliberately set EDU_ADMIN_TOKEN on the server. -->
+                <div id="settings-lock-card" class="hidden-view bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8">
+                    <label for="admin-token" class="block text-sm font-semibold text-gray-200 mb-2">Admin token</label>
+                    <input id="admin-token" type="password" autocomplete="off" class="w-full min-h-[44px] rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-white placeholder-gray-500 focus:border-brand-600 focus:outline-none transition-colors" placeholder="This server has settings locked">
+                    <button id="settings-unlock-btn" class="mt-4 min-h-[44px] px-6 rounded-lg bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider text-sm transition-colors active:scale-95">Unlock</button>
+                </div>
+
+                <div id="settings-form" class="hidden-view space-y-6">
+
+                    <div class="bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8">
+                        <h3 class="text-xl text-white font-semibold mb-1">AI model connection</h3>
+                        <p class="text-sm text-gray-400 mb-6">Any OpenAI-compatible Chat Completions endpoint. Credentials are stored on the server; the browser never receives the key back.</p>
+
+                        <div class="space-y-5">
+                            <div>
+                                <label for="set-api-url" class="block text-sm font-semibold text-gray-200 mb-2">Endpoint URL</label>
+                                <input id="set-api-url" type="url" spellcheck="false" class="w-full min-h-[44px] rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-white placeholder-gray-500 focus:border-brand-600 focus:outline-none transition-colors" placeholder="https://api.openai.com/v1/chat/completions">
+                                <p class="mt-2 text-xs leading-5 text-gray-500">Must be https://, or http:// on localhost for a model running on this box.</p>
+                            </div>
+                            <div>
+                                <label for="set-api-key" class="block text-sm font-semibold text-gray-200 mb-2">API key</label>
+                                <input id="set-api-key" type="password" autocomplete="off" spellcheck="false" class="w-full min-h-[44px] rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-white placeholder-gray-500 focus:border-brand-600 focus:outline-none transition-colors">
+                                <p id="api-key-state" class="mt-2 text-xs leading-5 text-gray-500"></p>
+                            </div>
+                            <div>
+                                <label for="set-model" class="block text-sm font-semibold text-gray-200 mb-2">Model</label>
+                                <input id="set-model" type="text" spellcheck="false" class="w-full min-h-[44px] rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-white placeholder-gray-500 focus:border-brand-600 focus:outline-none transition-colors" placeholder="gpt-4o-mini">
+                            </div>
+                            <label class="flex items-start gap-3 cursor-pointer">
+                                <input id="set-json-mode" type="checkbox" class="mt-1 h-5 w-5 rounded border-gray-600 bg-gray-900 text-brand-600 focus:ring-brand-600">
+                                <span class="text-sm text-gray-300">Ask the model for strict JSON<span class="block text-xs text-gray-500 mt-1">Turn off only if your provider rejects response_format.</span></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <details class="bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8">
+                        <summary class="cursor-pointer text-xl text-white font-semibold">Restrict who can generate <span class="block text-sm font-normal text-gray-400 mt-1">Optional. Leave closed unless you share this page with other people.</span></summary>
+                        <div class="mt-6">
+                            <label for="set-access-token" class="block text-sm font-semibold text-gray-200 mb-2">Learner access token</label>
+                            <input id="set-access-token" type="password" autocomplete="off" class="w-full min-h-[44px] rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-white placeholder-gray-500 focus:border-brand-600 focus:outline-none transition-colors" placeholder="Leave blank for no gate">
+                            <p id="access-token-state" class="mt-2 text-xs leading-5 text-gray-500"></p>
+                            <label class="flex items-start gap-3 cursor-pointer mt-5">
+                                <input id="set-require-token" type="checkbox" class="mt-1 h-5 w-5 rounded border-gray-600 bg-gray-900 text-brand-600 focus:ring-brand-600">
+                                <span class="text-sm text-gray-300">Ask for this token before generating<span class="block text-xs text-gray-500 mt-1">Off means anyone who can open this page can spend your provider credit.</span></span>
+                            </label>
+                        </div>
+                    </details>
+
+                    <div class="bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8">
+                        <h3 class="text-xl text-white font-semibold mb-6">Study preferences</h3>
+                        <div class="grid gap-5 sm:grid-cols-2">
+                            <div>
+                                <label for="set-ai-count" class="block text-sm font-semibold text-gray-200 mb-2">Questions per AI quiz</label>
+                                <input id="set-ai-count" type="number" min="3" max="10" class="w-full min-h-[44px] rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-white placeholder-gray-500 focus:border-brand-600 focus:outline-none transition-colors">
+                                <p class="mt-2 text-xs leading-5 text-gray-500">Between 3 and 10.</p>
+                            </div>
+                            <div>
+                                <label for="set-fresh-size" class="block text-sm font-semibold text-gray-200 mb-2">Questions per fresh AI quiz</label>
+                                <input id="set-fresh-size" type="number" min="5" max="30" class="w-full min-h-[44px] rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-white placeholder-gray-500 focus:border-brand-600 focus:outline-none transition-colors">
+                                <p class="mt-2 text-xs leading-5 text-gray-500">Between 5 and 30. About 5 per book section.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center gap-4">
+                        <button id="settings-save-btn" class="min-h-[44px] px-8 rounded-lg bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider text-sm transition-colors active:scale-95 shrink-0">Save settings</button>
+                        <p id="settings-status" class="text-sm text-gray-400" role="status"></p>
+                    </div>
                 </div>
             </div>
 
             <!-- Quiz View -->
+            <!-- Quiz setup: PRACTICE and GENERATE QUIZ pick any mix of chapters and blocks first -->
+            <div id="quiz-setup-screen" class="hidden-view w-full max-w-3xl mx-auto">
+                <div class="bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8">
+                    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+                        <h2 id="setup-title" class="text-3xl text-white font-light">Practice</h2>
+                        <div class="flex gap-2">
+                            <button id="setup-all-btn" type="button" class="min-h-[44px] px-4 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white text-sm font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600">All</button>
+                            <button id="setup-none-btn" type="button" class="min-h-[44px] px-4 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white text-sm font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600">None</button>
+                        </div>
+                    </div>
+                    <!-- min-w-0: a fieldset will not shrink below its widest line by default, and long chapter titles scrolled the page sideways on phones -->
+                    <fieldset class="min-w-0">
+                        <legend class="sr-only">Chapters and blocks</legend>
+                        <div id="setup-tree" class="max-h-[55vh] overflow-y-auto overscroll-contain rounded-xl border border-gray-700 bg-gray-900/60 divide-y divide-gray-700/70"></div>
+                    </fieldset>
+                    <p id="setup-count" class="mt-4 text-sm text-gray-400" role="status" aria-live="polite"></p>
+                    <div class="mt-6 flex flex-wrap gap-3">
+                        <button id="setup-start-btn" type="button" class="min-h-[44px] px-8 rounded-lg bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider text-sm transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50 disabled:cursor-not-allowed">Start</button>
+                        <button id="setup-resume-btn" type="button" class="hidden-view min-h-[44px] px-4 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white text-sm font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 px-6">Resume</button>
+                    </div>
+                </div>
+            </div>
+
             <div id="quiz-screen" class="hidden-view w-full max-w-3xl mx-auto">
                 <div class="flex justify-between items-center mb-8 border-b border-gray-700 pb-4">
-                    <div class="text-xl text-white font-light">Question <span class="font-bold text-brand-600" id="question-number-badge">1</span></div>
-                    <div class="flex items-center gap-6">
-                        <button id="retake-btn-header" class="text-sm font-semibold text-gray-500 hover:text-brand-600 transition-colors uppercase tracking-wider">Restart</button>
-                        <div class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Score: <span id="score-tracker" class="text-brand-600 text-lg font-bold">0</span></div>
+                    <div class="min-w-0">
+                        <div class="text-xl text-white font-light">Question <span class="font-bold text-brand-600" id="question-number-badge">1</span></div>
+                        <p id="quiz-scope-label" class="mt-1 text-[0.75rem] uppercase tracking-widest text-gray-500 truncate"></p>
+                    </div>
+                    <div class="flex shrink-0 items-center gap-3 sm:gap-6">
+                        <button id="quiz-new-btn" type="button" class="min-h-[44px] text-sm font-semibold text-gray-500 hover:text-brand-600 transition-colors uppercase tracking-wider">New</button>
+                        <button id="retake-btn-header" class="min-h-[44px] text-sm font-semibold text-gray-500 hover:text-brand-600 transition-colors uppercase tracking-wider">Restart</button>
+                        <div class="whitespace-nowrap text-sm font-semibold text-gray-400 uppercase tracking-wider">Score: <span id="score-tracker" class="text-brand-600 text-lg font-bold">0</span></div>
                     </div>
                 </div>
                 
+                <div id="question-asset"></div>
                 <h3 id="question-text" class="text-xl text-white mb-8 leading-relaxed font-medium"></h3>
                 <div id="options-container" class="space-y-4 mb-8"></div>
                 
@@ -210,12 +429,23 @@
                 
                 <div id="result-message" class="text-lg text-gray-300 mb-12 leading-relaxed"></div>
                 
-                <div class="flex flex-col sm:flex-row gap-4 justify-center">
-                    <button id="restart-btn" class="bg-transparent border-2 border-gray-500 text-gray-300 hover:bg-gray-700 hover:text-white hover:border-gray-400 font-bold uppercase tracking-wider py-4 px-8 transition-colors rounded-lg">
+                <!-- Order and emphasis are set per result by renderResultNav(): pass a
+                     block and "Next block" leads; miss and "Back to block" leads. -->
+                <div id="result-actions" class="flex flex-col sm:flex-row sm:flex-wrap gap-4 justify-center">
+                    <button id="result-back-btn" class="min-h-[44px] bg-transparent border-2 border-gray-500 text-gray-300 hover:bg-gray-700 hover:text-white hover:border-gray-400 font-bold uppercase tracking-wider py-4 px-8 transition-colors rounded-lg">
+                        <span id="result-back-label">Back to block</span>
+                    </button>
+                    <button id="restart-btn" class="min-h-[44px] bg-transparent border-2 border-gray-500 text-gray-300 hover:bg-gray-700 hover:text-white hover:border-gray-400 font-bold uppercase tracking-wider py-4 px-8 transition-colors rounded-lg">
                         Retry Quiz
                     </button>
-                    <button id="generate-new-ai-btn" class="bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider py-4 px-8 transition-colors hidden-view rounded-lg">
-                        New AI Scenarios
+                    <button id="result-new-btn" type="button" class="min-h-[44px] bg-transparent border-2 border-gray-500 text-gray-300 hover:bg-gray-700 hover:text-white hover:border-gray-400 font-bold uppercase tracking-wider py-4 px-8 transition-colors rounded-lg">
+                        New Quiz
+                    </button>
+                    <button id="generate-new-btn" class="min-h-[44px] bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider py-4 px-8 transition-colors hidden-view rounded-lg">
+                        Generate Another Quiz
+                    </button>
+                    <button id="result-next-btn" class="hidden-view min-h-[44px] max-w-full font-bold uppercase tracking-wider py-4 px-8 transition-colors rounded-lg">
+                        <span id="result-next-label" class="block truncate">Next block</span>
                     </button>
                 </div>
             </div>
@@ -256,7 +486,6 @@
     </template>
 
     <script src="js/rich-text-viewer.js"></script>
-    <script src="js/config.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>
