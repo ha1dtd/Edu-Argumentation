@@ -510,12 +510,11 @@
       ]
      },
      {
-      "term": "Step 1 · Load the data",
+      "term": "The Whole Workflow in Ten Lines of Scikit-Learn",
       "blocks": [
        {
         "type": "text",
-        "content": "Every scikit-learn project starts by turning a file into two objects: `X`, the inputs you have, and `y`, the answer you want predicted.\n\n\n**What this is:** the book's Example 1-1 — one worked example that puts the previous seven lessons together, split here into five steps. It is something to **read and run, not an exercise to solve**. The only thing to *do* is the k-nearest-neighbours swap at the end of Step 5.\n\n**The question this lesson answers:** the life-satisfaction data arrives as a CSV of 27 countries. What shape does scikit-learn need it in before any training can happen?\n\n### The big picture\n\nFigure 1-17 below is the whole shape you are about to walk: data goes in, a model is fitted, and the fitted model makes predictions. This lesson is the first box — getting the data into the two objects the rest of the chain expects.\n\n```\nCSV ──> DataFrame ──> X  27 rows x 1 column  (inputs)\n                  └─> y  27 values           (answers)\n```\n\n### 1 · One table in, two objects out\n\n`pandas` reads the life-satisfaction CSV into a **DataFrame** — a table with named columns, one row per record. Here it is 27 rows and 3 columns: `Country`, `GDP per capita (USD)`, `Life satisfaction`.\n\nFrom that one table you pull two things:\n\n| Object | Is | Holds |\n|---|---|---|\n| `X` | the input matrix | GDP per capita |\n| `y` | the label vector | life satisfaction |\n\nA **label** is the answer column — the value training learns to fill in for rows it has never seen. If you have written a `SELECT`, `X` is the columns you feed in and `y` is the column you are trying to produce.\n\n### 2 · Why the double brackets\n\nThe one detail that trips everyone up:\n\n```\nX = lifesat[[\"GDP per capita (USD)\"]]   # two brackets\ny = lifesat[\"Life satisfaction\"]        # one bracket\n```\n\nSingle brackets return a **Series** — a bare list of values, shape `(27,)`. Double brackets pass a *list of columns*, like a `SELECT` naming one column, and keep a table: a DataFrame, shape `(27, 1)`.\n\nScikit-learn always wants `X` two-dimensional — rows are samples, columns are features — **even when there is only one feature**. That is the whole reason for the second pair of brackets. `y` stays one-dimensional, because there is exactly one answer per row.\n\n**One-liner for your notes:** `X` is always 2-D (rows x features) and `y` is 1-D, so a single input column needs double brackets to stay a table.",
-        "revised": "structure-split-17-09-26"
+        "content": "Example 1-1 is the entire model-based workflow compressed into one screen of code, and it is the only substantial code listing in this chapter. Read it as four moves, in order:"
        },
        {
         "type": "figure",
@@ -526,30 +525,16 @@
         "asset": "fig-1-17"
        },
        {
+        "type": "text",
+        "content": "### 1 · Load the data\n\n`pandas` reads the life-satisfaction CSV. `X` is the input matrix — GDP per capita — and `y` is the label vector, life satisfaction. Note the double brackets: Scikit-Learn expects `X` to be 2D, one row per instance and one column per feature."
+       },
+       {
         "type": "code_cells",
         "lesson": "ch01-b08",
         "cells": [
          {
           "id": "load",
           "source": "# Example 1-1, from ageron/handson-ml3 (Apache-2.0)\nimport matplotlib.pyplot as plt  # plotting\nimport numpy as np  # arrays\nimport pandas as pd  # tables\nfrom sklearn.linear_model import LinearRegression  # the model\n\n# Download the data: one row per country\ndata_root = \"https://github.com/ageron/data/raw/main/\"\nlifesat = pd.read_csv(data_root + \"lifesat/lifesat.csv\")\n\n# X = input feature (2-D: rows x 1 column), y = target\nX = lifesat[[\"GDP per capita (USD)\"]].values\ny = lifesat[[\"Life satisfaction\"]].values\n\nlifesat.head()  # first 5 rows"
-         }
-        ]
-       },
-       {
-        "type": "deeper",
-        "kind": "concept",
-        "items": [
-         {
-          "term": "Why 2-D, always",
-          "text": "Scikit-learn is built to score many rows at once, so it always expects a grid: rows are samples, columns are features. One feature is not a special case to it -- it is a grid that happens to be one column wide. Accepting a flat list would mean guessing whether 27 numbers are 27 samples of one feature or 1 sample of 27 features, and it refuses to guess."
-         },
-         {
-          "term": "What changes with two features",
-          "text": "`X` becomes shape (27, 2) and nothing else in the code moves: `fit` and `predict` are identical. That is the payoff for the strict shape rule -- adding a column never changes the call."
-         },
-         {
-          "term": "`X` uppercase, `y` lowercase",
-          "text": "A convention from maths, kept throughout the book and the library: capital for a matrix (2-D), lowercase for a vector (1-D). The names tell you the shapes."
          }
         ]
        },
@@ -580,26 +565,11 @@
           "term": "`lifesat.head()`",
           "text": "The first 5 rows, like `LIMIT 5`. As the last line of a cell, the notebook shows it as a table."
          }
-        ],
-        "kind": "syntax"
+        ]
        },
        {
-        "type": "callout",
-        "title": "Look it up",
-        "items": [
-         "Why does scikit-learn refuse a 1-D `X` instead of just reshaping it for you?",
-         "Look up: the scikit-learn glossary entry for \"feature matrix\", and the pandas user guide page on indexing (the Series vs DataFrame distinction)."
-        ]
-       }
-      ]
-     },
-     {
-      "term": "Step 2 · Look at the data",
-      "blocks": [
-       {
         "type": "text",
-        "content": "Before choosing a model you plot the data, because the shape of the scatter is what tells you which model to choose.\n\n\n*Part 2 of 5 of Example 1-1 — the book's worked example. Read it and run the cells; there is nothing to solve here.*\n\n**The question this lesson answers:** you have `X` and `y`. How do you find out whether a straight line is a reasonable thing to fit?\n\n### The big picture\n\nPlot first, model second. The plot is evidence, not decoration.\n\n### 1 · What the scatterplot is for\n\nEach of the 27 countries becomes one dot: GDP per capita across, life satisfaction up. Looking at Figure 1-18 below, the dots trend upward — richer countries report higher satisfaction, and they do it in a roughly straight band rather than a curve or a cloud.\n\nThat upward, roughly-straight band is what **justifies choosing a linear model in the next step**. Skipping the plot is how people end up fitting the wrong shape: a straight line through data that actually curves will be confidently wrong everywhere.\n\n**Correlated** here just means the two columns move together — as one goes up, so does the other. It does not mean one causes the other.\n\n### 2 · The data-engineering version\n\nYou already do this. Before writing a transformation you look at the source: count the rows, check the ranges, eyeball a sample. A scatterplot is the same instinct applied to the relationship between two columns instead of to one column's values.\n\n**One-liner for your notes:** the plot is the evidence for the model choice, so it comes before the model, not after.",
-        "revised": "structure-split-17-09-26"
+        "content": "### 2 · Look at the data\n\nThe scatterplot is not decoration. It is what justifies choosing a linear model in the next step, and skipping it is how people end up fitting the wrong shape."
        },
        {
         "type": "figure",
@@ -616,20 +586,6 @@
          {
           "id": "plot",
           "source": "# Scatter plot: one dot per country\nlifesat.plot(kind=\"scatter\", grid=True,\n             x=\"GDP per capita (USD)\", y=\"Life satisfaction\")\nplt.axis([23_500, 62_500, 4, 9])  # KNOB: zoom window [x_min, x_max, y_min, y_max]\nplt.show()"
-         }
-        ]
-       },
-       {
-        "type": "deeper",
-        "kind": "concept",
-        "items": [
-         {
-          "term": "Why looking first is not optional",
-          "text": "Summary statistics can be identical for data of completely different shapes -- the same averages and the same spread can describe a straight band, a curve, or a cloud with one far-out point. The plot is the cheapest way to tell those apart, and fitting a line to the wrong one of them is confidently wrong at every input, not just near the edges."
-         },
-         {
-          "term": "What you are looking for",
-          "text": "Three things: the direction (up, down, none), whether it is straight or bent, and whether a few points sit far off the trend. Those map to: is a linear model plausible, do I need a curve, and do I have outliers to deal with -- the book's word for a point that does not follow the pattern."
          }
         ]
        },
@@ -656,26 +612,11 @@
           "term": "`plt.show()`",
           "text": "Finishes the chart and displays it. Here it arrives as a PNG under the cell."
          }
-        ],
-        "kind": "syntax"
+        ]
        },
        {
-        "type": "callout",
-        "title": "Look it up",
-        "items": [
-         "Can two datasets have the same mean, variance and correlation but completely different shapes? What does that imply about trusting summary statistics?",
-         "Look up: Anscombe's quartet, and the Datasaurus Dozen that reworked the same idea."
-        ]
-       }
-      ]
-     },
-     {
-      "term": "Step 3 · Choose a model and train it",
-      "blocks": [
-       {
         "type": "text",
-        "content": "Training is a search: you pick a family of models, and the computer finds the one member of that family that fits your data best.\n\n\n*Part 3 of 5 of Example 1-1 — the book's worked example. Read it and run the cells; there is nothing to solve here.*\n\n**The question this lesson answers:** the plot showed a roughly straight upward band. How does a straight line become a *trained model*, and what is `fit` actually doing while it runs?\n\n### The big picture\n\n```\npick a family  ->  score every candidate  ->  keep the best\n (linear)          (cost function)            (model.fit)\n```\n\n### 1 · Choosing the family\n\n`LinearRegression()` does not produce a model yet. It picks the **family**: all straight lines. Equation 1-1 below is what a member of that family looks like.\n\nA straight line has two adjustable numbers, and they are called the model's **parameters** — the blanks that training fills in. In a view with two blank parameters, you cannot run it until something supplies the values; same idea here.\n\n| Parameter | Say it as | Controls |\n|---|---|---|\n| θ₀ | theta zero | where the line starts |\n| θ₁ | theta one | how steeply it rises |\n\nDifferent values of θ₀ and θ₁ give different lines. Figure 1-19 below shows several of them laid over the same 27 dots — all linear, all legal, all different.\n\n### 2 · Scoring a candidate: the cost function\n\nSince every one of those lines is a legal member of the family, something has to decide which is best. That something is a **cost function**: a single number saying how badly a given line misses the actual data. Low cost means the line passes close to the dots; high cost means it misses them.\n\nFor linear regression the cost is built from the **residuals** — for each country, the gap between the line's prediction and that country's real satisfaction score. The book puts it exactly that way: the cost function \"measures the distance between the linear model's predictions and the training examples\". Low total distance, good line.\n\n*Looking ahead (chapter 4 fills this in):* the usual choice squares each gap before adding them up, which is why you will meet the name **least squares**. Chapter 1 does not need that detail — but it is the answer to \"why squared\" when you get there.\n\nFigure 1-20 below is the line where that total is as small as it can be.\n\n### 3 · What `fit` does\n\n`model.fit(X, y)` runs the search: it finds the parameter values that minimise the cost function. For a straight line with one input there is a formula that lands on the answer directly, so it is instant and exact — no guessing, no iterations.\n\nAfterwards the two learned numbers are on the model object: `model.intercept_` is θ₀, `model.coef_` is θ₁. The explanation under Equation 1-1 below walks through both, with the real arithmetic for all 27 countries.\n\n**One-liner for your notes:** a model family is the set of candidates, the cost function scores them, and `fit` is the search that returns the lowest-cost one.",
-        "revised": "structure-split-17-09-26"
+        "content": "### 3 · Choose a model and train it\n\n`LinearRegression()` picks the model class; `model.fit(X, y)` runs training, which finds the parameter values minimising the cost function."
        },
        {
         "type": "equation",
@@ -684,7 +625,7 @@
         "src": "assets/geron-homl3/eq-1-1.png",
         "asset": "eq-1-1",
         "latex": "\\text{life\\_satisfaction} = \\theta_0 + \\theta_1 \\times \\text{GDP\\_per\\_capita}",
-        "explain": "**Why the equation looks like this**\n\nA straight line is the simplest rule that can say \"more of this, more of that\". It needs exactly two\nnumbers: somewhere to start, and how fast to climb. That is why the formula has two terms and not\nthree, and why nothing is squared or multiplied together — those would bend the line, and the\nscatterplot did not show a bend.\n\n**Is this standard?** Yes. This is the ordinary linear model, the same form used everywhere, not a\nsimplification invented for this example. What changes in real work is the number of inputs, not the\nshape:\n\n| Inputs | The model |\n|---|---|\n| one (here) | θ₀ + θ₁ × GDP |\n| two | θ₀ + θ₁ × input₁ + θ₂ × input₂ |\n| many | θ₀ plus one θ × input term per feature |\n\nEach extra feature adds one more θ and one more multiply. Everything else — `fit`, `predict`, the\ncost function — is unchanged, which is why this two-term version is worth understanding properly.\n\n**One term you need:** the **cost function** is a single number saying how badly a candidate line\nmisses the 27 real data points. `fit` searches for the θ values that make it as small as possible.\nFor a straight line that search has an exact formula, worked through below.\n\n---\n\n**Reading Equation 1-1, piece by piece:**\n\n| Piece | Say it as | What it is | In the code |\n|---|---|---|---|\n| life_satisfaction | — | the number the model predicts, a 0–10 score | `model.predict(...)` |\n| $\\theta_0$ | \"theta zero\" | the starting value: the prediction when GDP is 0 | `model.intercept_` = 3.749 |\n| $\\theta_1$ | \"theta one\" | the slope: score gained per extra dollar | `model.coef_` = 0.0000678 |\n| × | \"times\" | multiply | |\n| GDP_per_capita | — | the input: money per person, US dollars | `X` |\n\nIn plain words: **prediction = starting value + slope × GDP**.\n\n**Cyprus, plugged in:** 3.749 + 0.0000678 × 37,655.2 = 3.749 + 2.5526 = **6.30**.\n\n**How `fit` gets $\\theta_0$ and $\\theta_1$** (one input, so it can be done by hand):\n\n1. Average GDP of the 27 countries = 41,564.5. Average score = 6.5667.\n2. For each country, multiply (its GDP − 41,564.5) by (its score − 6.5667), then add the 27 results: **163,499.4** — how GDP and score move together.\n3. For each country, square (its GDP − 41,564.5), then add the 27 results: **2,411,886,717.9** — how spread out GDP is.\n4. θ₁ = step 2 ÷ step 3 = **0.0000678**.\n5. θ₀ = 6.5667 − 0.0000678 × 41,564.5 = 6.5667 − 2.8176 = **3.749**."
+        "explain": "**Reading Equation 1-1, piece by piece:**\n\n| Piece | Say it as | What it is | In the code |\n|---|---|---|---|\n| life_satisfaction | — | the number the model predicts, a 0–10 score | `model.predict(...)` |\n| $\\theta_0$ | \"theta zero\" | the starting value: the prediction when GDP is 0 | `model.intercept_` = 3.749 |\n| $\\theta_1$ | \"theta one\" | the slope: score gained per extra dollar | `model.coef_` = 0.0000678 |\n| × | \"times\" | multiply | |\n| GDP_per_capita | — | the input: money per person, US dollars | `X` |\n\nIn plain words: **prediction = starting value + slope × GDP**.\n\n**Cyprus, plugged in:** 3.749 + 0.0000678 × 37,655.2 = 3.749 + 2.5526 = **6.30**.\n\n**How `fit` gets $\\theta_0$ and $\\theta_1$** (one input, so it can be done by hand):\n\n1. Average GDP of the 27 countries = 41,564.5. Average score = 6.5667.\n2. For each country, multiply (its GDP − 41,564.5) by (its score − 6.5667), then add the 27 results: **163,499.4** — how GDP and score move together.\n3. For each country, square (its GDP − 41,564.5), then add the 27 results: **2,411,886,717.9** — how spread out GDP is.\n4. θ₁ = step 2 ÷ step 3 = **0.0000678**.\n5. θ₀ = 6.5667 − 0.0000678 × 41,564.5 = 6.5667 − 2.8176 = **3.749**."
        },
        {
         "type": "figure",
@@ -709,24 +650,6 @@
          {
           "id": "train",
           "source": "# Pick a model\nmodel = LinearRegression()  # model-based: fits a straight line\n\n# Swap in instance-based learning: uncomment both lines\n# from sklearn.neighbors import KNeighborsRegressor\n# model = KNeighborsRegressor(n_neighbors=3)  # KNOB: try 1, 3, 5\n\nmodel.fit(X, y)  # train on all countries\nprint(model)  # which model was trained\nif hasattr(model, \"coef_\"):  # linear models only\n    print(\"intercept:\", model.intercept_, \"slope:\", model.coef_)"
-         }
-        ]
-       },
-       {
-        "type": "deeper",
-        "kind": "concept",
-        "items": [
-         {
-          "term": "Why squared error and not plain distance (chapter 4 detail, brought forward)",
-          "text": "Chapter 1 only says the cost measures the distance between predictions and the real values. The usual way to turn many distances into one number is to square each and add them: squaring stops overshoots and undershoots cancelling out, punishes one large miss more than several small ones, and makes the search solvable by formula instead of by hunting. Absolute error is a legitimate alternative that copes better with outliers. Chapter 4 derives both -- flagged here because it is the honest answer to \"why that shape\", not something chapter 1 establishes."
-         },
-         {
-          "term": "What 'minimise' means when there is a formula",
-          "text": "For a straight line with one input, the best θ₀ and θ₁ can be computed directly from the data in one pass -- no iterations, no learning rate, no randomness. Run `fit` twice on the same data and you get identical numbers. Most models in later chapters are not like this and must search step by step."
-         },
-         {
-          "term": "The family is a choice you are making",
-          "text": "`LinearRegression()` commits you to straight lines before any data is seen. If the true relationship bends, no amount of training rescues it -- the best member of the wrong family is still wrong. That is why the scatterplot came first."
          }
         ]
        },
@@ -757,26 +680,11 @@
           "term": "`hasattr(model, \"coef_\")`",
           "text": "Asks whether the object has that attribute. A k-nearest-neighbours model has no `coef_`, so the line is skipped instead of failing."
          }
-        ],
-        "kind": "syntax"
+        ]
        },
        {
-        "type": "callout",
-        "title": "Look it up",
-        "items": [
-         "Why is squared error the default rather than absolute error, and when would you deliberately choose absolute error instead?",
-         "Look up: the scikit-learn user guide section on Ordinary Least Squares, then compare it with the page on robust regression."
-        ]
-       }
-      ]
-     },
-     {
-      "term": "Step 4 · Predict for Cyprus",
-      "blocks": [
-       {
         "type": "text",
-        "content": "Once the parameters are learned, predicting is just substituting a new input into the equation.\n\n\n*Part 4 of 5 of Example 1-1 — the book's worked example. Read it and run the cells; there is nothing to solve here.*\n\n**The question this lesson answers:** Cyprus was not in the training data. How do you get its predicted life satisfaction, and why does the input have to be typed the way it is?\n\n### The big picture\n\nTraining used 27 rows to find θ₀ and θ₁. Inference uses those two fixed numbers on one new row.\n\n| Phase | Input | Output | Runs |\n|---|---|---|---|\n| training | 27 rows + answers | θ₀, θ₁ | once |\n| inference | 1 new row, no answer | a prediction | any time |\n\n**Inference** is the word for using a trained model on new data. Nothing is learned during it — the parameters do not change.\n\n### 1 · One new row, same 2-D shape\n\n`X_new` is written as a list inside a list: one row, one column. That is the same rule as `X` in step 1 — scikit-learn wants a table, even for a single country, because it is built to score many rows at once and one row is just the smallest case.\n\nThe underscore in `37_655.2` is Python's digit separator. It is ignored by the language and is there purely so a human can read the thousands.\n\n### 2 · Reading the answer\n\n`model.predict(X_new)` returns roughly **6.30** for Cyprus. It comes back wrapped in a list, for the same reason the input was: the method answers per row, so with one row in you get one value out, inside a container.\n\nThat 6.30 is not looked up from anywhere. It is Equation 1-1 evaluated at Cyprus's GDP per capita, using the θ₀ and θ₁ that `fit` learned in the previous step.\n\n**One-liner for your notes:** inference substitutes a new input into the learned equation, and the 2-D input shape is the same rule as training.",
-        "revised": "structure-split-17-09-26"
+        "content": "### 4 · Predict for Cyprus\n\n`model.predict(X_new)` performs inference for Cyprus's GDP per capita and returns roughly 6.30."
        },
        {
         "type": "code_cells",
@@ -785,20 +693,6 @@
          {
           "id": "predict",
           "source": "# Predict for a new country\nX_new = [[37_655.2]]  # KNOB: Cyprus GDP per capita (USD, 2020)\nprint(model.predict(X_new))  # linear model: [[6.30165767]]"
-         }
-        ]
-       },
-       {
-        "type": "deeper",
-        "kind": "concept",
-        "items": [
-         {
-          "term": "Training and inference are different jobs",
-          "text": "Training reads answers and produces parameters; inference reads parameters and produces answers. Once `fit` has run, θ₀ and θ₁ are frozen -- calling `predict` a thousand times changes nothing. In your world: training is the batch job that builds the table, inference is the query against it."
-         },
-         {
-          "term": "Why the prediction is not a lookup",
-          "text": "Cyprus is not in the 27 training rows. The model does not find a similar country and copy its score -- it evaluates the equation at Cyprus's GDP. That is what 'model-based' means, and it is exactly what the k-nearest-neighbours version in the next lesson does differently."
          }
         ]
        },
@@ -821,33 +715,11 @@
           "term": "`[[6.30165767]]`",
           "text": "A NumPy array of shape `(1, 1)`: one row of predictions for the one input row."
          }
-        ],
-        "kind": "syntax"
-       },
-       {
-        "type": "callout",
-        "title": "Look it up",
-        "items": [
-         "The model happily predicts for a GDP far outside the range of the 27 training countries. Should you trust that number?",
-         "Look up: extrapolation versus interpolation in regression -- and note what Geron says in chapter 1 about the Cyprus prediction's reliability."
         ]
-       }
-      ]
-     },
-     {
-      "term": "Step 5 · Try another algorithm",
-      "blocks": [
+       },
        {
         "type": "text",
-        "content": "Swapping one algorithm for a completely different one costs two lines, and that uniformity is the point of the whole example.\n\n\n*Part 5 of 5 of Example 1-1 — the book's worked example. Read it and run the cells; there is nothing to solve here.*\n\n**The question this lesson answers:** linear regression drew a line through the data. What happens if you want a method that works in a totally different way — how much of the code changes?\n\n### The big picture\n\n```\nload  ->  look  ->  CHOOSE MODEL  ->  fit  ->  predict\n                    ^^^^^^^^^^^^\n                    only this changes\n```\n\n### 1 · Two lines, different philosophy\n\nReplace the `LinearRegression` import and constructor with `KNeighborsRegressor(n_neighbors=3)`. That is the whole change. Loading, shaping `X` and `y`, `fit`, `predict` — all identical.\n\nWhat changed underneath is not small. The two methods answer the same question in opposite ways:\n\n| | Linear regression | k-nearest neighbours |\n|---|---|---|\n| Kind | model-based | instance-based |\n| Learns | two numbers, θ₀ and θ₁ | nothing; it keeps the data |\n| Predicts by | evaluating the equation | averaging the k closest countries |\n\n`n_neighbors=3` means it finds the 3 countries with the closest GDP per capita to Cyprus and averages their satisfaction scores. In SQL that is roughly `ORDER BY distance LIMIT 3`, then `AVG`.\n\n### 2 · Why the uniform interface matters\n\nEvery estimator in scikit-learn exposes the same `fit` / `predict` pair, so the code around the model never has to know which algorithm is inside. That is the library's central design idea, and it is why the rest of the book can move quickly through many algorithms — each new one is a constructor swap, not a rewrite.\n\n### 3 · When predictions are poor\n\nIf the numbers come out bad, the lesson gives three fixes, and none of them is \"run `fit` again\":\n\n1. use more attributes — give the model more input columns\n2. get more data, or better-quality data\n3. select a more powerful model\n\n**One-liner for your notes:** scikit-learn's uniform `fit`/`predict` interface makes swapping algorithms a two-line change, so the workflow is the thing worth memorising, not any one model.",
-        "revised": "structure-split-17-09-26"
-       },
-       {
-        "type": "figure",
-        "title": "The ten lines, and what each one is doing",
-        "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 760 300\" width=\"760\" height=\"300\" role=\"img\" aria-label=\"The scikit-learn workflow: load, select, fit, predict\"><defs><marker id=\"ar\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"#9ca3af\"/></marker><marker id=\"ari\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"#6366f1\"/></marker></defs>\n<g font-family=\"ui-sans-serif,system-ui,sans-serif\" font-size=\"12.5\" fill=\"#e5e7eb\">\n<rect x=\"16\" y=\"26\" width=\"166\" height=\"72\" rx=\"6\" fill=\"#1f2937\" stroke=\"#4b5563\"/>\n<text x=\"99\" y=\"50\" text-anchor=\"middle\" font-size=\"12\" fill=\"#9ca3af\">1 · LOAD</text>\n<text x=\"99\" y=\"72\" text-anchor=\"middle\" font-family=\"ui-monospace,monospace\" font-size=\"11.5\" fill=\"#a5b4fc\">pd.read_csv()</text>\n<text x=\"99\" y=\"88\" text-anchor=\"middle\" font-size=\"11\" fill=\"#9ca3af\">X and y as arrays</text>\n<path d=\"M182,62 H206\" fill=\"none\" stroke=\"#6366f1\" stroke-width=\"1.5\" marker-end=\"url(#ari)\"/>\n<rect x=\"210\" y=\"26\" width=\"166\" height=\"72\" rx=\"6\" fill=\"#1f2937\" stroke=\"#4b5563\"/>\n<text x=\"293\" y=\"50\" text-anchor=\"middle\" font-size=\"12\" fill=\"#9ca3af\">2 · SELECT</text>\n<text x=\"293\" y=\"72\" text-anchor=\"middle\" font-family=\"ui-monospace,monospace\" font-size=\"11.5\" fill=\"#a5b4fc\">LinearRegression()</text>\n<text x=\"293\" y=\"88\" text-anchor=\"middle\" font-size=\"11\" fill=\"#9ca3af\">untrained, parameters empty</text>\n<path d=\"M376,62 H400\" fill=\"none\" stroke=\"#6366f1\" stroke-width=\"1.5\" marker-end=\"url(#ari)\"/>\n<rect x=\"404\" y=\"26\" width=\"166\" height=\"72\" rx=\"6\" fill=\"#312e4d\" stroke=\"#6366f1\"/>\n<text x=\"487\" y=\"50\" text-anchor=\"middle\" font-size=\"12\" fill=\"#a5b4fc\">3 · TRAIN</text>\n<text x=\"487\" y=\"72\" text-anchor=\"middle\" font-family=\"ui-monospace,monospace\" font-size=\"11.5\" fill=\"#c7d2fe\">model.fit(X, y)</text>\n<text x=\"487\" y=\"88\" text-anchor=\"middle\" font-size=\"11\" fill=\"#a5b4fc\">the search happens here</text>\n<path d=\"M570,62 H594\" fill=\"none\" stroke=\"#6366f1\" stroke-width=\"1.5\" marker-end=\"url(#ari)\"/>\n<rect x=\"598\" y=\"26\" width=\"146\" height=\"72\" rx=\"6\" fill=\"#1f2937\" stroke=\"#4b5563\"/>\n<text x=\"671\" y=\"50\" text-anchor=\"middle\" font-size=\"12\" fill=\"#9ca3af\">4 · PREDICT</text>\n<text x=\"671\" y=\"72\" text-anchor=\"middle\" font-family=\"ui-monospace,monospace\" font-size=\"11.5\" fill=\"#a5b4fc\">model.predict()</text>\n<text x=\"671\" y=\"88\" text-anchor=\"middle\" font-size=\"11\" fill=\"#9ca3af\">on unseen X</text>\n<rect x=\"16\" y=\"122\" width=\"728\" height=\"70\" rx=\"6\" fill=\"#1a1a2e\" stroke=\"#6366f1\"/>\n<text x=\"36\" y=\"144\" font-size=\"12\" fill=\"#a5b4fc\" letter-spacing=\"1.2\">THE API IS THE SAME FOR EVERY MODEL — THAT IS THE DESIGN</text>\n<text x=\"36\" y=\"166\" font-family=\"ui-monospace,monospace\" font-size=\"11.5\" fill=\"#9ca3af\">model = LinearRegression()</text>\n<text x=\"300\" y=\"166\" font-size=\"11.5\" fill=\"#9ca3af\">model-based — fits a line, keeps 2 numbers</text>\n<text x=\"36\" y=\"184\" font-family=\"ui-monospace,monospace\" font-size=\"11.5\" fill=\"#c7d2fe\">model = KNeighborsRegressor(n_neighbors=3)</text>\n<text x=\"300\" y=\"184\" font-size=\"11.5\" fill=\"#e5e7eb\">instance-based — keeps the data. <tspan fill=\"#a5b4fc\">Same fit/predict calls.</tspan></text>\n<rect x=\"16\" y=\"208\" width=\"728\" height=\"76\" rx=\"6\" fill=\"#3a2226\" stroke=\"#ef5b5b\"/>\n<text x=\"36\" y=\"230\" font-size=\"12\" fill=\"#fca5a5\" letter-spacing=\"1.2\">WHAT THE TEN LINES HIDE</text>\n<text x=\"36\" y=\"252\" font-size=\"12\" fill=\"#e5e7eb\">Nothing here checks whether the data is any good, whether the features mean anything, or whether the</text>\n<text x=\"36\" y=\"270\" font-size=\"12\" fill=\"#e5e7eb\">result generalises. Those are the next two blocks — <tspan fill=\"#fca5a5\">bad data</tspan> and <tspan fill=\"#fca5a5\">bad model</tspan> — and they are where projects actually fail.</text>\n</g></svg>",
-        "caption": "Every supervised project in the book is this shape. Swapping the model class is a two-line change (the import and the constructor) — which is the point of the API, and the reason the choice of model is not where the difficulty lives.",
-        "revised": "book-audit 17-09-26"
+        "content": "### 5 · Try another algorithm\n\nThe part worth internalising is how little of this changes between algorithms. Swapping the model-based approach for an instance-based one is two lines: replace the `LinearRegression` import and constructor with `KNeighborsRegressor(n_neighbors=3)`. Everything around it — loading, shaping `X` and `y`, `fit`, `predict` — is identical. That uniform interface is Scikit-Learn's central design idea, and it is why the rest of the book can move quickly through many algorithms."
        },
        {
         "type": "callout",
@@ -855,24 +727,6 @@
         "items": [
          "Change the code above to use k-nearest neighbours with k = 3. Exactly two lines change — which?",
          "Step 3's cell has the two lines commented out (`# KNOB`): uncomment them, Run it, then Run step 4."
-        ]
-       },
-       {
-        "type": "deeper",
-        "kind": "concept",
-        "items": [
-         {
-          "term": "Model-based vs instance-based, and what you trade",
-          "text": "Linear regression compresses 27 rows into 2 numbers and then throws the data away: predictions are instant and the rule is inspectable, but it can only express a straight line. k-NN keeps every row and decides at prediction time: it can follow any shape, but it must carry the data forever and gets slower as the data grows."
-         },
-         {
-          "term": "Why a uniform interface is a design decision",
-          "text": "Nothing forces `fit`/`predict` to look the same across algorithms -- scikit-learn chose it so that the surrounding code, and later the cross-validation and pipeline tools, work with any estimator without knowing what it is. It is why swapping the model is two lines rather than a rewrite."
-         },
-         {
-          "term": "'More powerful model' is not always the fix",
-          "text": "Of the three fixes listed, reaching for a bigger model is the one most likely to backfire: a more flexible model can trace the training data so closely that it stops generalising. That failure has a name -- overfitting -- and it is the subject of a later lesson in this chapter."
-         }
         ]
        },
        {
@@ -894,16 +748,18 @@
           "term": "Re-running",
           "text": "After editing step 3, Run step 4: step 3 changed, so it runs again first."
          }
-        ],
-        "kind": "syntax"
+        ]
        },
        {
-        "type": "callout",
-        "title": "Look it up",
-        "items": [
-         "k-NN needed `n_neighbors=3`. Where did 3 come from, and how would you choose it properly rather than guessing?",
-         "Look up: the scikit-learn user guide on nearest neighbours, and this chapter's later lesson on validation sets."
-        ]
+        "type": "text",
+        "content": "### Recap\n\nIf the predictions are poor, the fixes are: use more attributes, get more or better-quality data, or select a more powerful model."
+       },
+       {
+        "type": "figure",
+        "title": "The ten lines, and what each one is doing",
+        "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 760 300\" width=\"760\" height=\"300\" role=\"img\" aria-label=\"The scikit-learn workflow: load, select, fit, predict\"><defs><marker id=\"ar\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"#9ca3af\"/></marker><marker id=\"ari\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"#6366f1\"/></marker></defs>\n<g font-family=\"ui-sans-serif,system-ui,sans-serif\" font-size=\"12.5\" fill=\"#e5e7eb\">\n<rect x=\"16\" y=\"26\" width=\"166\" height=\"72\" rx=\"6\" fill=\"#1f2937\" stroke=\"#4b5563\"/>\n<text x=\"99\" y=\"50\" text-anchor=\"middle\" font-size=\"12\" fill=\"#9ca3af\">1 · LOAD</text>\n<text x=\"99\" y=\"72\" text-anchor=\"middle\" font-family=\"ui-monospace,monospace\" font-size=\"11.5\" fill=\"#a5b4fc\">pd.read_csv()</text>\n<text x=\"99\" y=\"88\" text-anchor=\"middle\" font-size=\"11\" fill=\"#9ca3af\">X and y as arrays</text>\n<path d=\"M182,62 H206\" fill=\"none\" stroke=\"#6366f1\" stroke-width=\"1.5\" marker-end=\"url(#ari)\"/>\n<rect x=\"210\" y=\"26\" width=\"166\" height=\"72\" rx=\"6\" fill=\"#1f2937\" stroke=\"#4b5563\"/>\n<text x=\"293\" y=\"50\" text-anchor=\"middle\" font-size=\"12\" fill=\"#9ca3af\">2 · SELECT</text>\n<text x=\"293\" y=\"72\" text-anchor=\"middle\" font-family=\"ui-monospace,monospace\" font-size=\"11.5\" fill=\"#a5b4fc\">LinearRegression()</text>\n<text x=\"293\" y=\"88\" text-anchor=\"middle\" font-size=\"11\" fill=\"#9ca3af\">untrained, parameters empty</text>\n<path d=\"M376,62 H400\" fill=\"none\" stroke=\"#6366f1\" stroke-width=\"1.5\" marker-end=\"url(#ari)\"/>\n<rect x=\"404\" y=\"26\" width=\"166\" height=\"72\" rx=\"6\" fill=\"#312e4d\" stroke=\"#6366f1\"/>\n<text x=\"487\" y=\"50\" text-anchor=\"middle\" font-size=\"12\" fill=\"#a5b4fc\">3 · TRAIN</text>\n<text x=\"487\" y=\"72\" text-anchor=\"middle\" font-family=\"ui-monospace,monospace\" font-size=\"11.5\" fill=\"#c7d2fe\">model.fit(X, y)</text>\n<text x=\"487\" y=\"88\" text-anchor=\"middle\" font-size=\"11\" fill=\"#a5b4fc\">the search happens here</text>\n<path d=\"M570,62 H594\" fill=\"none\" stroke=\"#6366f1\" stroke-width=\"1.5\" marker-end=\"url(#ari)\"/>\n<rect x=\"598\" y=\"26\" width=\"146\" height=\"72\" rx=\"6\" fill=\"#1f2937\" stroke=\"#4b5563\"/>\n<text x=\"671\" y=\"50\" text-anchor=\"middle\" font-size=\"12\" fill=\"#9ca3af\">4 · PREDICT</text>\n<text x=\"671\" y=\"72\" text-anchor=\"middle\" font-family=\"ui-monospace,monospace\" font-size=\"11.5\" fill=\"#a5b4fc\">model.predict()</text>\n<text x=\"671\" y=\"88\" text-anchor=\"middle\" font-size=\"11\" fill=\"#9ca3af\">on unseen X</text>\n<rect x=\"16\" y=\"122\" width=\"728\" height=\"70\" rx=\"6\" fill=\"#1a1a2e\" stroke=\"#6366f1\"/>\n<text x=\"36\" y=\"144\" font-size=\"12\" fill=\"#a5b4fc\" letter-spacing=\"1.2\">THE API IS THE SAME FOR EVERY MODEL — THAT IS THE DESIGN</text>\n<text x=\"36\" y=\"166\" font-family=\"ui-monospace,monospace\" font-size=\"11.5\" fill=\"#9ca3af\">model = LinearRegression()</text>\n<text x=\"300\" y=\"166\" font-size=\"11.5\" fill=\"#9ca3af\">model-based — fits a line, keeps 2 numbers</text>\n<text x=\"36\" y=\"184\" font-family=\"ui-monospace,monospace\" font-size=\"11.5\" fill=\"#c7d2fe\">model = KNeighborsRegressor(n_neighbors=3)</text>\n<text x=\"300\" y=\"184\" font-size=\"11.5\" fill=\"#e5e7eb\">instance-based — keeps the data. <tspan fill=\"#a5b4fc\">Same fit/predict calls.</tspan></text>\n<rect x=\"16\" y=\"208\" width=\"728\" height=\"76\" rx=\"6\" fill=\"#3a2226\" stroke=\"#ef5b5b\"/>\n<text x=\"36\" y=\"230\" font-size=\"12\" fill=\"#fca5a5\" letter-spacing=\"1.2\">WHAT THE TEN LINES HIDE</text>\n<text x=\"36\" y=\"252\" font-size=\"12\" fill=\"#e5e7eb\">Nothing here checks whether the data is any good, whether the features mean anything, or whether the</text>\n<text x=\"36\" y=\"270\" font-size=\"12\" fill=\"#e5e7eb\">result generalises. Those are the next two blocks — <tspan fill=\"#fca5a5\">bad data</tspan> and <tspan fill=\"#fca5a5\">bad model</tspan> — and they are where projects actually fail.</text>\n</g></svg>",
+        "caption": "Every supervised project in the book is this shape. Swapping the model class is a two-line change (the import and the constructor) — which is the point of the API, and the reason the choice of model is not where the difficulty lives.",
+        "revised": "book-audit 17-09-26"
        }
       ]
      },
@@ -20673,7 +20529,7 @@
    ],
    "source": {
     "chapter": 1,
-    "block": "ch01-b08a",
+    "block": "ch01-b08",
     "question": "ch01-b08-q1"
    }
   },
@@ -20694,7 +20550,7 @@
    ],
    "source": {
     "chapter": 1,
-    "block": "ch01-b08b",
+    "block": "ch01-b08",
     "question": "ch01-b08-q2"
    },
    "asset": {
@@ -20723,7 +20579,7 @@
    ],
    "source": {
     "chapter": 1,
-    "block": "ch01-b08c",
+    "block": "ch01-b08",
     "question": "ch01-b08-q3"
    }
   },
@@ -20744,7 +20600,7 @@
    ],
    "source": {
     "chapter": 1,
-    "block": "ch01-b08e",
+    "block": "ch01-b08",
     "question": "ch01-b08-q4"
    }
   },
@@ -20765,7 +20621,7 @@
    ],
    "source": {
     "chapter": 1,
-    "block": "ch01-b08e",
+    "block": "ch01-b08",
     "question": "ch01-b08-q5"
    }
   },
@@ -53793,426 +53649,6 @@
     "chapter": 19,
     "block": "ch19-b21",
     "question": "ch19-b21-q5"
-   }
-  },
-  {
-   "question": "What shape is `X` in the life-satisfaction example?",
-   "options": [
-    "(27,) -- a flat list of 27 GDP values",
-    "(27, 1) -- 27 rows, one feature column",
-    "(27, 3) -- every column of the CSV",
-    "(1, 27) -- one row holding all 27 countries"
-   ],
-   "correct": 1,
-   "explanations": [
-    "That is the shape of a Series, which is what SINGLE brackets return. `X` uses double brackets precisely to avoid it.",
-    "Correct. 27 rows, one column: one row per country, one column per feature. Scikit-learn always wants `X` 2-D.",
-    "The CSV has 3 columns, but `X` holds only the input feature, GDP per capita. `Country` is not fed in and `Life satisfaction` is the label.",
-    "Rows are samples and columns are features, so 27 countries means 27 ROWS, not 27 columns."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08a",
-    "question": "ch01-b08a-q2"
-   }
-  },
-  {
-   "question": "What does single-bracket indexing, `lifesat[\"Life satisfaction\"]`, return?",
-   "options": [
-    "A DataFrame of shape (27, 1)",
-    "A NumPy array of shape (27, 1)",
-    "A Series -- a bare list of values, shape (27,)",
-    "A Python dictionary keyed by country"
-   ],
-   "correct": 2,
-   "explanations": [
-    "That is what DOUBLE brackets return. Single brackets drop the table structure.",
-    "`.values` would give you a NumPy array; single brackets on their own give a pandas Series.",
-    "Correct. One bracket returns a Series, shape (27,). That is fine for `y`, which needs to be 1-D.",
-    "Indexing by column name returns a Series of that column's values, not a dictionary."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08a",
-    "question": "ch01-b08a-q3"
-   }
-  },
-  {
-   "question": "In this workflow, what is a *label*?",
-   "options": [
-    "The name of the CSV column holding the country name",
-    "The answer column that training learns to fill in for unseen rows",
-    "The index position of a row inside the DataFrame",
-    "A tag marking which rows are safe to train on"
-   ],
-   "correct": 1,
-   "explanations": [
-    "`Country` is an identifier and is not used by the model at all.",
-    "Correct. The label is the value you want predicted -- here life satisfaction -- and supervised training learns to produce it for rows it has never seen.",
-    "That is the row index. A label is data, not a position.",
-    "There is no such tag in this example; all 27 rows are used."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08a",
-    "question": "ch01-b08a-q4"
-   }
-  },
-  {
-   "question": "Why is `y` one-dimensional while `X` is two-dimensional?",
-   "options": [
-    "Because `y` holds fewer values than `X`",
-    "Because pandas cannot store a 2-D column of floats",
-    "Because there is exactly one answer per row, but there can be many features per row",
-    "Because `y` is optional and `X` is required"
-   ],
-   "correct": 2,
-   "explanations": [
-    "Both hold 27 values here. The difference is shape, not count.",
-    "pandas stores 2-D data perfectly well -- that is what a DataFrame is.",
-    "Correct. Each row needs one answer, so `y` is a flat vector; each row may have many input columns, so `X` is a grid.",
-    "Both are required for supervised training."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08a",
-    "question": "ch01-b08a-q5"
-   }
-  },
-  {
-   "question": "What does each dot on the scatterplot represent?",
-   "options": [
-    "One of the 27 countries",
-    "One prediction made by the model",
-    "One column of the CSV",
-    "One step of the training process"
-   ],
-   "correct": 0,
-   "explanations": [
-    "Correct. Each country is one dot: GDP per capita across, life satisfaction up.",
-    "Nothing has been trained yet at this point -- the plot comes before the model.",
-    "The two axes are columns; the dots are rows.",
-    "Training has not started. The plot is what decides which model to train."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08b",
-    "question": "ch01-b08b-q2"
-   }
-  },
-  {
-   "question": "In this lesson, what does it mean that GDP per capita and life satisfaction are *correlated*?",
-   "options": [
-    "That higher GDP causes higher life satisfaction",
-    "That the two columns move together -- as one rises, so does the other",
-    "That the two columns hold identical values",
-    "That one column can be deleted without losing information"
-   ],
-   "correct": 1,
-   "explanations": [
-    "The lesson is explicit that moving together does not mean one causes the other.",
-    "Correct. Correlation is about the two columns rising and falling together, nothing more.",
-    "They hold completely different quantities, on different scales.",
-    "Correlation does not license dropping a column; that is a separate judgement."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08b",
-    "question": "ch01-b08b-q3"
-   }
-  },
-  {
-   "question": "What specifically about the plot justifies choosing a linear model?",
-   "options": [
-    "That there are exactly 27 dots",
-    "That both axes use positive numbers",
-    "That the dots trend upward in a roughly straight band rather than a curve or a cloud",
-    "That no dot sits exactly on the axis"
-   ],
-   "correct": 2,
-   "explanations": [
-    "The number of points says nothing about the shape of the relationship.",
-    "The sign of the values is irrelevant to whether a line fits.",
-    "Correct. A roughly straight upward band is exactly the pattern a straight line can capture.",
-    "Where dots sit relative to the axes does not indicate a linear relationship."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08b",
-    "question": "ch01-b08b-q4"
-   }
-  },
-  {
-   "question": "What goes wrong if you skip the plot and fit a line anyway?",
-   "options": [
-    "Training fails with an error",
-    "The model trains but its parameters come out as zero",
-    "You may fit the wrong shape, and a line through curved data is wrong at every input",
-    "Nothing -- the plot is decoration, so skipping it is safe"
-   ],
-   "correct": 2,
-   "explanations": [
-    "`fit` will happily run on any numeric data; it does not check that a line is appropriate.",
-    "The parameters would be whatever fits best; they would not be zero.",
-    "Correct. The failure is silent: you get a confidently wrong model rather than an error.",
-    "The lesson says the opposite -- the plot is what justifies the model choice."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08b",
-    "question": "ch01-b08b-q5"
-   }
-  },
-  {
-   "question": "What does `LinearRegression()` actually pick?",
-   "options": [
-    "The finished model, with its parameters already set",
-    "The model family -- all straight lines -- before any data is seen",
-    "The cost function used to score candidates",
-    "The 27 rows that training will use"
-   ],
-   "correct": 1,
-   "explanations": [
-    "No parameters exist until `fit` runs; the constructor alone predicts nothing.",
-    "Correct. It commits you to the family of straight lines. Which straight line is decided later, by `fit`.",
-    "The cost function comes with the choice of family but is not what the constructor returns.",
-    "The data is passed to `fit`, not to the constructor."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08c",
-    "question": "ch01-b08c-q2"
-   }
-  },
-  {
-   "question": "What is a *cost function*?",
-   "options": [
-    "The time in seconds that training takes",
-    "The number of parameters the model has to learn",
-    "A single number saying how badly a candidate line misses the actual data",
-    "The price of the compute used to fit the model"
-   ],
-   "correct": 2,
-   "explanations": [
-    "Cost here has nothing to do with runtime.",
-    "That count is a property of the model family, not a score of fit quality.",
-    "Correct. Low cost means the line passes close to the 27 points; `fit` searches for the parameters that make it smallest.",
-    "It is a measure of error, not of money or compute."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08c",
-    "question": "ch01-b08c-q3"
-   }
-  },
-  {
-   "question": "Why is the standard method called *least squares*?",
-   "options": [
-    "Because it uses the smallest possible number of parameters",
-    "Because it squares each gap between prediction and reality, then minimises the total",
-    "Because the data is arranged in a square grid",
-    "Because it takes the square root of each residual"
-   ],
-   "correct": 1,
-   "explanations": [
-    "The parameter count comes from the model family, not from the name.",
-    "Correct. Each residual is squared -- making every miss positive and punishing big misses harder -- and the sum is what gets minimised.",
-    "The shape of the data has nothing to do with the name.",
-    "Residuals are squared, not square-rooted."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08c",
-    "question": "ch01-b08c-q4"
-   }
-  },
-  {
-   "question": "After `model.fit(X, y)` returns, where are the two learned numbers?",
-   "options": [
-    "In `X` and `y`, which are updated in place",
-    "In `model.intercept_` (θ₀) and `model.coef_` (θ₁)",
-    "They are printed to the console and not stored",
-    "In a file written next to the CSV"
-   ],
-   "correct": 1,
-   "explanations": [
-    "`fit` does not modify the data you passed in.",
-    "Correct. `intercept_` holds θ₀ and `coef_` holds θ₁, both on the model object.",
-    "`fit` stores them on the model; it prints nothing.",
-    "Nothing is written to disk by `fit`."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08c",
-    "question": "ch01-b08c-q5"
-   }
-  },
-  {
-   "question": "What does *inference* mean?",
-   "options": [
-    "Another word for training the model",
-    "Using an already-trained model on new data, learning nothing new",
-    "Checking the model's accuracy against the training set",
-    "Choosing which model family to use"
-   ],
-   "correct": 1,
-   "explanations": [
-    "Training is the phase that produces the parameters; inference is what happens afterwards.",
-    "Correct. The parameters stay frozen -- inference substitutes a new input into the learned equation.",
-    "That is evaluation, a different activity.",
-    "That choice is made before training, when the constructor is called."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08d",
-    "question": "ch01-b08d-q1"
-   }
-  },
-  {
-   "question": "Why is `X_new` written as a list inside a list?",
-   "options": [
-    "To let the model predict several answers per country",
-    "Because Python needs the extra brackets for decimal numbers",
-    "Because `predict` expects the same 2-D shape as training: rows by features",
-    "To mark the value as new rather than training data"
-   ],
-   "correct": 2,
-   "explanations": [
-    "One row produces one prediction regardless of the bracketing.",
-    "Decimals need no special bracketing in Python.",
-    "Correct. It is the same rule as `X` in step 1 -- one row, one column -- because the method is built to score many rows at once.",
-    "Nothing in the brackets flags data as new; the method call does that."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08d",
-    "question": "ch01-b08d-q2"
-   }
-  },
-  {
-   "question": "What is the underscore in `37_655.2`?",
-   "options": [
-    "A digit separator that Python ignores, there for human readability",
-    "A marker telling pandas the value is missing",
-    "A multiplication by one thousand",
-    "Part of the column name"
-   ],
-   "correct": 0,
-   "explanations": [
-    "Correct. Python allows underscores inside numeric literals purely so people can read the thousands; the value is 37655.2.",
-    "Missing values are `NaN` or `None`, not underscores.",
-    "It changes nothing about the value.",
-    "It is inside a number literal, not a name."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08d",
-    "question": "ch01-b08d-q3"
-   }
-  },
-  {
-   "question": "Roughly what does the model predict for Cyprus?",
-   "options": [
-    "3.75",
-    "0.0000678",
-    "6.30",
-    "41,564.5"
-   ],
-   "correct": 2,
-   "explanations": [
-    "3.749 is θ₀, the intercept -- the prediction when GDP is zero, not Cyprus's prediction.",
-    "That is θ₁, the slope: satisfaction gained per extra dollar.",
-    "Correct. About 6.30, obtained by evaluating the equation at Cyprus's GDP per capita.",
-    "That is the mean GDP of the 27 training countries."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08d",
-    "question": "ch01-b08d-q4"
-   }
-  },
-  {
-   "question": "Do the model's parameters change while `predict` runs?",
-   "options": [
-    "Yes -- each prediction refines them slightly",
-    "Yes, but only if the new input is outside the training range",
-    "No -- θ₀ and θ₁ are frozen once `fit` has returned",
-    "Only when `predict` is given more than one row"
-   ],
-   "correct": 2,
-   "explanations": [
-    "Nothing is learned during inference; that would require the true answer, which you do not have.",
-    "Being outside the training range affects how much you should trust the number, not the parameters.",
-    "Correct. Training produces the parameters; inference only consumes them. Predicting a thousand times changes nothing.",
-    "Row count does not affect the parameters."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08d",
-    "question": "ch01-b08d-q5"
-   }
-  },
-  {
-   "question": "What does `n_neighbors=3` tell `KNeighborsRegressor` to do?",
-   "options": [
-    "Train for three passes over the data",
-    "Find the 3 countries with the closest GDP per capita and average their satisfaction scores",
-    "Keep only 3 of the 27 training rows",
-    "Fit three separate straight lines and average them"
-   ],
-   "correct": 1,
-   "explanations": [
-    "k-NN does not train in passes; it stores the data.",
-    "Correct. Roughly `ORDER BY distance LIMIT 3`, then `AVG` -- the prediction is the average of the 3 nearest countries.",
-    "All 27 rows are kept; 3 is how many are consulted per prediction.",
-    "No lines are fitted at all -- that is the model-based approach it is replacing."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08e",
-    "question": "ch01-b08e-q3"
-   }
-  },
-  {
-   "question": "What does k-nearest neighbours learn during `fit`?",
-   "options": [
-    "Two parameters, like linear regression",
-    "One parameter per neighbour",
-    "Nothing -- it keeps the data and decides at prediction time",
-    "The best value of k for this dataset"
-   ],
-   "correct": 2,
-   "explanations": [
-    "Learning a fixed set of parameters is what makes linear regression model-based; k-NN is instance-based.",
-    "Neighbours are found per query, and no parameters are attached to them.",
-    "Correct. It is instance-based: the data itself is the model, and the work happens when you predict.",
-    "k is a value you set beforehand; `fit` does not choose it for you."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08e",
-    "question": "ch01-b08e-q4"
-   }
-  },
-  {
-   "question": "Why can the rest of the book move quickly through many algorithms?",
-   "options": [
-    "Because every algorithm in scikit-learn is internally the same",
-    "Because every estimator exposes the same `fit` and `predict` pair, so surrounding code never changes",
-    "Because later algorithms need no training data",
-    "Because the book only covers linear models"
-   ],
-   "correct": 1,
-   "explanations": [
-    "They work in very different ways internally -- that is exactly the point of this comparison.",
-    "Correct. The uniform interface means a new algorithm is a constructor swap, not a rewrite.",
-    "They all need training data.",
-    "The book covers many families, model-based and instance-based alike."
-   ],
-   "source": {
-    "chapter": 1,
-    "block": "ch01-b08e",
-    "question": "ch01-b08e-q5"
    }
   }
  ],

@@ -38,8 +38,29 @@ function moduleIdFor(parsedData, bookFile = null) {
     return /^[a-z0-9]/.test(slug) && slug.length >= 2 ? `t-${slug}` : 'module';
 }
 
-const DEFAULT_BOOK = 'geron_hands_on_ml_ch01_ch09.json';
+const DEFAULT_BOOK = 'geron-homl3';   // the packaged book (library/<moduleId>/)
 let activeBookFile = null;        // the library file being studied; null for an uploaded module
+// Where THIS book's images live. Empty for legacy books, whose "src" values are
+// relative to the site root (assets/<moduleId>/x.png). A packaged book sets it to
+// book/<moduleId>/, so its "src" is relative to the BOOK (assets/x.png) and the
+// same folder works unzipped anywhere.
+let assetBase = '';
+// Where a book lives, and what its images are relative to. A PACKAGED book is a
+// folder (library/<moduleId>/); a legacy one is a file in data/. Identified by
+// SHAPE, not by the library listing -- at startup the default book is opened
+// before /api/modules has answered, and looking it up there made the first load
+// 404 and leave the home dashboard empty.
+function bookUrlFor(file) {
+    const packaged = /^[A-Za-z0-9._-]+$/.test(file) && !file.endsWith('.json');
+    return packaged
+        ? { url: `book/${encodeURIComponent(file)}/module.json`, base: `book/${file}/` }
+        : { url: `data/${encodeURIComponent(file)}`, base: '' };
+}
+
+function assetUrl(src) {
+    if (!src || /^(https?:|data:|\/)/.test(src)) return src;
+    return assetBase ? assetBase + src : src;
+}
 let libraryBooks = [];
 let GENERATED_QUIZ_SIZE = 20;   // overridden by server general settings
 let aiQuestionCount = 5;        // overridden by server general settings
@@ -338,6 +359,42 @@ async function loadLibrary() {
     renderLibrary();
 }
 
+// Totals across every book, for the home page when nothing is open yet. Counts
+// come from the library listing (each entry carries its own lessons/chapters/
+// questions and how many blocks are complete), so this needs no extra request.
+function renderHomeKpis() {
+    const panel = document.getElementById('home-kpis');
+    if (!panel) return;
+    // Shown whenever there is a library to summarise. It was first gated on "no book
+    // open", but the default book auto-opens, so that state is rare and the panel
+    // would never have appeared. It does not duplicate the current-book panel: that
+    // one is THIS book, this one is every book.
+    const books = libraryBooks || [];
+    if (!books.length) { panel.classList.add('hidden-view'); return; }
+
+    const sum = (key) => books.reduce((total, book) => total + (Number(book[key]) || 0), 0);
+    const lessons = sum('lessons');
+    const done = books.reduce((total, book) => total + Math.min(Number(book.done) || 0, Number(book.lessons) || 0), 0);
+    const percent = lessons ? Math.round((done / lessons) * 100) : 0;
+    const started = books.filter(book => (Number(book.done) || 0) > 0).length;
+
+    const set = (id, value) => { const node = document.getElementById(id); if (node) node.textContent = value; };
+    set('kpi-lessons', `${done}`);
+    set('kpi-lessons-sub', `of ${lessons} · ${percent}%`);
+    const bar = document.getElementById('kpi-lessons-bar');
+    if (bar) bar.style.width = `${percent}%`;
+    set('kpi-books', `${books.length}`);
+    set('kpi-books-sub', started ? `${started} started` : 'none started yet');
+    set('kpi-chapters', `${sum('chapters')}`);
+    set('kpi-questions', `${sum('questions').toLocaleString()}`);
+
+    const furthest = [...books].sort((a, b) => (Number(b.done) || 0) - (Number(a.done) || 0))[0];
+    set('kpi-furthest', furthest && (Number(furthest.done) || 0) > 0
+        ? `Furthest along: ${furthest.title} — ${furthest.done} of ${furthest.lessons} lessons.`
+        : 'Pick a book below to start.');
+    panel.classList.remove('hidden-view');
+}
+
 function renderLibrary() {
     if (!dom.libraryGrid) return;
     dom.libraryGrid.innerHTML = '';
@@ -385,6 +442,7 @@ function renderLibrary() {
         card.append(head, meta, track, status);
         dom.libraryGrid.appendChild(card);
     });
+    renderHomeKpis();
 }
 
 async function openBook(file) {
@@ -393,8 +451,12 @@ async function openBook(file) {
         return;
     }
     try {
-        const response = await fetch(`data/${encodeURIComponent(file)}`);
+        // A packaged book is addressed by folder, not by file: book/<id>/module.json,
+        // with its assets beside it. Legacy books keep the data/<file>.json path.
+        const { url, base } = bookUrlFor(file);
+        const response = await fetch(url);
         if (!response.ok) throw new Error(`Book request failed (${response.status}).`);
+        assetBase = base;
         loadModuleData(await response.json(), 'Book', file);
         try { localStorage.setItem('eduActiveBook', file); } catch (error) { /* per-viewer convenience */ }
     } catch (error) {
@@ -495,7 +557,15 @@ function showResults() {
         dom.resultMessage.appendChild(document.createTextNode(' Review the tutorial material deeply before retaking the assessment.'));
     }
 
-    if (quizScopeBlockId && totalQuestions > 0 && score < totalQuestions && !progress.completed[quizScopeBlockId]) {
+    if (progressSaveFailed) {
+        const warn = document.createElement('span');
+        warn.className = 'block mt-6 text-sm text-amber-300';
+        warn.textContent = 'Your score could not be saved \u2014 the connection dropped. It is queued and will be saved next time this page loads.';
+        dom.resultMessage.appendChild(warn);
+        progressSaveFailed = false;
+    }
+
+    if (owningBlockId() && totalQuestions > 0 && score < totalQuestions && !progress.completed[owningBlockId()]) {
         const rule = document.createElement('span');
         rule.className = 'block mt-6 text-sm text-gray-400';
         rule.textContent = `Not complete yet \u2014 a block needs 100% (you got ${score}/${totalQuestions}). Retake to finish it.`;
@@ -592,6 +662,15 @@ function showResultsViewOnly() {
     showResults();
     updateNavUI(navTabForScope());
     renderQuizScope();
+    // A resumed session reaches the result screen WITHOUT passing through the
+    // genuine-finish path, so a perfect score shown here may never have been
+    // recorded -- which is how a reader can stare at 5/5 and watch the block stay
+    // unticked. Claiming it now is safe: the server re-checks the score itself and
+    // the write is idempotent, so a repeat changes nothing.
+    const blockId = owningBlockId();
+    if (blockId && activeQuizData.length && score === activeQuizData.length && !progress.completed[blockId]) {
+        recordQuizResult();
+    }
 }
 
 function restartQuiz() {
@@ -797,23 +876,89 @@ function announceCompletion(blockId) {
 
 // Called ONLY when a quiz is actually finished, never when results are re-opened
 // for viewing -- otherwise re-reading an old result would re-post it.
-async function recordQuizResult() {
-    const blockId = quizScopeBlockId;
-    const total = activeQuizData.length;
-    if (!blockId || total === 0) return;
+// Which block a finished quiz actually belongs to.
+//
+// quizScopeBlockId is set when the quiz was launched from the reader, from a
+// one-block picker selection, or from a one-block AI generation. It is null for a
+// multi-block 'selection'. But a selection whose questions ALL come from one block
+// is that block's assessment in everything but name, so fall back to asking the
+// questions themselves. Answering a block's five questions perfectly should tick
+// the block however the reader happened to start it.
+function owningBlockId() {
+    if (quizScopeBlockId) return quizScopeBlockId;
+    if (!Array.isArray(activeQuizData) || !activeQuizData.length) return null;
+    const blocks = new Set();
+    for (const question of activeQuizData) {
+        const block = question && question.source && question.source.block;
+        if (!block) return null;                 // unattributed question: cannot claim a block
+        blocks.add(block);
+    }
+    return blocks.size === 1 ? [...blocks][0] : null;
+}
+
+const PROGRESS_PENDING_KEY = 'eduPendingProgress';
+
+function queuePendingProgress(body) {
     try {
-        const response = await fetch('api/progress', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ module: moduleId, block: blockId, score, total, source: quizScope === 'ai' ? 'ai' : 'written' })
-        });
-        if (!response.ok) return;
-        const data = await response.json();
-        if (data && data.completed) progress = { completed: data.completed };
-        if (data && data.marked) announceCompletion(blockId);
-    } catch (error) {
-        // A failed write must not eat the result screen. The reader sees their
-        // score; the block simply is not ticked, and retaking will re-post.
+        const queued = JSON.parse(localStorage.getItem(PROGRESS_PENDING_KEY) || '[]');
+        localStorage.setItem(PROGRESS_PENDING_KEY, JSON.stringify([...queued.slice(-9), body]));
+    } catch (error) { /* storage blocked: the retry below was the only chance */ }
+}
+
+// One POST with retries. The network to this box spikes, and a dropped write used
+// to be swallowed silently -- the reader saw their score and the block was never
+// ticked, with nothing on screen or in the server log to say why.
+async function postProgress(body, attempts = 3) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+            const response = await fetch('api/progress', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (response.ok) return await response.json();
+            if (response.status >= 400 && response.status < 500) return null;   // our fault, retrying will not help
+        } catch (error) { /* network: fall through to the retry */ }
+        if (attempt < attempts) await new Promise(done => setTimeout(done, 400 * attempt));
+    }
+    return undefined;                            // undefined = never reached the server
+}
+
+// Re-sends anything a previous session could not save.
+async function flushPendingProgress() {
+    let queued = [];
+    try { queued = JSON.parse(localStorage.getItem(PROGRESS_PENDING_KEY) || '[]'); } catch (error) { return; }
+    if (!Array.isArray(queued) || !queued.length) return;
+    const left = [];
+    for (const body of queued) {
+        const data = await postProgress(body, 2);
+        if (data === undefined) left.push(body);
+        else if (data && data.completed) progress = { completed: data.completed };
+    }
+    try {
+        if (left.length) localStorage.setItem(PROGRESS_PENDING_KEY, JSON.stringify(left));
+        else localStorage.removeItem(PROGRESS_PENDING_KEY);
+    } catch (error) { /* storage blocked */ }
+    if (left.length !== queued.length) renderTheoryToc();
+}
+
+async function recordQuizResult() {
+    const blockId = owningBlockId();
+    const total = activeQuizData.length;
+    // No single block owns this quiz (a genuine multi-block selection), so there is
+    // nothing to tick. owningBlockId() already falls back to the questions' own
+    // source blocks, so a one-block quiz never lands here.
+    if (!blockId || total === 0) return;
+    const body = { module: moduleId, block: blockId, score, total, source: quizScope === 'ai' ? 'ai' : 'written' };
+    const data = await postProgress(body);
+    if (data === undefined) {
+        // Never reached the server. Keep it so the next page load saves it, and say
+        // so on screen rather than leaving the reader to wonder.
+        queuePendingProgress(body);
+        progressSaveFailed = true;
+    } else if (data) {
+        if (data.completed) progress = { completed: data.completed };
+        if (data.marked) announceCompletion(blockId);
     }
     renderTheoryToc();
 }
@@ -1090,7 +1235,7 @@ function bookImage(src, alt) {
     // dark page instead of floating as a bright rectangle.
     frame.className = 'rounded-lg bg-white p-3 flex justify-center';
     const img = document.createElement('img');
-    img.src = src;
+    img.src = assetUrl(src);
     img.alt = alt || '';
     img.loading = 'lazy';
     img.className = 'max-w-full h-auto';
@@ -1209,7 +1354,7 @@ function appendTheoryContent(parent, block, theme) {
             figure.appendChild(holder);
         } else if (block.src) {
             const img = document.createElement('img');
-            img.src = block.src;
+            img.src = assetUrl(block.src);
             img.alt = block.alt || block.caption || '';
             img.loading = 'lazy';
             img.className = 'mx-auto max-w-full h-auto rounded-lg';
@@ -2213,8 +2358,10 @@ async function loadBundledModule() {
     try { saved = localStorage.getItem('eduActiveBook'); } catch (error) { /* storage blocked */ }
     for (const file of [...new Set([saved, DEFAULT_BOOK].filter(Boolean))]) {
         try {
-            const response = await fetch(`data/${encodeURIComponent(file)}`);
+            const { url, base } = bookUrlFor(file);
+            const response = await fetch(url);
             if (!response.ok) throw new Error(`Book request failed with status ${response.status}.`);
+            assetBase = base;
             loadModuleData(await response.json(), 'Book', file);
             break;
         } catch (error) {
@@ -2413,11 +2560,22 @@ const askDom = {
     form: document.getElementById('ask-form'),
     input: document.getElementById('ask-input'),
     send: document.getElementById('ask-send'),
-    context: document.getElementById('ask-context')
+    context: document.getElementById('ask-context'),
+    fresh: document.getElementById('ask-new')
 };
-const askHistory = [];          // {role, content} -- reset when the lesson changes
+const askHistory = [];          // {role, content} -- what the model is sent as context
 let askKey = '';
 let askBusy = false;
+
+// The conversation survives closing the panel AND reloading the page, and is
+// thrown away only when the reader presses New. It lives in localStorage
+// because it is a per-viewer convenience: it never needs to reach the server,
+// another device, or another reader.
+let progressSaveFailed = false;   // set when a completion could not reach the server
+
+const ASK_STORE_KEY = 'eduAskConversation';
+const ASK_MAX_TURNS = 40;       // enough to scroll back through; bounded so storage cannot grow forever
+const askTurns = [];            // {role, text, html, source, page} -- what is on screen, and what is saved
 
 const ASK_BADGE = {
     lesson: ['This lesson', 'bg-green-500/15 text-green-300 border-green-500/30'],
@@ -2438,9 +2596,50 @@ function askSyncLesson() {
     const key = `${currentTheory.chapterIndex}:${currentTheory.blockIndex}`;
     if (key === askKey) return;
     askKey = key;
-    askHistory.length = 0;                       // a new lesson is a new conversation
-    if (askDom.log) askDom.log.innerHTML = '';
+    // Moving to another lesson only re-labels the header. It does NOT clear the
+    // conversation any more -- that happens on New and nowhere else. Each answer
+    // is still grounded in whichever lesson was open when it was asked.
     if (askDom.context) askDom.context.textContent = askLessonLabel();
+}
+
+function askSave() {
+    try {
+        localStorage.setItem(ASK_STORE_KEY, JSON.stringify({ turns: askTurns.slice(-ASK_MAX_TURNS) }));
+    } catch (error) {
+        // Private window, blocked or full storage. The panel still works for this
+        // session; the conversation simply will not survive a reload.
+    }
+}
+
+function askRecord(turn) {
+    askTurns.push(turn);
+    if (askTurns.length > ASK_MAX_TURNS) askTurns.splice(0, askTurns.length - ASK_MAX_TURNS);
+    askSave();
+}
+
+// Re-draws a saved conversation on load, and rebuilds the model's context with it
+// so a follow-up question after a reload still knows what was already discussed.
+function askRestore() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(ASK_STORE_KEY) || 'null'); } catch (error) { saved = null; }
+    const turns = (saved && Array.isArray(saved.turns)) ? saved.turns : [];
+    if (!turns.length || !askDom.log) return;
+    askDom.log.innerHTML = '';
+    for (const turn of turns) {
+        if (!turn || (turn.role !== 'user' && turn.role !== 'assistant')) continue;
+        askTurns.push(turn);
+        const badge = turn.source ? { source: turn.source, page: turn.page } : null;
+        askBubble(turn.role, turn.html || turn.text || '', badge, Boolean(turn.html));
+        askHistory.push({ role: turn.role, content: String(turn.text || '') });
+    }
+}
+
+function askNewConversation() {
+    askTurns.length = 0;
+    askHistory.length = 0;
+    if (askDom.log) askDom.log.innerHTML = '';
+    try { localStorage.removeItem(ASK_STORE_KEY); } catch (error) { /* nothing to clear */ }
+    if (askDom.input) { askDom.input.value = ''; askDom.input.focus(); }
 }
 
 function askBubble(role, text, badge, asHtml) {
@@ -2486,10 +2685,11 @@ async function askSubmit(event) {
     askDom.send.disabled = true;
     askDom.input.value = '';
     askBubble('user', question);
+    askRecord({ role: 'user', text: question });
     const pending = askBubble('assistant', 'Reading the lesson…');
     pending.firstChild.className = 'text-gray-500';
     try {
-        const response = await fetch('api/ask', {
+        const send = () => fetch('api/ask', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Edu-Quiz-Token': token || '' },
             body: JSON.stringify({
@@ -2500,6 +2700,17 @@ async function askSubmit(event) {
                 history: askHistory.slice(-6)
             })
         });
+        // The link to this box spikes (measured: 2 ms normally, 768 ms peaks). A
+        // single dropped connection used to end the question outright, so try once
+        // more before reporting a failure.
+        let response;
+        try {
+            response = await send();
+        } catch (first) {
+            pending.firstChild.textContent = 'Connection dropped, retrying…';
+            await new Promise(done => setTimeout(done, 1500));
+            response = await send();
+        }
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || `Error ${response.status}`);
         pending.innerHTML = '';
@@ -2512,11 +2723,13 @@ async function askSubmit(event) {
         else body.textContent = data.answer;
         pending.append(tag, body);
         askHistory.push({ role: 'user', content: question }, { role: 'assistant', content: data.answer });
+        askRecord({ role: 'assistant', text: data.answer, html: body.innerHTML, source: data.source, page: data.page });
     } catch (error) {
         pending.innerHTML = '';
         const failed = document.createElement('span');
         failed.className = 'text-red-300';
-        failed.textContent = error.message || 'Could not reach the tutor.';
+        failed.textContent = `Could not reach the tutor — ${error.name || 'Error'}: ${error.message || 'unknown'}`
+                           + ` (online=${navigator.onLine}, from ${location.origin})`;
         pending.appendChild(failed);
     } finally {
         askBusy = false;
@@ -2529,6 +2742,7 @@ function askInit() {
     if (!askDom.fab || !askDom.panel) return;
     askDom.fab.addEventListener('click', () => askSetOpen(askDom.panel.classList.contains('hidden-view')));
     askDom.close.addEventListener('click', () => askSetOpen(false));
+    if (askDom.fresh) askDom.fresh.addEventListener('click', askNewConversation);
     askDom.form.addEventListener('submit', askSubmit);
     askDom.input.addEventListener('keydown', event => {
         if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); askDom.form.requestSubmit(); }
@@ -2549,6 +2763,10 @@ function askInit() {
         new MutationObserver(sync).observe(screen, { attributes: true, attributeFilter: ['class'] });
         sync();
     }
+    // After sync(), because askSyncLesson() sets the header label and must not
+    // run between restoring the log and the reader seeing it.
+    askRestore();
 }
 
 document.addEventListener('DOMContentLoaded', askInit);
+document.addEventListener('DOMContentLoaded', () => { flushPendingProgress(); });

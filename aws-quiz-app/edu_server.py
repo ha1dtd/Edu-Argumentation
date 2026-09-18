@@ -93,6 +93,11 @@ PROGRESS_PATH = Path(os.getenv("EDU_PROGRESS_PATH", "/home/ubuntu/foxai-data/edu
 # module. Outside the deployed tree for the same reason as every store above, and
 # never committed: they are the publisher's images.
 ASSET_ROOT = Path(os.getenv("EDU_ASSET_ROOT", "/home/ubuntu/foxai-data/edu-argumentation/assets"))
+# A PACKAGED book: one folder holding module.json AND its own assets/, written
+# once by the importer and read as a unit. Replaces the old split where the
+# JSON lived in data/ (inside the deploy tree), the crops in assets/<id>/, and
+# a human copied between them. Zip one of these folders and it ships.
+LIBRARY_ROOT = Path(os.getenv("EDU_LIBRARY_ROOT", "/home/ubuntu/foxai-data/edu-argumentation/library"))
 ASSET_FILE = re.compile(r"^(fig|eq)-\d{1,3}-\d{1,3}\.png$")
 
 GENERAL_DEFAULTS: dict[str, Any] = {
@@ -277,7 +282,9 @@ def strip_code_fence(text: str) -> str:
     return value.strip()
 
 
-DEFAULT_MODULE = "geron_hands_on_ml_ch01_ch09.json"
+# The PACKAGED book is the default now. Its legacy twin in data/ was retired on
+# 18-09-26 so the library stops showing the same title twice.
+DEFAULT_MODULE = "geron-homl3"
 MODULE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.json")
 _MODULE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
@@ -292,8 +299,24 @@ def module_path(root: Path, name: str | None = None) -> Path:
     return path
 
 
+def packaged_module_path(name: str | None) -> Path | None:
+    """library/<moduleId>/module.json, or None if this is not a packaged book.
+
+    Everything above this -- /api/ask, /api/quiz, block lookups -- resolves a book
+    by name through load_module(), and a packaged book's name is its FOLDER, not a
+    file in data/. Without this the tutor answered "Unknown book." for the very
+    book it was displaying."""
+    if not name or not MODULE_ID.match(name):
+        return None
+    candidate = (LIBRARY_ROOT / name / "module.json").resolve()
+    book = (LIBRARY_ROOT / name).resolve()
+    if candidate.parent != book or not candidate.is_file():
+        return None
+    return candidate
+
+
 def load_module(root: Path, name: str | None = None) -> dict[str, Any]:
-    path = module_path(root, name)
+    path = packaged_module_path(name) or module_path(root, name)
     mtime = path.stat().st_mtime
     cached = _MODULE_CACHE.get(str(path))
     if cached and cached[0] == mtime:
@@ -334,7 +357,42 @@ def list_modules(root: Path) -> list[dict[str, Any]]:
             "questions": len(data["quizData"]),
             "default": path.name == DEFAULT_MODULE,
         })
+    books.extend(list_packaged_books())
     return books
+
+
+def list_packaged_books() -> list[dict[str, Any]]:
+    """Books in library/<moduleId>/. `base` tells the page where this book's own
+    assets live, so its "src" values stay relative to the book rather than to us."""
+    out: list[dict[str, Any]] = []
+    if not LIBRARY_ROOT.is_dir():
+        return out
+    for folder in sorted(p for p in LIBRARY_ROOT.iterdir() if p.is_dir()):
+        if not MODULE_ID.match(folder.name):
+            continue
+        try:
+            data = json.loads((folder / "module.json").read_text(encoding="utf-8"))
+            tutorial = data["tutorialData"]
+            sections = tutorial["sections"]
+            if not isinstance(sections, list) or not isinstance(data.get("quizData"), list):
+                continue
+        except (OSError, KeyError, TypeError, json.JSONDecodeError):
+            continue
+        out.append({
+            # The folder name doubles as the entry's `file`, so every existing
+            # library code path (progress key, card click, "is this the open
+            # book") keeps working unchanged; `book` is what marks it packaged.
+            "file": folder.name,
+            "book": folder.name,
+            "base": f"book/{folder.name}/",
+            "moduleId": module_id_for(data),
+            "title": str(tutorial.get("title") or folder.name),
+            "chapters": len(sections),
+            "lessons": sum(len(s.get("items") or []) for s in sections if isinstance(s, dict)),
+            "questions": len(data["quizData"]),
+            "default": folder.name == DEFAULT_MODULE,
+        })
+    return out
 
 
 def all_theory_blocks(root: Path, name: str | None = None) -> list[tuple[int, int]]:
@@ -716,6 +774,16 @@ def ask_tutor(config: "ProviderConfig", chapter_title: str, lesson_term: str, le
 
 class EduHandler(SimpleHTTPRequestHandler):
     server_version = "EduArgumentation/1.0"
+    # HTTP/1.1, so keep-alive is negotiated properly. On the stdlib default of
+    # HTTP/1.0 the server closes the socket after every response without saying
+    # so, the browser pools it anyway, and the NEXT request on that dead socket
+    # fails instantly as a bare "Failed to fetch" -- with nothing in this log,
+    # because it never arrived. Measured 18-09-26: every first question failed
+    # and its retry succeeded. Both response paths set Content-Length (send_json
+    # and SimpleHTTPRequestHandler's own file serving), which 1.1 requires.
+    protocol_version = "HTTP/1.1"
+    # Reap idle keep-alive connections instead of pinning a thread for each.
+    timeout = 30
 
     @property
     def root(self) -> Path:
@@ -788,9 +856,40 @@ class EduHandler(SimpleHTTPRequestHandler):
         self.wfile.write(data)
         return True
 
+    def send_book(self, route: str) -> bool:
+        """GET /book/<moduleId>/module.json  or  /book/<moduleId>/assets/<fig-1-21.png>.
+
+        Same containment rule as send_asset: every segment is pattern-checked and
+        the resolved path must stay inside this book's own folder."""
+        parts = route.split("/")
+        if len(parts) < 3 or parts[1] != "book" or not MODULE_ID.match(parts[2]):
+            return False
+        book = (LIBRARY_ROOT / parts[2]).resolve()
+        if len(parts) == 4 and parts[3] == "module.json":
+            target, ctype = book / "module.json", "application/json; charset=utf-8"
+        elif len(parts) == 5 and parts[3] == "assets" and ASSET_FILE.match(parts[4]):
+            target, ctype = book / "assets" / parts[4], "image/png"
+        else:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": "No such book file."})
+            return True
+        target = target.resolve()
+        if not str(target).startswith(str(book) + os.sep) or not target.is_file():
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": "No such book file."})
+            return True
+        data = target.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        self.wfile.write(data)
+        return True
+
     def do_GET(self) -> None:
         route = self.path.split("?", 1)[0]
         if route.startswith("/assets/") and self.send_asset(route):
+            return
+        if route.startswith("/book/") and self.send_book(route):
             return
         if route == "/api/provider":
             config = ProviderConfig.from_environment()
@@ -1047,7 +1146,10 @@ class EduHandler(SimpleHTTPRequestHandler):
             try:
                 payload = read_json(self)
                 book = str(payload.get("module") or DEFAULT_MODULE)
-                module_path(self.root, book)
+                # load_module(), not module_path(): module_path only knows data/<file>,
+                # so a PACKAGED book failed this existence check and Generate Quiz
+                # answered "Unknown book." for a book it was happily displaying.
+                load_module(self.root, book)
                 count = int(payload.get("count", general["fresh_quiz_size"]))
                 if not MIN_FRESH_QUESTIONS <= count <= MAX_FRESH_QUESTIONS:
                     raise ValueError(f"A fresh quiz must have between {MIN_FRESH_QUESTIONS} and {MAX_FRESH_QUESTIONS} questions.")
