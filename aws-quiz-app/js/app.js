@@ -1897,7 +1897,16 @@ function renderTheoryBlock() {
     dom.tutorialLead.textContent = chapter.note || '';
 
     dom.tutorialContent.innerHTML = '';
-    (Array.isArray(block.blocks) ? block.blocks : []).forEach(content => appendTheoryContent(dom.tutorialContent, content, theme));
+    // The exercise lesson renders as a form, not as a bulleted list: the book's
+    // own exercises ARE this block's assessment (19-09-26). Anything else in the
+    // lesson still renders above it.
+    const exercises = exerciseSpec(block);
+    if (exercises) {
+        exercises.intro.forEach(content => appendTheoryContent(dom.tutorialContent, content, theme));
+        renderExercises(dom.tutorialContent, exercises);
+    } else {
+        (Array.isArray(block.blocks) ? block.blocks : []).forEach(content => appendTheoryContent(dom.tutorialContent, content, theme));
+    }
 
     const previous = previousTheory();
     const next = nextTheory();
@@ -1915,6 +1924,20 @@ function renderBlockQuizButton() {
     const count = currentBlockQuiz().length;
     const done = isBlockComplete(currentTheory.chapterIndex, currentTheory.blockIndex);
     const verb = done ? 'Retake' : 'Begin Assessment';
+    // On the exercise lesson the exercises on the page are the assessment. Its
+    // five written questions repeat five of those exercises, so offering them as
+    // a second gate is asking the same thing twice (user, 19-09-26).
+    if (currentExerciseSpec()) {
+        dom.tutorialToQuizLabel.textContent = done ? '✓ Exercises complete' : 'Answer the exercises above';
+        dom.tutorialToQuizBtn.title = done
+            ? 'Already completed. You can still redo the exercises above.'
+            : 'This block is completed by answering the exercises on this page, not by a separate quiz.';
+        dom.tutorialToQuizBtn.disabled = true;
+        dom.tutorialToQuizBtn.classList.add('opacity-50', 'cursor-not-allowed');
+        return;
+    }
+    dom.tutorialToQuizBtn.disabled = false;
+    dom.tutorialToQuizBtn.classList.remove('opacity-50', 'cursor-not-allowed');
     if (count > 0) {
         dom.tutorialToQuizLabel.textContent = `${verb} · ${count} question${count === 1 ? '' : 's'}`;
         dom.tutorialToQuizBtn.title = done
@@ -1924,6 +1947,490 @@ function renderBlockQuizButton() {
         dom.tutorialToQuizLabel.textContent = `${verb} · AI-written`;
         dom.tutorialToQuizBtn.title = 'This block has no written questions; the connected model writes them';
     }
+}
+
+// --- End-of-chapter exercises (19-09-26) --------------------------------------
+// Every chapter's last block is the book's own exercises. They used to render as
+// a bulleted list with nowhere to answer, while the block still asked for five
+// multiple-choice questions -- five of which simply repeat exercises already on
+// the page. Now the block IS the assessment, in one of two modes:
+//
+//   write  - answer in your own words, marked on MEANING by the model. This is
+//            the point of the exercise (user, 19-09-26: "I will answer what I'm
+//            understanding, not exact text-by-text").
+//   choose - the same exercises as multiple choice, marked in the browser.
+//            Costs NO model call, so an exhausted free-tier quota can never lock
+//            a reader out of finishing a chapter (user, 19-09-26).
+//
+// 'choose' needs options written into the module at import time. Where a module
+// predates that, the toggle says so and write mode stays available.
+
+const EXERCISE_TERM = /exercise/i;
+const EXERCISE_STORE_PREFIX = 'eduExercises';
+const EXERCISE_VERDICT_STYLE = {
+    correct: ['✓ Correct', 'border-green-500/50 bg-green-500/10 text-green-300'],
+    partial: ['~ Partly right', 'border-amber-500/50 bg-amber-500/10 text-amber-300'],
+    incorrect: ['✗ Not right', 'border-red-500/50 bg-red-500/10 text-red-300'],
+    unmarked: ['? Not marked', 'border-gray-600 bg-gray-800 text-gray-300']
+};
+
+let exerciseBusy = false;
+
+// A lesson is the exercise lesson when its term says so AND it carries a list to
+// answer. Both halves matter: a lesson merely mentioning "exercise" in prose must
+// not turn into a form.
+function exerciseSpec(item) {
+    if (!item || !EXERCISE_TERM.test(item.term || '')) return null;
+    const blocks = Array.isArray(item.blocks) ? item.blocks : [];
+    const authored = blocks.find(b => b && Array.isArray(b.exercises) && b.exercises.length);
+    if (authored) {
+        const list = authored.exercises
+            .map((entry, index) => ({
+                n: Number(entry.n) || index + 1,
+                prompt: String(entry.prompt || entry.question || ''),
+                options: Array.isArray(entry.options) ? entry.options : null,
+                correct: Number.isInteger(entry.correct) ? entry.correct : null,
+                explanations: Array.isArray(entry.explanations) ? entry.explanations : null
+            }))
+            .filter(entry => entry.prompt);
+        if (list.length) return { list, intro: blocks.filter(b => b !== authored), title: authored.title };
+    }
+    // Legacy shape: the callout of plain strings the importer has always written.
+    const callout = blocks.find(b => b && b.type === 'callout' && Array.isArray(b.items) && b.items.length);
+    if (!callout) return null;
+    return {
+        list: callout.items.map((text, index) => ({ n: index + 1, prompt: String(text), options: null, correct: null })),
+        intro: blocks.filter(b => b !== callout),
+        title: callout.title
+    };
+}
+
+function currentExerciseSpec() {
+    return exerciseSpec(theoryBlocks(currentTheory.chapterIndex)[currentTheory.blockIndex]);
+}
+
+function exerciseStoreKey() {
+    return `${EXERCISE_STORE_PREFIX}.${moduleId || 'module'}.${theoryBlockId(currentTheory.chapterIndex, currentTheory.blockIndex)}`;
+}
+
+// Drafts live in this browser only. Nineteen typed answers are too much work to
+// lose to a reload, and they are not worth a server round trip per keystroke.
+function readExerciseState() {
+    const empty = { mode: 'write', answers: {}, picks: {}, verdicts: {} };
+    try {
+        const stored = JSON.parse(localStorage.getItem(exerciseStoreKey()) || 'null');
+        if (!stored || typeof stored !== 'object') return empty;
+        return {
+            mode: stored.mode === 'choose' ? 'choose' : 'write',
+            answers: stored.answers && typeof stored.answers === 'object' ? stored.answers : {},
+            picks: stored.picks && typeof stored.picks === 'object' ? stored.picks : {},
+            verdicts: stored.verdicts && typeof stored.verdicts === 'object' ? stored.verdicts : {}
+        };
+    } catch (error) {
+        return empty;                       // private mode or corrupt entry
+    }
+}
+
+function writeExerciseState(state) {
+    try { localStorage.setItem(exerciseStoreKey(), JSON.stringify(state)); }
+    catch (error) { /* storage blocked: the answers still work for this session */ }
+}
+
+// --- Option card states, borrowed from the quiz -------------------------------
+// The quiz reveals by setting inline colours on the card and its letter badge and
+// then expanding .explanation-text. These helpers do the same so both screens
+// animate identically; the only difference is that an exercise can be re-answered,
+// so every state is reversible here.
+const EX_BRAND = '#ef5b5b';
+const EX_RIGHT = '#10b981';
+const EX_WRONG = '#ef4444';
+
+function clearExerciseOption(card) {
+    const badge = card.querySelector('.option-letter');
+    card.classList.remove('answered', 'cursor-default', 'opacity-50');
+    card.style.borderColor = '';
+    card.style.backgroundColor = '';
+    badge.style.backgroundColor = '';
+    badge.style.color = '';
+    badge.classList.add('bg-gray-700', 'text-gray-400');
+    const reveal = card.querySelector('.explanation-text');
+    reveal.classList.remove('expanded');
+    card.querySelector('.explanation-inner').replaceChildren();
+}
+
+// Chosen, but not yet checked.
+function selectExerciseOption(card, selected) {
+    clearExerciseOption(card);
+    card.setAttribute('aria-pressed', String(selected));
+    if (!selected) return;
+    const badge = card.querySelector('.option-letter');
+    card.style.borderColor = EX_BRAND;
+    card.style.backgroundColor = 'rgba(239, 91, 91, 0.12)';
+    badge.classList.remove('bg-gray-700', 'text-gray-400');
+    badge.style.backgroundColor = EX_BRAND;
+    badge.style.color = '#ffffff';
+}
+
+// Checked: green on the right answer, red on a wrong pick, the rest dimmed, and
+// every card's explanation slid open on the quiz's 50 ms-per-card stagger.
+function revealExerciseOption(card, index, { isCorrect, isPicked, explanation }) {
+    clearExerciseOption(card);
+    card.classList.add('answered');
+    const badge = card.querySelector('.option-letter');
+    const inner = card.querySelector('.explanation-inner');
+    const title = document.createElement('span');
+    title.className = 'block mb-1 font-bold tracking-wider text-xs uppercase';
+    const body = document.createElement('span');
+    body.className = 'text-gray-400 leading-relaxed';
+    body.innerHTML = formatText(explanation || '');
+
+    if (isCorrect) {
+        title.textContent = 'Correct Answer';
+        title.classList.add('text-emerald-400');
+        card.style.borderColor = EX_RIGHT;
+        card.style.backgroundColor = 'rgba(16, 185, 129, 0.1)';
+        badge.classList.remove('bg-gray-700', 'text-gray-400');
+        badge.style.backgroundColor = EX_RIGHT;
+        badge.style.color = '#ffffff';
+    } else {
+        title.textContent = isPicked ? 'Your answer' : 'Incorrect';
+        title.classList.add('text-brand-400');
+        if (isPicked) {
+            card.style.borderColor = EX_WRONG;
+            card.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
+            badge.classList.remove('bg-gray-700', 'text-gray-400');
+            badge.style.backgroundColor = EX_WRONG;
+            badge.style.color = '#ffffff';
+        } else {
+            card.classList.add('opacity-50');
+        }
+    }
+    inner.append(title, body);
+    setTimeout(() => card.querySelector('.explanation-text').classList.add('expanded'), 50 * index);
+}
+
+function exerciseVerdictNote(verdict, feedback) {
+    const [label, classes] = EXERCISE_VERDICT_STYLE[verdict] || EXERCISE_VERDICT_STYLE.unmarked;
+    const note = document.createElement('div');
+    note.className = `mt-3 rounded-lg border px-3 py-2 text-sm ${classes}`;
+    const tag = document.createElement('span');
+    tag.className = 'font-semibold';
+    tag.textContent = label;
+    note.appendChild(tag);
+    if (feedback) {
+        const body = document.createElement('div');
+        body.className = 'mt-1 leading-relaxed text-gray-200';
+        body.innerHTML = formatText(feedback);
+        note.appendChild(body);
+    }
+    return note;
+}
+
+function renderExercises(parent, spec) {
+    const state = readExerciseState();
+    const hasChoices = spec.list.every(e => Array.isArray(e.options) && e.options.length > 1 && Number.isInteger(e.correct));
+    if (state.mode === 'choose' && !hasChoices) state.mode = 'write';
+
+    const panel = document.createElement('section');
+    panel.className = 'my-6 rounded-xl border border-brand-600/40 bg-brand-600/5 p-5';
+
+    const head = document.createElement('div');
+    head.className = 'flex flex-wrap items-center justify-between gap-3 mb-4';
+    const title = document.createElement('h3');
+    title.className = 'text-lg font-semibold text-brand-400';
+    title.textContent = spec.title || `${spec.list.length} book exercises`;
+    head.appendChild(title);
+
+    const toggle = document.createElement('div');
+    toggle.className = 'inline-flex rounded-lg border border-gray-600 overflow-hidden';
+    [['write', 'Write answers'], ['choose', 'Multiple choice']].forEach(([mode, label]) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        const active = state.mode === mode;
+        button.className = `min-h-[44px] px-4 text-xs font-semibold uppercase tracking-wider transition-colors ${
+            active ? 'bg-brand-600 text-white' : 'bg-transparent text-gray-300 hover:bg-gray-700 hover:text-white'}`;
+        button.textContent = label;
+        if (mode === 'choose' && !hasChoices) {
+            button.disabled = true;
+            button.className += ' opacity-40 cursor-not-allowed';
+            button.title = 'This module has no multiple-choice options for its exercises yet.';
+        }
+        button.addEventListener('click', () => {
+            if (button.disabled || state.mode === mode) return;
+            const next = readExerciseState();
+            next.mode = mode;
+            writeExerciseState(next);
+            renderTheoryBlock();
+        });
+        toggle.appendChild(button);
+    });
+    head.appendChild(toggle);
+    panel.appendChild(head);
+
+    const hint = document.createElement('p');
+    hint.className = 'mb-5 text-sm text-gray-400 leading-relaxed max-w-[68ch]';
+    hint.textContent = state.mode === 'write'
+        ? 'Answer in your own words — you are marked on the meaning, not on matching the book\'s wording. Answer all of them, then submit once.'
+        : 'Pick an answer and it is marked straight away. Nothing is sent anywhere, so this works even with the AI quota spent.';
+    panel.appendChild(hint);
+
+    const status = document.createElement('p');
+    status.className = 'mb-4 text-sm min-h-[1.25rem]';
+    panel.appendChild(status);
+
+    const rows = [];
+    spec.list.forEach(entry => {
+        const row = document.createElement('div');
+        row.className = 'mb-6 border-t border-gray-700/60 pt-5 first:border-t-0 first:pt-0';
+        const prompt = document.createElement('div');
+        prompt.className = 'font-medium leading-relaxed max-w-[68ch] [overflow-wrap:anywhere]';
+        prompt.innerHTML = formatText(entry.prompt);
+        row.appendChild(prompt);
+
+        const slot = document.createElement('div');
+        let field = null;
+        const optionButtons = [];
+
+        if (state.mode === 'write') {
+            field = document.createElement('textarea');
+            field.className = 'mt-3 w-full rounded-lg border border-gray-600 bg-gray-900/70 p-3 text-sm leading-relaxed text-white placeholder-gray-500 focus:border-brand-600 focus:outline-none';
+            field.rows = 3;
+            field.placeholder = 'Your answer…';
+            field.maxLength = 1500;
+            field.value = state.answers[entry.n] || '';
+            field.addEventListener('input', () => {
+                const next = readExerciseState();
+                next.answers[entry.n] = field.value;
+                writeExerciseState(next);
+            });
+            row.appendChild(field);
+        } else {
+            // The real quiz's option card, template and all (user, 19-09-26:
+            // "import the animation and stuff from the actual quiz page so you
+            // don't have to design new thing"). Reusing tmpl-quiz-option means the
+            // exercises inherit its hit area, hover, letter badge and the
+            // grid-template-rows explanation reveal -- and there is one card
+            // design in this app instead of two that drift apart.
+            const list = document.createElement('div');
+            list.className = 'mt-4 space-y-3';
+            entry.options.forEach((text, index) => {
+                const clone = templates.quizOption.content.cloneNode(true);
+                const card = clone.querySelector('.option-card');
+                clone.querySelector('.option-letter').textContent = String.fromCharCode(65 + index);
+                clone.querySelector('.option-text').innerHTML = formatText(text);
+                card.type = 'button';
+                // Selected state must be announced, not only coloured.
+                card.setAttribute('aria-pressed', String(state.picks[entry.n] === index));
+                // Answer on the click itself, exactly like the quiz: no separate
+                // Check step (user, 19-09-26: "when I select it would show the
+                // result with an animation right away like the quiz page").
+                card.addEventListener('click', () => {
+                    const next = readExerciseState();
+                    if (next.verdicts[entry.n]) return;        // already answered; the quiz locks too
+                    next.picks[entry.n] = index;
+                    next.verdicts[entry.n] = { verdict: index === entry.correct ? 'correct' : 'incorrect', feedback: '' };
+                    writeExerciseState(next);
+                    revealExerciseRow(entry, optionButtons, index);
+                    syncChooseProgress(rows, status, retry);
+                });
+                optionButtons.push(card);
+                list.appendChild(clone);
+            });
+            const answered = state.verdicts[entry.n];
+            if (answered) revealExerciseRow(entry, optionButtons, state.picks[entry.n]);
+            else optionButtons.forEach((card, index) => selectExerciseOption(card, state.picks[entry.n] === index));
+            row.appendChild(list);
+        }
+
+        row.appendChild(slot);
+        // Written answers keep their marked note; a chosen answer is already
+        // restored as a revealed card above.
+        const saved = state.verdicts[entry.n];
+        if (saved && state.mode === 'write') slot.appendChild(exerciseVerdictNote(saved.verdict, saved.feedback));
+        panel.appendChild(row);
+        rows.push({ entry, field, slot, optionButtons });
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'flex flex-wrap items-center gap-3 border-t border-gray-700/60 pt-5';
+
+    // Written answers go to the model in ONE call, so they need a submit. Chosen
+    // answers are marked the instant they are clicked, so there is nothing to
+    // submit -- only a way back for the ones you got wrong.
+    const submit = document.createElement('button');
+    submit.type = 'button';
+    submit.className = 'min-h-[44px] rounded-lg border-2 border-brand-600 bg-brand-600 px-6 py-2 font-bold uppercase tracking-wider text-white transition-colors hover:bg-brand-900';
+    submit.textContent = 'Submit for marking';
+    submit.addEventListener('click', () => submitWrittenExercises(spec, rows, submit, status));
+    if (state.mode === 'write') actions.appendChild(submit);
+
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'min-h-[44px] rounded-lg border-2 border-brand-600 bg-brand-600 px-6 py-2 font-bold uppercase tracking-wider text-white transition-colors hover:bg-brand-900 hidden-view';
+    retry.textContent = 'Retry the wrong ones';
+    retry.addEventListener('click', () => {
+        const next = readExerciseState();
+        // Clears ONLY what was wrong. Re-answering everything to fix two mistakes
+        // is busywork, and the block needs all of them right to tick.
+        for (const [n, verdict] of Object.entries(next.verdicts)) {
+            if (verdict && verdict.verdict !== 'correct') { delete next.verdicts[n]; delete next.picks[n]; }
+        }
+        writeExerciseState(next);
+        renderTheoryBlock();
+    });
+    if (state.mode === 'choose') actions.appendChild(retry);
+
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'min-h-[44px] rounded-lg border-2 border-gray-500 px-4 py-2 text-sm font-semibold uppercase tracking-wider text-gray-300 transition-colors hover:border-gray-400 hover:bg-gray-700 hover:text-white';
+    clear.textContent = state.mode === 'write' ? 'Clear' : 'Start over';
+    clear.addEventListener('click', () => {
+        const next = readExerciseState();
+        if (state.mode === 'write') next.answers = {}; else next.picks = {};
+        next.verdicts = {};
+        writeExerciseState(next);
+        renderTheoryBlock();
+    });
+    actions.appendChild(clear);
+    panel.appendChild(actions);
+
+    parent.appendChild(panel);
+    if (state.mode === 'choose') syncChooseProgress(rows, status, retry, { silent: true });
+}
+
+// Runs after every chosen answer: the running tally, the retry button, and the
+// completion write once every exercise has been answered correctly.
+function syncChooseProgress(rows, status, retry, { silent = false } = {}) {
+    const state = readExerciseState();
+    const marked = rows.filter(r => state.verdicts[r.entry.n]);
+    const correct = marked.filter(r => state.verdicts[r.entry.n].verdict === 'correct').length;
+    const wrong = marked.length - correct;
+    retry.classList.toggle('hidden-view', wrong === 0);
+
+    if (marked.length < rows.length) {
+        status.className = 'mb-4 text-sm text-gray-400';
+        status.textContent = `${marked.length} of ${rows.length} answered · ${correct} correct`;
+        return;
+    }
+    if (silent && correct === rows.length) {
+        // Restoring a finished set on reload: say so, but do not re-post it. The
+        // completion was already recorded when the last answer was clicked.
+        status.className = 'mb-4 text-sm text-green-400 font-semibold';
+        status.textContent = `${correct} of ${rows.length} — all correct.`;
+        return;
+    }
+    finishExercises(correct, rows.length, status, 'exercise-mcq');
+}
+
+function revealExerciseRow(entry, cards, picked) {
+    cards.forEach((card, index) => revealExerciseOption(card, index, {
+        isCorrect: index === entry.correct,
+        isPicked: index === picked,
+        explanation: (entry.explanations && entry.explanations[index]) || ''
+    }));
+}
+
+async function submitWrittenExercises(spec, rows, submit, status) {
+    if (exerciseBusy) return;
+    const state = readExerciseState();
+    const blank = rows.filter(r => !(state.answers[r.entry.n] || '').trim());
+    if (blank.length === rows.length) {
+        status.className = 'mb-4 text-sm text-amber-400';
+        status.textContent = 'Write an answer first.';
+        return;
+    }
+    const token = typeof generationToken === 'function' ? generationToken() : '';
+    if (token === null) return;
+
+    exerciseBusy = true;
+    submit.disabled = true;
+    submit.classList.add('opacity-60');
+    status.className = 'mb-4 text-sm text-gray-400';
+    status.textContent = blank.length
+        ? `Marking ${rows.length} answers (${blank.length} left blank)…`
+        : `Marking ${rows.length} answers…`;
+
+    try {
+        const send = () => fetch('api/exercise/grade', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Edu-Quiz-Token': token || '' },
+            body: JSON.stringify({
+                module: activeBookFile,
+                chapter: currentTheory.chapterIndex + 1,
+                block: currentTheory.blockIndex + 1,
+                answers: rows.map(r => ({
+                    n: r.entry.n,
+                    question: r.entry.prompt,
+                    answer: state.answers[r.entry.n] || ''
+                }))
+            })
+        });
+        // Same spiky link as the tutor: one dropped connection used to end the
+        // whole submit, losing nothing typed but reporting nothing either.
+        let response;
+        try {
+            response = await send();
+        } catch (first) {
+            status.textContent = 'Connection dropped, retrying…';
+            await new Promise(done => setTimeout(done, 1500));
+            response = await send();
+        }
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `Error ${response.status}`);
+
+        const byNumber = new Map((data.results || []).map(r => [r.n, r]));
+        const fresh = readExerciseState();
+        let correct = 0;
+        rows.forEach(({ entry, slot }) => {
+            const result = byNumber.get(entry.n) || { verdict: 'unmarked', feedback: '' };
+            if (result.verdict === 'correct') correct += 1;
+            fresh.verdicts[entry.n] = { verdict: result.verdict, feedback: result.feedback };
+            slot.replaceChildren(exerciseVerdictNote(result.verdict, result.feedback));
+        });
+        writeExerciseState(fresh);
+        finishExercises(correct, rows.length, status, 'exercise');
+    } catch (error) {
+        status.className = 'mb-4 text-sm text-red-400';
+        status.textContent = `${error.message || 'Marking failed.'} Your answers are saved — try again, or switch to multiple choice.`;
+    } finally {
+        exerciseBusy = false;
+        submit.disabled = false;
+        submit.classList.remove('opacity-60');
+    }
+}
+
+// One rule for both modes: everything right ticks the block, exactly like a
+// perfect assessment. The server re-checks score === total, so the page cannot
+// claim a block it did not pass.
+function finishExercises(correct, total, status, source) {
+    if (correct === total) {
+        status.className = 'mb-4 text-sm text-green-400 font-semibold';
+        status.textContent = `${correct} of ${total} — all correct.`;
+        recordExerciseResult(correct, total, source, status);
+        return;
+    }
+    status.className = 'mb-4 text-sm text-amber-400';
+    status.textContent = source === 'exercise-mcq'
+        ? `${correct} of ${total} correct. Retry the wrong ones — the block ticks at ${total} of ${total}.`
+        : `${correct} of ${total} correct. Fix the ones marked below and submit again — the block ticks at ${total} of ${total}.`;
+}
+
+async function recordExerciseResult(correct, total, source, status) {
+    const blockId = theoryBlockId(currentTheory.chapterIndex, currentTheory.blockIndex);
+    const body = { module: moduleId, block: blockId, score: correct, total, source };
+    const data = await postProgress(body);
+    if (data === undefined) {
+        queuePendingProgress(body);
+        status.textContent += ' Could not save just now — it will be saved on the next page load.';
+        return;
+    }
+    if (data && data.completed) progress = { completed: data.completed };
+    if (data && data.marked) {
+        const chapter = theoryChapters()[currentTheory.chapterIndex];
+        const p = chapterProgress(currentTheory.chapterIndex);
+        status.textContent += ` ✓ Block complete — ${(chapter && chapter.title) || 'this chapter'} is now ${p.percent}% (${p.done} of ${p.total}).`;
+    }
+    renderTheoryToc();
 }
 
 function selectTheory(selection) {

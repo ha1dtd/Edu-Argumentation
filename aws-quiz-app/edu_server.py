@@ -62,6 +62,31 @@ _BOOK_CHAPTERS: dict[str, list[tuple[int, int, int]]] = {}
 ASK_SAME_CHAPTER_BOOST = 2.5
 ASK_NEAR_CHAPTER_BOOST = 1.4
 ASK_COMMON_TERM_SHARE = 0.12
+
+# --- End-of-chapter exercises (19-09-26) -------------------------------------
+# Every chapter ends with the book's own exercises. Until now the reader could
+# see them and nothing else: no input, no answer, no way to finish the block --
+# and the block still demanded five multiple-choice questions that repeat five of
+# the exercises already on the page.
+#
+# They are graded on MEANING, by the model, never by string comparison. User,
+# 19-09-26: "I will answer what I'm understanding, not exact text-by-text." A
+# keyword match would fail a correct answer for choosing different words, which
+# is precisely the skill the exercise is testing.
+#
+# The page also offers a multiple-choice mode over the same exercises, whose
+# options are written ONCE at import time and stored in the module. That mode
+# costs no model call at all, so an exhausted free-tier quota can never lock a
+# reader out of finishing a chapter (user, 19-09-26).
+EXERCISE_MAX_REQUEST_BYTES = 96 * 1024   # 30 answers of ~1.5 KB plus the prompts
+EXERCISE_MAX_ANSWER = 1_500
+EXERCISE_MAX_ITEMS = 40
+EXERCISE_BOOK_PAGES = 6
+# One submit = one model call, whatever the exercise count, so this bucket is
+# counted in submits rather than questions.
+EXERCISE_RATE_LIMIT_REQUESTS = 30
+EXERCISE_RATE_LIMIT_SECONDS = 600
+EXERCISE_HISTORY: dict[str, deque] = defaultdict(deque)
 ASK_STOPWORDS = frozenset("""a an the and or but if then than that this these those is are was were be been being
 do does did of in on at to for from by with as it its he she they we you i what why how when which who whom can
 could should would may might will just not no nor so such about into over under again further once here there all
@@ -772,6 +797,111 @@ def ask_tutor(config: "ProviderConfig", chapter_title: str, lesson_term: str, le
             "pages": [e["page"] for e in excerpts]}
 
 
+EXERCISE_SYSTEM = (
+    "You are marking a junior data engineer's answers to the end-of-chapter exercises of a machine "
+    "learning textbook. They are strong on SQL, tables, Spark and ETL, new to machine learning.\n\n"
+    "MARK THE MEANING, NOT THE WORDING. They are writing what they understood in their own words. "
+    "Different words for the right idea is CORRECT. Do not require the book's phrasing, its exact "
+    "terms, or its examples. Do not require completeness beyond what the exercise actually asks: if "
+    "it asks for four things, four is enough; if it asks 'what is X', a sound one-sentence answer is "
+    "enough.\n\n"
+    "VERDICTS, use exactly one per answer:\n"
+    "correct   - the idea is right. Minor imprecision, a missing synonym, or clumsy phrasing is "
+    "still correct.\n"
+    "partial   - part of the answer is right and part is missing or muddled.\n"
+    "incorrect - the idea is wrong, or the answer is empty, or it answers a different question.\n\n"
+    "FEEDBACK. One or two short sentences, speaking to them directly. For 'correct', say what they "
+    "got right and add at most one sharpening detail. For 'partial' and 'incorrect', say plainly "
+    "what is missing or wrong and what the book says instead - never just 'wrong, try again'. Gloss "
+    "any jargon you introduce. No preamble, no praise padding, no emoji.\n\n"
+    "GROUND IT. Use the book excerpts supplied. If the excerpts do not settle a point, mark on your "
+    "own knowledge of machine learning and say so in the feedback. Never invent a page number, a "
+    "paper or an author.\n\n"
+    "Reply with JSON ONLY, no prose around it, in exactly this shape:\n"
+    '{"results": [{"n": 1, "verdict": "correct", "feedback": "..."}]}\n'
+    "One entry per exercise you were given, with the same n. Nothing else in the object."
+)
+
+EXERCISE_VERDICTS = ("correct", "partial", "incorrect")
+
+
+def grade_exercises(config: "ProviderConfig", chapter_title: str,
+                    answers: list[dict[str, Any]], excerpts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One model call for the whole submit, not one per exercise.
+
+    A chapter has 4-19 exercises. Nineteen calls per submit would burn a free
+    tier's weekly allowance in a handful of chapters, and the model marks better
+    seeing the whole set anyway -- it can tell an answer that belongs to the next
+    exercise from one that is simply wrong.
+    """
+    lines = []
+    for item in answers:
+        lines.append(f"EXERCISE {item['n']}\nQuestion: {item['question']}\nTheir answer: {item['answer'] or '(left blank)'}")
+    context = [f"CHAPTER\n{chapter_title}"]
+    if excerpts:
+        context.append("BOOK EXCERPTS FROM THIS CHAPTER\n\n" + "\n\n".join(
+            f"[book page {e['page']}]\n{e['text']}" for e in excerpts))
+    body = {
+        "model": config.model,
+        "messages": [
+            {"role": "system", "content": EXERCISE_SYSTEM},
+            {"role": "system", "content": "\n\n".join(context)},
+            {"role": "user", "content": "\n\n".join(lines)},
+        ],
+        "temperature": 0.2,
+        "stream": True,
+    }
+    request = Request(config.api_url, data=json.dumps(body).encode("utf-8"),
+                      headers={"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"},
+                      method="POST")
+    try:
+        with urlopen(request, timeout=PROVIDER_TIMEOUT_SECONDS) as response:
+            content = response_content(response.read(), response.headers.get("Content-Type", ""))
+    except HTTPError as error:
+        raise ValueError(f"Provider request failed ({error.code}).") from error
+    except (URLError, TimeoutError, OSError) as error:
+        raise ValueError("Provider could not be reached.") from error
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError("Provider returned an invalid response.") from error
+
+    text = strip_code_fence((content or "").strip())
+    if not text:
+        raise ValueError("The model returned an empty reply.")
+    # Some models wrap the object in a sentence even when told not to. Take the
+    # outermost braces rather than failing the whole submit on a stray prefix.
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError("The model did not return JSON.")
+        try:
+            parsed = json.loads(text[start:end + 1])
+        except json.JSONDecodeError as error:
+            raise ValueError("The model returned malformed JSON.") from error
+
+    rows = parsed.get("results") if isinstance(parsed, dict) else parsed
+    if not isinstance(rows, list):
+        raise ValueError("The model returned no results.")
+    marked: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            n = int(row.get("n"))
+        except (TypeError, ValueError):
+            continue
+        verdict = str(row.get("verdict", "")).strip().lower()
+        if verdict not in EXERCISE_VERDICTS:
+            verdict = "partial"
+        marked[n] = {"n": n, "verdict": verdict, "feedback": str(row.get("feedback", "")).strip()[:1_200]}
+    # An exercise the model skipped is NOT silently passed. It comes back as
+    # unmarked so the page can say so and the reader can submit again.
+    return [marked.get(item["n"], {"n": item["n"], "verdict": "unmarked",
+                                   "feedback": "The model did not mark this one. Submit again."})
+            for item in answers]
+
+
 class EduHandler(SimpleHTTPRequestHandler):
     server_version = "EduArgumentation/1.0"
     # HTTP/1.1, so keep-alive is negotiated properly. On the stdlib default of
@@ -1055,7 +1185,8 @@ class EduHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         route = self.path.split("?", 1)[0]
-        if route not in ("/api/quiz", "/api/quiz/fresh", "/api/ask", "/api/settings", "/api/progress") + RUN_ROUTES:
+        if route not in ("/api/quiz", "/api/quiz/fresh", "/api/ask", "/api/exercise/grade",
+                         "/api/settings", "/api/progress") + RUN_ROUTES:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "Unknown API route."})
             return
         if not self.same_origin():
@@ -1133,6 +1264,58 @@ class EduHandler(SimpleHTTPRequestHandler):
                 self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
                 return
             self.send_json(HTTPStatus.OK, reply)
+            return
+
+        if route == "/api/exercise/grade":
+            # Its own budget, like /api/ask: finishing a chapter's exercises must
+            # not eat the hourly quiz-generation allowance.
+            moment = time.monotonic()
+            graded = EXERCISE_HISTORY[self.client_address[0]]
+            while graded and graded[0] <= moment - EXERCISE_RATE_LIMIT_SECONDS:
+                graded.popleft()
+            if len(graded) >= EXERCISE_RATE_LIMIT_REQUESTS:
+                self.send_json(HTTPStatus.TOO_MANY_REQUESTS,
+                               {"error": "Too many submissions just now. Try again shortly, or switch to multiple choice."})
+                return
+            try:
+                payload = read_json(self, EXERCISE_MAX_REQUEST_BYTES)
+                book = str(payload.get("module") or DEFAULT_MODULE)
+                chapter = int(payload.get("chapter"))
+                if chapter < 1:
+                    raise ValueError("Chapter is invalid.")
+                submitted = payload.get("answers")
+                if not isinstance(submitted, list) or not submitted:
+                    raise ValueError("Answer at least one exercise first.")
+                if len(submitted) > EXERCISE_MAX_ITEMS:
+                    raise ValueError(f"At most {EXERCISE_MAX_ITEMS} exercises can be marked at once.")
+                answers: list[dict[str, Any]] = []
+                for entry in submitted:
+                    n = int((entry or {}).get("n"))
+                    question = str((entry or {}).get("question") or "").strip()
+                    answer = str((entry or {}).get("answer") or "").strip()
+                    if not question:
+                        raise ValueError("An exercise arrived without its question.")
+                    answers.append({"n": n, "question": question[:800], "answer": answer[:EXERCISE_MAX_ANSWER]})
+                module = load_module(self.root, book)
+                section = module["tutorialData"]["sections"][chapter - 1]
+                chapter_title = str(section.get("title") or f"Chapter {chapter}")
+                # Retrieve on the questions, not on the reader's answers: a wrong
+                # answer must not drag the excerpts away from what the exercise is
+                # actually about.
+                query = " ".join(item["question"] for item in answers)
+                excerpts = book_search(module_id_for(module), query, limit=EXERCISE_BOOK_PAGES, chapter=chapter)
+            except (ValueError, TypeError, IndexError, KeyError, AttributeError, json.JSONDecodeError) as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+                return
+            graded.append(moment)
+            try:
+                results = grade_exercises(config, chapter_title, answers, excerpts)
+            except ValueError as error:
+                self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
+                return
+            correct = sum(1 for r in results if r["verdict"] == "correct")
+            self.send_json(HTTPStatus.OK, {"results": results, "correct": correct, "total": len(results),
+                                           "pages": [e["page"] for e in excerpts]})
             return
 
         now = time.monotonic()
