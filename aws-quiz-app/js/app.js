@@ -3,6 +3,17 @@ let score = 0;
 let isAnswered = false;
 let selectedAnswer = null;      // the option picked on the current question, so a resumed quiz shows it
 let activeQuizData = [];
+// The full set the run started with. activeQuizData NARROWS to the wrong ones on a
+// "Retry the wrong ones", so without this "Retry Quiz" would restart the narrowed
+// set instead of the whole assessment.
+let fullQuizData = [];
+// Positions in activeQuizData answered wrongly during THIS run.
+let wrongIndices = [];
+// A retry run only shows the wrong ones, but a block still ticks at 100% of the
+// ORIGINAL assessment. These carry the questions already passed, so the score
+// posted to the server stays 20/20 and never becomes 3/3.
+let carriedCorrect = 0;
+let carriedTotal = 0;
 let quizData = [];
 let tutorialData = {};
 let generatedQuizData = null;
@@ -164,6 +175,7 @@ const dom = {
     actionContainer: document.getElementById('action-container'),
     nextBtn: document.getElementById('next-btn'),
     nextBtnText: document.getElementById('next-btn-text'),
+    nextHint: document.getElementById('next-hint'),
     retakeBtnHeader: document.getElementById('retake-btn-header'),
     quizNewBtn: document.getElementById('quiz-new-btn'),
     resultNewBtn: document.getElementById('result-new-btn'),
@@ -172,6 +184,8 @@ const dom = {
     finalFraction: document.getElementById('final-fraction'),
     resultMessage: document.getElementById('result-message'),
     restartBtn: document.getElementById('restart-btn'),
+    resultRetryWrongBtn: document.getElementById('result-retry-wrong-btn'),
+    resultRetryWrongLabel: document.getElementById('result-retry-wrong-label'),
     generateNewBtn: document.getElementById('generate-new-btn'),
     resultBackBtn: document.getElementById('result-back-btn'),
     resultBackLabel: document.getElementById('result-back-label'),
@@ -493,10 +507,32 @@ function showQuizScreen() {
     dom.quizScreen.classList.remove('hidden-view');
     
     dom.progressContainer.classList.remove('hidden-view');
-    dom.scoreTracker.textContent = score;
+    dom.scoreTracker.textContent = tallyScore();
     updateNavUI(navTabForScope());
     renderQuizScope();
     window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// --- Run tally ----------------------------------------------------------------
+// A plain run scores itself. A "Retry the wrong ones" run scores only the questions
+// it shows, so the carried pair below puts the already-passed ones back before
+// anything is displayed or posted. Every score/total the reader or the server sees
+// goes through these two.
+function tallyScore() { return score + carriedCorrect; }
+function tallyTotal() { return carriedTotal || activeQuizData.length; }
+
+// One place starts a run, so nothing can begin with a stale wrong-list or a stale
+// carry from the previous assessment.
+function resetRunState(questions) {
+    activeQuizData = questions;
+    fullQuizData = questions;
+    wrongIndices = [];
+    carriedCorrect = 0;
+    carriedTotal = 0;
+    currentQuestionIndex = 0;
+    score = 0;
+    isAnswered = false;
+    selectedAnswer = null;
 }
 
 function startQuiz() {
@@ -521,11 +557,14 @@ function showResults() {
     dom.resultScreen.classList.remove('hidden-view');
     dom.progressContainer.classList.add('hidden-view');
 
-    const totalQuestions = activeQuizData.length;
-    const percent = totalQuestions === 0 ? 0 : Math.round((score / totalQuestions) * 100);
-    
-    dom.finalFraction.textContent = `${score} / ${totalQuestions}`;
-    
+    // The carried tally, not this run's raw count: a retry that fixes the last 3 of
+    // 20 must read 20/20, or the reader is told they failed an assessment they passed.
+    const scored = tallyScore();
+    const totalQuestions = tallyTotal();
+    const percent = totalQuestions === 0 ? 0 : Math.round((scored / totalQuestions) * 100);
+
+    dom.finalFraction.textContent = `${scored} / ${totalQuestions}`;
+
     dom.resultMessage.innerHTML = '';
     if (quizScope === 'ai') {
         dom.generateNewBtn.classList.remove('hidden-view');
@@ -565,16 +604,18 @@ function showResults() {
         progressSaveFailed = false;
     }
 
-    if (owningBlockId() && totalQuestions > 0 && score < totalQuestions && !progress.completed[owningBlockId()]) {
+    if (owningBlockId() && totalQuestions > 0 && scored < totalQuestions && !progress.completed[owningBlockId()]) {
         const rule = document.createElement('span');
         rule.className = 'block mt-6 text-sm text-gray-400';
-        rule.textContent = `Not complete yet \u2014 a block needs 100% (you got ${score}/${totalQuestions}). Retake to finish it.`;
+        rule.textContent = wrongIndices.length
+            ? `Not complete yet \u2014 a block needs 100% (you got ${scored}/${totalQuestions}). Retry just the ${wrongIndices.length} you missed to finish it.`
+            : `Not complete yet \u2014 a block needs 100% (you got ${scored}/${totalQuestions}). Retake to finish it.`;
         dom.resultMessage.appendChild(rule);
     }
 
     // Before the 0% early return below -- a zero score is exactly when the reader
     // most needs a way back to the block.
-    renderResultNav(score, totalQuestions);
+    renderResultNav(scored, totalQuestions);
 
     if (percent === 0) {
         dom.finalScore.textContent = `0%`;
@@ -645,12 +686,25 @@ function renderResultNav(scored, totalQuestions) {
         dom.generateNewBtn.textContent = origin ? 'Another AI quiz on this block' : 'Generate Another Quiz';
     }
 
+    // Miss some and redoing only those is the action worth leading with, so it
+    // takes the primary slot off "Back to block".
+    const missed = wrongIndices.length;
+    if (dom.resultRetryWrongBtn) {
+        dom.resultRetryWrongBtn.classList.toggle('hidden-view', missed === 0);
+        if (dom.resultRetryWrongLabel) {
+            dom.resultRetryWrongLabel.textContent = missed === 1
+                ? 'Retry the 1 you missed'
+                : `Retry the ${missed} you missed`;
+        }
+    }
+
     const forward = Boolean(origin && passed && next);
-    styleResultButton(dom.resultNextBtn, forward, forward ? 0 : 3);
-    styleResultButton(dom.resultBackBtn, !forward && Boolean(origin), forward ? 1 : 0);
-    styleResultButton(dom.restartBtn, false, 2);
-    styleResultButton(dom.resultNewBtn, false, 4);
-    styleResultButton(dom.generateNewBtn, !origin && quizScope === 'ai', 2);
+    styleResultButton(dom.resultNextBtn, forward, forward ? 0 : 4);
+    styleResultButton(dom.resultRetryWrongBtn, missed > 0, forward ? 2 : 0);
+    styleResultButton(dom.resultBackBtn, !forward && !missed && Boolean(origin), forward ? 1 : 1);
+    styleResultButton(dom.restartBtn, false, 3);
+    styleResultButton(dom.resultNewBtn, false, 5);
+    styleResultButton(dom.generateNewBtn, !origin && quizScope === 'ai' && !missed, 3);
 }
 
 function returnToReader(selection) {
@@ -668,16 +722,38 @@ function showResultsViewOnly() {
     // unticked. Claiming it now is safe: the server re-checks the score itself and
     // the write is idempotent, so a repeat changes nothing.
     const blockId = owningBlockId();
-    if (blockId && activeQuizData.length && score === activeQuizData.length && !progress.completed[blockId]) {
+    if (blockId && tallyTotal() && tallyScore() === tallyTotal() && !progress.completed[blockId]) {
         recordQuizResult();
     }
 }
 
+// The whole assessment again, from the set it originally held -- not from whatever
+// a retry narrowed it to.
 function restartQuiz() {
+    resetRunState(fullQuizData.length ? fullQuizData : activeQuizData);
+    startQuiz();
+    saveQuizSession();
+}
+
+// Only the questions missed. The ones already right disappear from the run (user,
+// 20-09-26) and are carried instead, so the assessment still has to be 100% before
+// the block ticks -- it just stops charging 19 answers to fix one.
+function retryWrongOnly() {
+    const wrong = wrongIndices.map(index => activeQuizData[index]).filter(Boolean);
+    if (!wrong.length) return;
+    const originalTotal = tallyTotal();
+    const keepFull = fullQuizData.length ? fullQuizData : activeQuizData;
+    activeQuizData = wrong;
+    fullQuizData = keepFull;
+    carriedCorrect = originalTotal - wrong.length;
+    carriedTotal = originalTotal;
+    wrongIndices = [];
     currentQuestionIndex = 0;
     score = 0;
     isAnswered = false;
+    selectedAnswer = null;
     startQuiz();
+    saveQuizSession();
 }
 
 // --- Quiz sessions ------------------------------------------------------------
@@ -702,14 +778,19 @@ function saveQuizSession() {
         questions: activeQuizData, quizScope, quizScopeBlockId, quizScopeLabel,
         currentQuestionIndex, score, isAnswered, selectedAnswer,
         aiFromSetup, lastGenerateSelection,
+        // Without these a reload mid-assessment loses the wrong-list (the retry button
+        // silently disappears) and loses the carry (a finished retry posts 3/3).
+        fullQuestions: fullQuizData, wrongIndices, carriedCorrect, carriedTotal,
     };
     try {
         const out = {};
         Object.entries(quizSessions).forEach(([key, session]) => {
             if (!session) return;
             // The written bank is already loaded, so a practice quiz is stored as question ids.
-            out[key] = { ...session, questions: key === 'practice'
-                ? session.questions.map(q => q && q.source && q.source.question) : session.questions };
+            const asIds = list => (Array.isArray(list) ? list : []).map(q => q && q.source && q.source.question);
+            out[key] = key === 'practice'
+                ? { ...session, questions: asIds(session.questions), fullQuestions: asIds(session.fullQuestions) }
+                : session;
         });
         localStorage.setItem(sessionStoreKey(), JSON.stringify(out));
     } catch (error) { /* per-viewer convenience; the in-page session still holds */ }
@@ -727,7 +808,12 @@ function loadQuizSessions() {
             const questions = key === 'practice' ? session.questions.map(id => byId.get(id)) : session.questions;
             // The bank changed under a stored quiz: drop it rather than show broken questions.
             if (questions.some(q => !q || !Array.isArray(q.options))) return;
-            quizSessions[key] = { ...session, questions };
+            const storedFull = Array.isArray(session.fullQuestions) ? session.fullQuestions : [];
+            let fullQuestions = key === 'practice' ? storedFull.map(id => byId.get(id)) : storedFull;
+            // A stale full set only costs "Retry Quiz" its wider scope; the run itself
+            // is still sound, so fall back to the run rather than dropping the session.
+            if (!fullQuestions.length || fullQuestions.some(q => !q || !Array.isArray(q.options))) fullQuestions = questions;
+            quizSessions[key] = { ...session, questions, fullQuestions };
         });
     } catch (error) { /* nothing stored, or storage blocked */ }
 }
@@ -740,6 +826,11 @@ function resumeQuizSession(key) {
     const session = quizSessions[key];
     if (!session || !tutorialData.title) return false;
     activeQuizData = session.questions;
+    fullQuizData = Array.isArray(session.fullQuestions) && session.fullQuestions.length
+        ? session.fullQuestions : session.questions;
+    wrongIndices = Array.isArray(session.wrongIndices) ? session.wrongIndices.filter(Number.isInteger) : [];
+    carriedCorrect = Number.isInteger(session.carriedCorrect) ? session.carriedCorrect : 0;
+    carriedTotal = Number.isInteger(session.carriedTotal) ? session.carriedTotal : 0;
     quizScope = session.quizScope;
     quizScopeBlockId = session.quizScopeBlockId;
     quizScopeLabel = session.quizScopeLabel;
@@ -773,17 +864,14 @@ function openQuizTab(mode) {
 // One place decides what activeQuizData holds and what the header calls it, so
 // the nav highlight and the scope caption can never disagree with the data.
 function setModuleQuiz() {
-    activeQuizData = quizData;
+    resetRunState(quizData);
     quizScope = 'module';
     quizScopeBlockId = null;
     quizScopeLabel = tutorialData.title || 'Whole module';
-    currentQuestionIndex = 0;
-    score = 0;
-    isAnswered = false;
 }
 
 function setBlockQuiz(questions, chapterIndex = currentTheory.chapterIndex, blockIndex = currentTheory.blockIndex) {
-    activeQuizData = questions;
+    resetRunState(questions);
     quizScope = 'block';
     quizScopeBlockId = theoryBlockId(chapterIndex, blockIndex);
     const chapter = theoryChapters()[chapterIndex];
@@ -792,31 +880,22 @@ function setBlockQuiz(questions, chapterIndex = currentTheory.chapterIndex, bloc
     const chapterName = (chapter && chapter.title) || `Chapter ${chapterIndex + 1}`;
     const blockName = (block && block.term) || `Block ${blockIndex + 1}`;
     quizScopeLabel = `${chapterName} — ${blockName}`;
-    currentQuestionIndex = 0;
-    score = 0;
-    isAnswered = false;
 }
 
 // Any mix of blocks from the written bank. No single block owns it, so no block is
 // marked complete by it.
 function setSelectionQuiz(questions, label) {
-    activeQuizData = questions;
+    resetRunState(questions);
     quizScope = 'selection';
     quizScopeBlockId = null;
     quizScopeLabel = label;
-    currentQuestionIndex = 0;
-    score = 0;
-    isAnswered = false;
 }
 
 function setAiQuiz(questions, blockId = null) {
-    activeQuizData = questions;
+    resetRunState(questions);
     generatedQuizData = questions;
     quizScope = 'ai';
     quizScopeBlockId = blockId;
-    currentQuestionIndex = 0;
-    score = 0;
-    isAnswered = false;
 }
 
 // --- Study progress ---------------------------------------------------------
@@ -884,11 +963,17 @@ function announceCompletion(blockId) {
 // is that block's assessment in everything but name, so fall back to asking the
 // questions themselves. Answering a block's five questions perfectly should tick
 // the block however the reader happened to start it.
+//
+// Asked of the FULL set the run started with, never the narrowed retry set. A
+// module-wide quiz whose only three misses happen to sit in one block would
+// otherwise tick that block off a 20-question carried tally drawn from the whole
+// book -- claiming a block the reader never assessed on its own.
 function owningBlockId() {
     if (quizScopeBlockId) return quizScopeBlockId;
-    if (!Array.isArray(activeQuizData) || !activeQuizData.length) return null;
+    const asked = Array.isArray(fullQuizData) && fullQuizData.length ? fullQuizData : activeQuizData;
+    if (!Array.isArray(asked) || !asked.length) return null;
     const blocks = new Set();
-    for (const question of activeQuizData) {
+    for (const question of asked) {
         const block = question && question.source && question.source.block;
         if (!block) return null;                 // unattributed question: cannot claim a block
         blocks.add(block);
@@ -944,12 +1029,15 @@ async function flushPendingProgress() {
 
 async function recordQuizResult() {
     const blockId = owningBlockId();
-    const total = activeQuizData.length;
+    // The carried pair, not this run's length: a retry run holds only the questions
+    // that were missed, and posting 3/3 would tick a block on three of twenty.
+    const total = tallyTotal();
+    const scored = tallyScore();
     // No single block owns this quiz (a genuine multi-block selection), so there is
     // nothing to tick. owningBlockId() already falls back to the questions' own
     // source blocks, so a one-block quiz never lands here.
     if (!blockId || total === 0) return;
-    const body = { module: moduleId, block: blockId, score, total, source: quizScope === 'ai' ? 'ai' : 'written' };
+    const body = { module: moduleId, block: blockId, score: scored, total, source: quizScope === 'ai' ? 'ai' : 'written' };
     const data = await postProgress(body);
     if (data === undefined) {
         // Never reached the server. Keep it so the next page load saves it, and say
@@ -971,6 +1059,13 @@ function navTabForScope() {
 
 function renderQuizScope() {
     if (!dom.quizScopeLabel) return;
+    // A retry run says so plainly, or the caption reads "3 questions" on an
+    // assessment the reader knows has twenty.
+    if (carriedTotal) {
+        dom.quizScopeLabel.textContent =
+            `${quizScopeLabel || tutorialData.title || 'Assessment'} · retrying ${activeQuizData.length} of ${carriedTotal} · ${carriedCorrect} already correct`;
+        return;
+    }
     if (quizScope === 'module') {
         dom.quizScopeLabel.textContent = `Whole module · ${activeQuizData.length} questions`;
     } else if (quizScope === 'block' || quizScope === 'selection') {
@@ -1043,6 +1138,7 @@ dom.retakeBtnHeader.addEventListener('click', restartQuiz);
 dom.quizNewBtn.addEventListener('click', () => openQuizSetup(sessionKey()));
 dom.resultNewBtn.addEventListener('click', () => openQuizSetup(sessionKey()));
 dom.restartBtn.addEventListener('click', restartQuiz);
+if (dom.resultRetryWrongBtn) dom.resultRetryWrongBtn.addEventListener('click', retryWrongOnly);
 
 dom.startGeneratedBtn.addEventListener('click', () => openQuizTab('generate'));
 dom.generateNewBtn.addEventListener('click', () => {
@@ -2016,7 +2112,7 @@ function exerciseStoreKey() {
 // Drafts live in this browser only. Nineteen typed answers are too much work to
 // lose to a reload, and they are not worth a server round trip per keystroke.
 function readExerciseState() {
-    const empty = { mode: 'write', answers: {}, picks: {}, verdicts: {} };
+    const empty = { mode: 'write', answers: {}, picks: {}, verdicts: {}, retryOnly: false };
     try {
         const stored = JSON.parse(localStorage.getItem(exerciseStoreKey()) || 'null');
         if (!stored || typeof stored !== 'object') return empty;
@@ -2024,7 +2120,10 @@ function readExerciseState() {
             mode: stored.mode === 'choose' ? 'choose' : 'write',
             answers: stored.answers && typeof stored.answers === 'object' ? stored.answers : {},
             picks: stored.picks && typeof stored.picks === 'object' ? stored.picks : {},
-            verdicts: stored.verdicts && typeof stored.verdicts === 'object' ? stored.verdicts : {}
+            verdicts: stored.verdicts && typeof stored.verdicts === 'object' ? stored.verdicts : {},
+            // Narrowed to the exercises still to get right. Stored, so a reload does
+            // not silently put the nineteen answered ones back on the page.
+            retryOnly: stored.retryOnly === true
         };
     } catch (error) {
         return empty;                       // private mode or corrupt entry
@@ -2131,8 +2230,23 @@ function renderExercises(parent, spec) {
     const hasChoices = spec.list.every(e => Array.isArray(e.options) && e.options.length > 1 && Number.isInteger(e.correct));
     if (state.mode === 'choose' && !hasChoices) state.mode = 'write';
 
+    // "Retry the wrong ones" narrows the panel to what is left. The ones already
+    // right DISAPPEAR rather than sit there locked (user, 20-09-26) -- twenty
+    // exercises re-answered to fix one is busywork. They are not forgotten: the
+    // hidden tally carries them, so the block still ticks only at 100% of the FULL
+    // exercise list, and a write-mode submit gets cheaper instead of re-marking
+    // answers the model already passed.
+    const fullList = spec.list;
+    const isRight = n => Boolean(state.verdicts[n]) && state.verdicts[n].verdict === 'correct';
+    const retryOnly = state.retryOnly && fullList.some(entry => isRight(entry.n)) && fullList.some(entry => !isRight(entry.n));
+    const list = retryOnly ? fullList.filter(entry => !isRight(entry.n)) : fullList;
+    const carry = { hidden: fullList.length - list.length, total: fullList.length };
+
     const panel = document.createElement('section');
     panel.className = 'my-6 rounded-xl border border-brand-600/40 bg-brand-600/5 p-5';
+    // A stable hook. The class above is shared with the plain callout block, so a
+    // gate keyed on it silently matches the wrong element.
+    panel.dataset.exercisePanel = 'true';
 
     const head = document.createElement('div');
     head.className = 'flex flex-wrap items-center justify-between gap-3 mb-4';
@@ -2174,14 +2288,23 @@ function renderExercises(parent, spec) {
         : 'Pick an answer and it is marked straight away. Nothing is sent anywhere, so this works even with the AI quota spent.';
     panel.appendChild(hint);
 
+    if (retryOnly) {
+        const note = document.createElement('p');
+        note.className = 'mb-4 text-sm font-semibold text-brand-400';
+        note.textContent = `Retrying ${list.length} of ${carry.total} — ${carry.hidden} already correct and hidden. `
+            + `${state.mode === 'write' ? 'Clear' : 'Start over'} brings them all back.`;
+        panel.appendChild(note);
+    }
+
     const status = document.createElement('p');
     status.className = 'mb-4 text-sm min-h-[1.25rem]';
     panel.appendChild(status);
 
     const rows = [];
-    spec.list.forEach(entry => {
+    list.forEach(entry => {
         const row = document.createElement('div');
         row.className = 'mb-6 border-t border-gray-700/60 pt-5 first:border-t-0 first:pt-0';
+        row.dataset.exerciseRow = String(entry.n);
         const prompt = document.createElement('div');
         prompt.className = 'font-medium leading-relaxed max-w-[68ch] [overflow-wrap:anywhere]';
         prompt.innerHTML = formatText(entry.prompt);
@@ -2231,7 +2354,7 @@ function renderExercises(parent, spec) {
                     next.verdicts[entry.n] = { verdict: index === entry.correct ? 'correct' : 'incorrect', feedback: '' };
                     writeExerciseState(next);
                     revealExerciseRow(entry, optionButtons, index);
-                    syncChooseProgress(rows, status, retry);
+                    syncChooseProgress(rows, status, retry, carry);
                 });
                 optionButtons.push(card);
                 list.appendChild(clone);
@@ -2261,24 +2384,28 @@ function renderExercises(parent, spec) {
     submit.type = 'button';
     submit.className = 'min-h-[44px] rounded-lg border-2 border-brand-600 bg-brand-600 px-6 py-2 font-bold uppercase tracking-wider text-white transition-colors hover:bg-brand-900';
     submit.textContent = 'Submit for marking';
-    submit.addEventListener('click', () => submitWrittenExercises(spec, rows, submit, status));
+    submit.addEventListener('click', () => submitWrittenExercises(spec, rows, submit, status, carry, retry));
     if (state.mode === 'write') actions.appendChild(submit);
 
+    // Both modes. Write mode had no way back at all: the only other button wipes
+    // every answer, so one wrong mark out of nineteen meant re-reading the lot.
     const retry = document.createElement('button');
     retry.type = 'button';
     retry.className = 'min-h-[44px] rounded-lg border-2 border-brand-600 bg-brand-600 px-6 py-2 font-bold uppercase tracking-wider text-white transition-colors hover:bg-brand-900 hidden-view';
     retry.textContent = 'Retry the wrong ones';
     retry.addEventListener('click', () => {
         const next = readExerciseState();
-        // Clears ONLY what was wrong. Re-answering everything to fix two mistakes
-        // is busywork, and the block needs all of them right to tick.
+        // Clears ONLY what was wrong, and hides what was right. A written answer is
+        // KEPT so it can be edited rather than retyped -- improving a wrong answer is
+        // the whole exercise; a chosen option must go, or the card stays locked.
         for (const [n, verdict] of Object.entries(next.verdicts)) {
             if (verdict && verdict.verdict !== 'correct') { delete next.verdicts[n]; delete next.picks[n]; }
         }
+        next.retryOnly = true;
         writeExerciseState(next);
         renderTheoryBlock();
     });
-    if (state.mode === 'choose') actions.appendChild(retry);
+    actions.appendChild(retry);
 
     const clear = document.createElement('button');
     clear.type = 'button';
@@ -2288,6 +2415,8 @@ function renderExercises(parent, spec) {
         const next = readExerciseState();
         if (state.mode === 'write') next.answers = {}; else next.picks = {};
         next.verdicts = {};
+        // Starting over means the whole list again, hidden ones included.
+        next.retryOnly = false;
         writeExerciseState(next);
         renderTheoryBlock();
     });
@@ -2295,31 +2424,47 @@ function renderExercises(parent, spec) {
     panel.appendChild(actions);
 
     parent.appendChild(panel);
-    if (state.mode === 'choose') syncChooseProgress(rows, status, retry, { silent: true });
+    if (state.mode === 'choose') syncChooseProgress(rows, status, retry, carry, { silent: true });
+    else refreshWriteRetry(rows, retry);
+}
+
+// Write mode marks in one round trip, so there is no running tally to keep -- only
+// the way back, which appears the moment the model marks something wrong.
+function refreshWriteRetry(rows, retry) {
+    const state = readExerciseState();
+    const wrong = rows.filter(row => {
+        const verdict = state.verdicts[row.entry.n];
+        return Boolean(verdict) && verdict.verdict !== 'correct';
+    }).length;
+    retry.classList.toggle('hidden-view', wrong === 0);
 }
 
 // Runs after every chosen answer: the running tally, the retry button, and the
 // completion write once every exercise has been answered correctly.
-function syncChooseProgress(rows, status, retry, { silent = false } = {}) {
+function syncChooseProgress(rows, status, retry, carry, { silent = false } = {}) {
     const state = readExerciseState();
     const marked = rows.filter(r => state.verdicts[r.entry.n]);
     const correct = marked.filter(r => state.verdicts[r.entry.n].verdict === 'correct').length;
     const wrong = marked.length - correct;
     retry.classList.toggle('hidden-view', wrong === 0);
+    // Everything the reader is shown is against the FULL exercise list. On a retry
+    // run `rows` is only what is left, so the hidden passes are added back here --
+    // otherwise finishing a 3-of-20 retry would read "3 of 3" and tick the block.
+    const tally = correct + carry.hidden;
 
     if (marked.length < rows.length) {
         status.className = 'mb-4 text-sm text-gray-400';
-        status.textContent = `${marked.length} of ${rows.length} answered · ${correct} correct`;
+        status.textContent = `${marked.length} of ${rows.length} answered · ${tally} of ${carry.total} correct`;
         return;
     }
-    if (silent && correct === rows.length) {
+    if (silent && tally === carry.total) {
         // Restoring a finished set on reload: say so, but do not re-post it. The
         // completion was already recorded when the last answer was clicked.
         status.className = 'mb-4 text-sm text-green-400 font-semibold';
-        status.textContent = `${correct} of ${rows.length} — all correct.`;
+        status.textContent = `${tally} of ${carry.total} — all correct.`;
         return;
     }
-    finishExercises(correct, rows.length, status, 'exercise-mcq');
+    finishExercises(tally, carry.total, status, 'exercise-mcq');
 }
 
 function revealExerciseRow(entry, cards, picked) {
@@ -2330,7 +2475,7 @@ function revealExerciseRow(entry, cards, picked) {
     }));
 }
 
-async function submitWrittenExercises(spec, rows, submit, status) {
+async function submitWrittenExercises(spec, rows, submit, status, carry, retry) {
     if (exerciseBusy) return;
     const state = readExerciseState();
     const blank = rows.filter(r => !(state.answers[r.entry.n] || '').trim());
@@ -2388,7 +2533,10 @@ async function submitWrittenExercises(spec, rows, submit, status) {
             slot.replaceChildren(exerciseVerdictNote(result.verdict, result.feedback));
         });
         writeExerciseState(fresh);
-        finishExercises(correct, rows.length, status, 'exercise');
+        refreshWriteRetry(rows, retry);
+        // Against the full list, not just the ones this submit marked -- a retry
+        // submit carries the passes it did not re-send.
+        finishExercises(correct + carry.hidden, carry.total, status, 'exercise');
     } catch (error) {
         status.className = 'mb-4 text-sm text-red-400';
         status.textContent = `${error.message || 'Marking failed.'} Your answers are saved — try again, or switch to multiple choice.`;
@@ -2469,7 +2617,15 @@ function loadQuestion() {
     } else {
         dom.nextBtnText.textContent = "Next Question";
     }
-    
+
+    // The pinned bar carries the position, because the header that used to show it
+    // scrolls out of view the moment the explanations expand.
+    if (dom.nextHint) {
+        dom.nextHint.textContent = carriedTotal
+            ? `${currentQuestionIndex + 1} of ${activeQuizData.length} left to redo`
+            : `Question ${currentQuestionIndex + 1} of ${activeQuizData.length}`;
+    }
+
     const progressPercent = ((currentQuestionIndex) / activeQuizData.length) * 100;
     dom.progressBar.style.width = `${progressPercent}%`;
 
@@ -2500,10 +2656,13 @@ function handleAnswerSelect(selectedIndex, selectedBtn, replay = false) {
     const isCorrect = selectedIndex === currentQ.correct;
 
     // A replay redraws an answer given before the learner left the screen; it was scored then.
-    if (isCorrect && !replay) {
-        score++;
+    if (!replay) {
+        if (isCorrect) score++;
+        // Recorded by POSITION, so it survives a reload the same way the questions
+        // do, and so a retry run's own misses index into the narrowed set.
+        else if (!wrongIndices.includes(currentQuestionIndex)) wrongIndices.push(currentQuestionIndex);
     }
-    dom.scoreTracker.textContent = score;
+    dom.scoreTracker.textContent = tallyScore();
 
     const allCards = dom.optionsContainer.querySelectorAll('.option-card');
     
@@ -2561,9 +2720,10 @@ function handleAnswerSelect(selectedIndex, selectedBtn, replay = false) {
     dom.actionContainer.classList.remove('hidden-view');
     if (replay) return;
     saveQuizSession();
-    setTimeout(() => {
-        dom.actionContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }, 400);
+    // The scrollIntoView that used to run here is GONE. It existed only to chase a
+    // button that had been pushed below the fold by the expanding explanations, and
+    // it fought the reader: it yanked the page down mid-read to reveal a control
+    // that is now already on screen. Pinning the bar removed the reason for it.
 }
 
 // Ask once for the learner token when the server enforces one. Returns null when

@@ -48,6 +48,26 @@
         
         .hidden-view { display: none !important; }
 
+        /* --- Quiz action bar -------------------------------------------------
+           Next used to sit at the end of the question. Picking an answer expands
+           an explanation under EVERY option, which pushed it hundreds of pixels
+           below the fold, so advancing meant scrolling down on every single
+           question (user, 2026-09-20). It is pinned now, mirroring .glass-header
+           at the opposite edge so the two read as one system.
+
+           Two rules travel with any pinned control, and both are load-bearing
+           rather than decoration:
+             - reserve its height, or it covers the last option and shifts the
+               page when it appears (#quiz-screen carries pb-32);
+             - offset scrolling, or a keyboard focus ring can land underneath it
+               (WCAG 2.2 AA, Focus Not Obscured). */
+        .glass-bar { background: rgba(17, 24, 39, 0.92); backdrop-filter: blur(12px); border-top: 1px solid rgba(255,255,255,0.06); }
+        html { scroll-padding-bottom: 7rem; }
+        @media (prefers-reduced-motion: no-preference) {
+            #action-container:not(.hidden-view) .action-bar-inner { animation: actionBarIn 200ms ease-out; }
+        }
+        @keyframes actionBarIn { from { opacity: 0; transform: translateY(0.5rem); } to { opacity: 1; transform: none; } }
+
         /* --- Reading scale -------------------------------------------------
            One knob for the whole reading surface. The default 16px is fine for
            chrome and far too small for sustained reading, which is what this
@@ -401,7 +421,9 @@
                 </div>
             </div>
 
-            <div id="quiz-screen" class="hidden-view w-full max-w-3xl mx-auto">
+            <!-- pb-32 is not padding for looks: it reserves the pinned action bar's
+                 height so the bar can never sit on top of the last option. -->
+            <div id="quiz-screen" class="hidden-view w-full max-w-3xl mx-auto pb-32">
                 <div class="flex justify-between items-center mb-8 border-b border-gray-700 pb-4">
                     <div class="min-w-0">
                         <div class="text-xl text-white font-light">Question <span class="font-bold text-brand-600" id="question-number-badge">1</span></div>
@@ -418,10 +440,22 @@
                 <h3 id="question-text" class="text-xl text-white mb-8 leading-relaxed font-medium"></h3>
                 <div id="options-container" class="space-y-4 mb-8"></div>
                 
-                <div id="action-container" class="mt-8 hidden-view flex justify-end">
-                    <button id="next-btn" class="bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider py-3 px-8 transition-colors rounded-lg">
-                        <span id="next-btn-text">Next</span>
-                    </button>
+                <!-- Pinned above the progress line (bottom-1.5 clears its 6px), aligned to
+                     the same max-w-3xl column as the question so it reads as part of it.
+                     The left label exists because pinning costs the reader the header's
+                     "Question N", which scrolls away; the bar gives it back.
+                     ⚠ It stays INSIDE #quiz-screen on purpose. position:fixed escapes the
+                     layout but not display:none, so leaving the quiz still hides the bar.
+                     Hoisted out, it would linger over the result screen and the reader.
+                     Same trick #toc-backdrop already uses inside #tutorial-screen. -->
+                <div id="action-container" class="hidden-view glass-bar fixed inset-x-0 bottom-1.5 z-40">
+                    <div class="action-bar-inner mx-auto flex max-w-3xl items-center justify-between gap-4 px-4 py-3"
+                         style="padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));">
+                        <p id="next-hint" class="min-w-0 truncate text-xs font-semibold uppercase tracking-widest text-gray-500"></p>
+                        <button id="next-btn" class="min-h-[44px] shrink-0 bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider py-3 px-8 transition-colors rounded-lg">
+                            <span id="next-btn-text">Next</span>
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -440,6 +474,12 @@
                 <div id="result-actions" class="flex flex-col sm:flex-row sm:flex-wrap gap-4 justify-center">
                     <button id="result-back-btn" class="min-h-[44px] bg-transparent border-2 border-gray-500 text-gray-300 hover:bg-gray-700 hover:text-white hover:border-gray-400 font-bold uppercase tracking-wider py-4 px-8 transition-colors rounded-lg">
                         <span id="result-back-label">Back to block</span>
+                    </button>
+                    <!-- Only the ones you got wrong. A 20-question assessment failed on one
+                         question should not cost 20 answers again (user, 20-09-26). Hidden
+                         when nothing was wrong; "Retry Quiz" beside it still redoes all. -->
+                    <button id="result-retry-wrong-btn" type="button" class="hidden-view min-h-[44px] bg-transparent border-2 border-gray-500 text-gray-300 hover:bg-gray-700 hover:text-white hover:border-gray-400 font-bold uppercase tracking-wider py-4 px-8 transition-colors rounded-lg">
+                        <span id="result-retry-wrong-label">Retry the wrong ones</span>
                     </button>
                     <button id="restart-btn" class="min-h-[44px] bg-transparent border-2 border-gray-500 text-gray-300 hover:bg-gray-700 hover:text-white hover:border-gray-400 font-bold uppercase tracking-wider py-4 px-8 transition-colors rounded-lg">
                         Retry Quiz
