@@ -1,0 +1,11 @@
+# Pins measured on nn 2026-09-21 against ~/edu-importer-venv. nn's system Python is
+# 3.10.12 — nothing here may require newer.
+#
+# ⚠ starlette is pinned EXPLICITLY at 1.6.0. fastapi 0.141.1 declares starlette>=0.46.0
+# with no upper cap, so an unpinned install silently resolves to whatever is current and
+# the reference this program claims to have measured stops being the one it runs. That
+# matters from Phase 3 onward, where the API surface is the whole job.
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn==0.52.0
+pydantic==2.13.5

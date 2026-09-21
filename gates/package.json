@@ -6,6 +6,9 @@
   "type": "module",
   "scripts": {
     "gates": "bash run-gates.sh",
+    "gate-routes": "node gate-routes.mjs",
+    "selector-contract": "node gen-selector-contract.mjs",
+    "selector-contract:check": "node gen-selector-contract.mjs --check",
     "postinstall-note": "run ./node_modules/.bin/playwright install chromium  (NEVER npx)"
   },
   "dependencies": {

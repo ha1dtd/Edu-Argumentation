@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FoxAI Edu Study</title>
+    <!--
+      Tailwind stays on the CDN for Phase 2 (plan B3). The CDN->build swap is a Phase 3
+      slice of its own because the purge is not incremental — every screen depends on it
+      at once.
+
+      PINNED URL, VERBATIM INCLUDING THE QUERY STRING (plan A6):
+        https://cdn.tailwindcss.com?plugins=typography
+      The ?plugins=typography query is LOAD-BEARING. Dropping it silently removes every
+      `prose` style, and the damage reads as "the rewrite looks wrong" rather than as a
+      missing dependency. A URL recorded without its query is a WRONG pin, not a shorter
+      one. v3 JIT CDN and the v4 browser build are different products with different class
+      semantics; the house pin is tailwindcss ^3.4.19 (v3).
+    -->
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+  </head>
+  <body>
+    <!-- The React mount point below is asserted by exit gate G17 against the SERVED
+         document. Do not mention that attribute in a comment: a gate that a comment can
+         satisfy is not a gate. -->
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
