@@ -856,6 +856,14 @@ function renderResultNav(scored, totalQuestions) {
 function returnToReader(selection) {
     if (selection) selectTheory(selection);
     showTutorial();
+    // selectTheory already resets the pane's scrollTop -- but from HERE that write is
+    // a no-op: #tutorial-screen still carries .hidden-view (display:none !important)
+    // while the result screen is up, so #tutorial-article has no layout box and the
+    // browser drops the assignment, restoring the old offset once it becomes visible.
+    // showTutorial() is what removes .hidden-view, so the reset has to land AFTER it.
+    // Same tick is enough: the class removal is synchronous, so layout exists by now --
+    // a timer here would be a race, not a fix.
+    if (dom.tutorialArticle) dom.tutorialArticle.scrollTop = 0;
 }
 
 function showResultsViewOnly() {
