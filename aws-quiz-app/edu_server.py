@@ -123,7 +123,7 @@ ASSET_ROOT = Path(os.getenv("EDU_ASSET_ROOT", "/home/ubuntu/foxai-data/edu-argum
 # JSON lived in data/ (inside the deploy tree), the crops in assets/<id>/, and
 # a human copied between them. Zip one of these folders and it ships.
 LIBRARY_ROOT = Path(os.getenv("EDU_LIBRARY_ROOT", "/home/ubuntu/foxai-data/edu-argumentation/library"))
-ASSET_FILE = re.compile(r"^(fig|eq)-\d{1,3}-\d{1,3}\.png$")
+ASSET_FILE = re.compile(r"^(fig|eq)-\d{1,3}[-.]\d{1,3}\.png$")  # both separators: a book numbers figures its own way -- "Figure 1-1." (O'Reilly/Geron) vs "Figure 1.1:" (OpenIntro). Digits stay REQUIRED on both sides, so ".." can never match; do not narrow this back to a hyphen.
 
 GENERAL_DEFAULTS: dict[str, Any] = {
     "ai_question_count": 5,
@@ -362,8 +362,74 @@ def module_id_for(data: dict[str, Any]) -> str:
     return f"t-{slug}" if re.match(r"[a-z0-9]", slug) and len(slug) >= 2 else "module"
 
 
+# A reader-set title overrides the one baked into module.json. It is kept in its
+# own small file on purpose: renaming must not rewrite a 5 MB import artifact, and
+# the override has to outlive a re-import of the same book.
+LIBRARY_META_PATH = Path(os.getenv("EDU_LIBRARY_META_PATH", str(PROGRESS_PATH.parent / "library-meta.json")))
+MAX_TITLE = 160
+
+
+def read_library_meta() -> dict[str, Any]:
+    try:
+        stored = json.loads(LIBRARY_META_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"titles": {}}
+    titles = stored.get("titles") if isinstance(stored, dict) else None
+    return {"titles": titles if isinstance(titles, dict) else {}}
+
+
+def clean_title(value: Any) -> str:
+    """One line, no control characters, bounded. Titles are rendered as text, never
+    as HTML, so this is about sane display, not escaping."""
+    text = " ".join(str(value or "").split())
+    text = "".join(ch for ch in text if ch.isprintable())
+    return text[:MAX_TITLE].strip()
+
+
+def set_book_title(file: str, title: str) -> str:
+    meta = read_library_meta()
+    meta["titles"][file] = title
+    write_atomic(LIBRARY_META_PATH, json.dumps(meta, indent=2, sort_keys=True) + "\n")
+    return title
+
+
+def _last_read_at(module_id: str) -> float:
+    """Newest completion in this book, as a unix timestamp. Completions are the only
+    per-book activity the server records, so this is the honest "worked on" signal --
+    reading without finishing a block leaves no trace here."""
+    completed = read_progress(module_key(module_id)).get("completed") or {}
+    newest = 0.0
+    for entry in completed.values():
+        stamp = entry.get("at") if isinstance(entry, dict) else None
+        if not isinstance(stamp, str):
+            continue
+        try:
+            newest = max(newest, datetime.fromisoformat(stamp).timestamp())
+        except ValueError:
+            continue
+    return newest
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def decorate_book(entry: dict[str, Any], source: Path, titles: dict[str, Any]) -> dict[str, Any]:
+    override = clean_title(titles.get(entry["file"]))
+    if override:
+        entry["title"] = override
+        entry["renamed"] = True
+    entry["addedAt"] = _mtime(source)
+    entry["lastReadAt"] = _last_read_at(entry["moduleId"])
+    return entry
+
+
 def list_modules(root: Path) -> list[dict[str, Any]]:
     books = []
+    titles = read_library_meta()["titles"]
     for path in sorted((root / "data").glob("*.json")):
         try:
             data = load_module(root, path.name)
@@ -373,7 +439,7 @@ def list_modules(root: Path) -> list[dict[str, Any]]:
         sections = tutorial.get("sections") if isinstance(tutorial, dict) else None
         if not isinstance(sections, list) or not isinstance(data.get("quizData"), list):
             continue
-        books.append({
+        books.append(decorate_book({
             "file": path.name,
             "moduleId": module_id_for(data),
             "title": str(tutorial.get("title") or path.stem),
@@ -381,7 +447,7 @@ def list_modules(root: Path) -> list[dict[str, Any]]:
             "lessons": sum(len(section.get("items") or []) for section in sections if isinstance(section, dict)),
             "questions": len(data["quizData"]),
             "default": path.name == DEFAULT_MODULE,
-        })
+        }, path, titles))
     books.extend(list_packaged_books())
     return books
 
@@ -390,6 +456,7 @@ def list_packaged_books() -> list[dict[str, Any]]:
     """Books in library/<moduleId>/. `base` tells the page where this book's own
     assets live, so its "src" values stay relative to the book rather than to us."""
     out: list[dict[str, Any]] = []
+    titles = read_library_meta()["titles"]
     if not LIBRARY_ROOT.is_dir():
         return out
     for folder in sorted(p for p in LIBRARY_ROOT.iterdir() if p.is_dir()):
@@ -403,7 +470,7 @@ def list_packaged_books() -> list[dict[str, Any]]:
                 continue
         except (OSError, KeyError, TypeError, json.JSONDecodeError):
             continue
-        out.append({
+        out.append(decorate_book({
             # The folder name doubles as the entry's `file`, so every existing
             # library code path (progress key, card click, "is this the open
             # book") keeps working unchanged; `book` is what marks it packaged.
@@ -416,7 +483,7 @@ def list_packaged_books() -> list[dict[str, Any]]:
             "lessons": sum(len(s.get("items") or []) for s in sections if isinstance(s, dict)),
             "questions": len(data["quizData"]),
             "default": folder.name == DEFAULT_MODULE,
-        })
+        }, folder, titles))
     return out
 
 
@@ -1087,6 +1154,23 @@ class EduHandler(SimpleHTTPRequestHandler):
             os.environ[field] = value
         self.send_json(HTTPStatus.OK, self.settings_payload())
 
+    def rename_book(self) -> None:
+        """Give a book a different name in the library. It does NOT touch module.json:
+        the override lives in library-meta.json, keyed by the same `file` the listing
+        uses, so a re-import keeps the reader's name and a 5 MB artifact is never
+        rewritten to change one string."""
+        payload = read_json(self)
+        file = str(payload.get("file") or "")
+        title = clean_title(payload.get("title"))
+        if not title:
+            raise ValueError("A title is required.")
+        # Only a book this server already lists may be renamed -- never an arbitrary
+        # key, which would let a caller grow the file without bound.
+        if not any(book["file"] == file for book in list_modules(self.root)):
+            raise ValueError("Unknown book.")
+        set_book_title(file, title)
+        self.send_json(HTTPStatus.OK, {"file": file, "title": title})
+
     def save_progress(self) -> None:
         """Record a completed block, or reset everything.
 
@@ -1186,7 +1270,7 @@ class EduHandler(SimpleHTTPRequestHandler):
     def do_POST(self) -> None:
         route = self.path.split("?", 1)[0]
         if route not in ("/api/quiz", "/api/quiz/fresh", "/api/ask", "/api/exercise/grade",
-                         "/api/settings", "/api/progress") + RUN_ROUTES:
+                         "/api/settings", "/api/progress", "/api/book/rename") + RUN_ROUTES:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "Unknown API route."})
             return
         if not self.same_origin():
@@ -1200,6 +1284,13 @@ class EduHandler(SimpleHTTPRequestHandler):
         if route == "/api/progress":
             try:
                 self.save_progress()
+            except (ValueError, TypeError, OSError, json.JSONDecodeError) as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if route == "/api/book/rename":
+            try:
+                self.rename_book()
             except (ValueError, TypeError, OSError, json.JSONDecodeError) as error:
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return

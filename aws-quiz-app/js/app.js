@@ -73,12 +73,17 @@ function assetUrl(src) {
     return assetBase ? assetBase + src : src;
 }
 let libraryBooks = [];
+// Snapshot of the card order, taken when library data loads. renderLibrary()
+// used to re-sort on every call, so progress ticking mid-session could also
+// reshuffle the grid. Books added later APPEND; nothing already on screen moves.
+let libraryOrder = [];
 let GENERATED_QUIZ_SIZE = 20;   // overridden by server general settings
 let aiQuestionCount = 5;        // overridden by server general settings
 const MAX_FRESH_QUIZ_SIZE = 30; // server enforces the same cap
 // Declared up here, not beside the AI section: setAppState reads providerReady,
 // and a `let` read above its declaration is a boot-killing TDZ error.
 let providerReady = false;
+let providerStatusUnknown = false;
 let providerTokenRequired = true;
 let providerModel = '';
 
@@ -104,6 +109,10 @@ const dom = {
     setupCount: document.getElementById('setup-count'),
     setupStartBtn: document.getElementById('setup-start-btn'),
     setupResumeBtn: document.getElementById('setup-resume-btn'),
+    setupCancelBtn: document.getElementById('setup-cancel-btn'),
+    setupBackdrop: document.getElementById('setup-backdrop'),
+    welcomeEmpty: document.getElementById('welcome-empty'),
+    welcomeBody: document.getElementById('welcome-body'),
     resultScreen: document.getElementById('result-screen'),
     
     welcomeTitle: document.getElementById('welcome-title'),
@@ -150,7 +159,7 @@ const dom = {
     
     tutorialContent: document.getElementById('tutorial-content'),
     tutorialTitle: document.getElementById('tutorial-main-title'),
-    tutorialLead: document.getElementById('tutorial-lead'),
+    tutorialArticle: document.getElementById('tutorial-article'),
     tocNav: document.getElementById('toc-nav'),
     tocPanel: document.getElementById('toc-panel'),
     tocBackdrop: document.getElementById('toc-backdrop'),
@@ -217,13 +226,22 @@ function setMenuOpen(open) {
 
 function syncMenuToViewport() { setMenuOpen(isWideMenu()); }
 
+// The full-height reader is the only screen that takes the viewport as its box.
+// It has to be set on <body>, not on the section: body is min-h-screen, so without
+// a hard height every flex child keeps min-height:auto and grows with its content.
+function setReaderMode(on) {
+    document.body.classList.toggle('reader-mode', on);
+    dom.contentSection.classList.toggle('reader-mode', on);
+}
+
 function showSettings() {
     dom.landingDashboard.classList.add('hidden-view');
     dom.contentSection.classList.remove('hidden-view');
+    setReaderMode(false);
     dom.tutorialScreen.classList.add('hidden-view');
     dom.quizScreen.classList.add('hidden-view');
     dom.resultScreen.classList.add('hidden-view');
-    dom.quizSetupScreen.classList.add('hidden-view');
+    closeQuizSetup();
     dom.progressContainer.classList.add('hidden-view');
     dom.settingsScreen.classList.remove('hidden-view');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -257,7 +275,11 @@ function syncTocToViewport() {
 
 
 function setAppState(isReady) {
-    dom.welcomeScreen.classList.toggle('hidden-view', !isReady);
+    // The panel itself never hides. Closing a book empties it instead, so the
+    // home page keeps its shape and nothing below it jumps (user, 21-09-26).
+    dom.welcomeScreen.classList.remove('hidden-view');
+    if (dom.welcomeBody) dom.welcomeBody.classList.toggle('hidden-view', !isReady);
+    if (dom.welcomeEmpty) dom.welcomeEmpty.classList.toggle('hidden-view', isReady);
     
     const controls = [dom.readTutorialBtn, dom.startBtn];
     controls.forEach(btn => {
@@ -289,11 +311,12 @@ function updateNavUI(activeTab) {
 
 function showLandingDashboard() {
     dom.contentSection.classList.add('hidden-view');
+    setReaderMode(false);
     dom.landingDashboard.classList.remove('hidden-view');
     dom.servicesSection.classList.remove('hidden-view');
     dom.settingsScreen.classList.add('hidden-view');
     dom.loadingScreen.classList.add('hidden-view');
-    dom.welcomeScreen.classList.toggle('hidden-view', !tutorialData.title);
+    setAppState(Boolean(tutorialData.title));
     renderHome();
     window.scrollTo({ top: 0, behavior: 'smooth' });
     updateNavUI('tutorial');
@@ -327,7 +350,8 @@ function nextLesson() {
 }
 
 function renderHome() {
-    if (!tutorialData.title) return;
+    // The library is drawn whether or not a book is open -- it is how you pick one.
+    if (!tutorialData.title) { renderLibrary(); return; }
     const chapters = theoryChapters().length;
     const lessons = theoryChapters().reduce((sum, _chapter, index) => sum + theoryBlocks(index).length, 0);
     const overall = overallProgress();
@@ -346,6 +370,7 @@ function renderHome() {
     dom.readTutorialBtn.textContent = overall.done ? 'Continue reading' : 'Start reading';
     dom.startGeneratedBtn.disabled = !aiReady();
     dom.startGeneratedBtn.title = aiReady() ? '' : (providerReady ? AI_ONLY_ON_LIBRARY_BOOKS : 'Connect a model in Settings first');
+    syncAiQuizButton();
     renderLibrary();
 }
 
@@ -358,6 +383,7 @@ async function loadLibrary() {
     } catch (error) {
         libraryBooks = [];
     }
+    snapshotLibraryOrder();
     // Progress of the books that are not open, so every card shows where the learner is.
     await Promise.all(libraryBooks.map(async book => {
         try {
@@ -409,31 +435,68 @@ function renderHomeKpis() {
     panel.classList.remove('hidden-view');
 }
 
+// Most recent first: last worked on, else when it was imported, else title.
+// Alphabetical put a book you have never opened above the one you read this
+// morning (user, 21-09-26). localeCompare is the final tiebreak, which makes the
+// sort total -- so a reload of unchanged data reproduces the same order.
+function librarySortKey(a, b) {
+    const recency = book => Math.max(Number(book.lastReadAt) || 0, 0) || Math.max(Number(book.addedAt) || 0, 0);
+    return (Number(b.lastReadAt) || 0) - (Number(a.lastReadAt) || 0)
+        || (Number(b.addedAt) || 0) - (Number(a.addedAt) || 0)
+        || recency(b) - recency(a)
+        || a.title.localeCompare(b.title);
+}
+
+function snapshotLibraryOrder() {
+    const known = new Set(libraryOrder);
+    const fresh = libraryBooks.filter(book => !known.has(book.file)).sort(librarySortKey).map(book => book.file);
+    const present = new Set(libraryBooks.map(book => book.file));
+    libraryOrder = libraryOrder.filter(file => present.has(file)).concat(fresh);
+}
+
+function orderedLibraryBooks() {
+    const byFile = new Map(libraryBooks.map(book => [book.file, book]));
+    const ordered = libraryOrder.map(file => byFile.get(file)).filter(Boolean);
+    // Safety net: anything that never reached the snapshot still renders, last.
+    const seen = new Set(libraryOrder);
+    return ordered.concat(libraryBooks.filter(book => !seen.has(book.file)));
+}
+
 function renderLibrary() {
     if (!dom.libraryGrid) return;
     dom.libraryGrid.innerHTML = '';
     dom.emptyState.classList.toggle('hidden-view', libraryBooks.length > 0 || Boolean(tutorialData.title));
-    // The book being studied first, then the rest by title.
-    const ordered = [...libraryBooks].sort((a, b) => (b.file === activeBookFile) - (a.file === activeBookFile) || a.title.localeCompare(b.title));
+    // Render in the order snapshotted at load time -- see libraryOrderOf().
+    // The grid must NOT reshuffle under the cursor when a book is opened, so
+    // position is no longer the marker; the "Current" chip + aria-current are
+    // (user, 21-09-26).
+    const ordered = orderedLibraryBooks();
     ordered.forEach(book => {
         const current = book.file === activeBookFile;
         const done = current ? overallProgress().done : Math.min(book.done || 0, book.lessons);
         const percent = book.lessons ? Math.round((done / book.lessons) * 100) : 0;
-        const card = document.createElement('button');
-        card.type = 'button';
+        // A div, not a button: the title turns into a text input on double-click
+        // and an <input> inside a <button> is invalid and unfocusable in browsers.
+        // role + tabindex + the keydown below keep it operable from the keyboard.
+        const card = document.createElement('div');
+        card.setAttribute('role', 'button');
+        card.tabIndex = 0;
         card.dataset.book = book.file;
         card.setAttribute('aria-current', current ? 'true' : 'false');
-        card.className = `flex flex-col gap-3 text-left rounded-xl border p-5 min-h-[44px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 ${current ? 'border-brand-600 bg-gray-800' : 'border-gray-700 bg-gray-800/60 hover:border-gray-500 hover:bg-gray-800'}`;
+        card.className = `flex flex-col gap-3 text-left rounded-xl border p-5 min-h-[44px] cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 ${current ? 'border-brand-600 bg-gray-800' : 'border-gray-700 bg-gray-800/60 hover:border-gray-500 hover:bg-gray-800'}`;
         const head = document.createElement('div');
         head.className = 'flex items-start justify-between gap-3';
         const title = document.createElement('h3');
         title.className = 'text-white font-semibold leading-snug line-clamp-2';
         title.textContent = book.title;
+        title.title = 'Double-click to rename';
+        title.dataset.rename = book.file;
         head.appendChild(title);
         if (current) {
             const chip = document.createElement('span');
             chip.className = 'shrink-0 rounded-full bg-brand-600/15 px-2.5 py-1 text-xs font-semibold text-brand-400';
             chip.textContent = 'Current';
+            chip.title = 'Click the card to close this book';
             head.appendChild(chip);
         }
         const meta = document.createElement('p');
@@ -459,9 +522,89 @@ function renderLibrary() {
     renderHomeKpis();
 }
 
+// Closing is deliberately NOT a separate control: the card that opened the book
+// closes it, and the home panel stays where it is, empty (user, 21-09-26).
+function closeBook() {
+    activeBookFile = null;
+    assetBase = '';
+    tutorialData = {};
+    quizData = [];
+    generatedQuizData = null;
+    activeQuizData = [];
+    fullQuizData = [];
+    moduleId = '';
+    quizSessions.practice = null;
+    quizSessions.generate = null;
+    progress = { completed: {} };
+    try { localStorage.removeItem('eduActiveBook'); } catch (error) { /* per-viewer convenience */ }
+    closeQuizSetup();
+    setAppState(false);
+    showLandingDashboard();
+}
+
+// The title a reader gives a book overrides the one baked into module.json, so a
+// rename never rewrites a 5 MB import artifact. The server owns the override, or
+// it would not survive a different browser.
+async function renameBook(file, title) {
+    const clean = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+    const book = libraryBooks.find(entry => entry.file === file);
+    if (!book || !clean || clean === book.title) return;
+    const previous = book.title;
+    book.title = clean;                       // optimistic: the card redraws at once
+    if (file === activeBookFile) tutorialData.title = clean;
+    renderHome();
+    try {
+        const response = await fetch('api/book/rename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ file, title: clean })
+        });
+        if (!response.ok) throw new Error(`Rename failed (${response.status}).`);
+    } catch (error) {
+        book.title = previous;                // put it back rather than lie about it
+        if (file === activeBookFile) tutorialData.title = previous;
+        renderHome();
+        alert(`Could not rename the book: ${error.message}`);
+    }
+}
+
+// Swaps the card title for an input in place. Enter commits, Escape and blur
+// cancel; clicks inside it must not reach the card, which would open the book.
+function beginRename(titleEl) {
+    const file = titleEl.dataset.rename;
+    if (!file || titleEl.dataset.editing === 'true') return;
+    titleEl.dataset.editing = 'true';
+    const original = titleEl.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = original;
+    input.maxLength = 160;
+    input.className = 'w-full min-w-0 rounded-md border border-brand-600 bg-gray-900 px-2 py-1 text-white text-sm focus:outline-none';
+    ['click', 'dblclick', 'keydown', 'mousedown'].forEach(type =>
+        input.addEventListener(type, event => event.stopPropagation()));
+    let settled = false;
+    const finish = commit => {
+        if (settled) return;
+        settled = true;
+        const next = input.value;
+        titleEl.dataset.editing = 'false';
+        titleEl.textContent = original;
+        input.replaceWith(titleEl);
+        if (commit) renameBook(file, next);
+    };
+    input.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); finish(true); }
+        else if (event.key === 'Escape') { event.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(false));
+    titleEl.replaceWith(input);
+    input.focus();
+    input.select();
+}
+
 async function openBook(file) {
     if (file === activeBookFile) {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        closeBook();
         return;
     }
     try {
@@ -482,12 +625,13 @@ function showTutorial() {
     if (!tutorialData.title) return;
     dom.landingDashboard.classList.add('hidden-view');
     dom.contentSection.classList.remove('hidden-view');
+    setReaderMode(true);
     
     dom.tutorialScreen.classList.remove('hidden-view');
     dom.settingsScreen.classList.add('hidden-view');
     dom.quizScreen.classList.add('hidden-view');
     dom.resultScreen.classList.add('hidden-view');
-    dom.quizSetupScreen.classList.add('hidden-view');
+    closeQuizSetup();
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
     // 'learn', not 'tutorial': the 'tutorial' key belongs to nav-tutorial, which
@@ -499,11 +643,12 @@ function showTutorial() {
 function showQuizScreen() {
     dom.landingDashboard.classList.add('hidden-view');
     dom.contentSection.classList.remove('hidden-view');
+    setReaderMode(false);
     
     dom.tutorialScreen.classList.add('hidden-view');
     dom.settingsScreen.classList.add('hidden-view');
     dom.resultScreen.classList.add('hidden-view');
-    dom.quizSetupScreen.classList.add('hidden-view');
+    closeQuizSetup();
     dom.quizScreen.classList.remove('hidden-view');
     
     dom.progressContainer.classList.remove('hidden-view');
@@ -549,11 +694,12 @@ function startQuiz() {
 function showResults() {
     dom.landingDashboard.classList.add('hidden-view');
     dom.contentSection.classList.remove('hidden-view');
+    setReaderMode(false);
     
     dom.tutorialScreen.classList.add('hidden-view');
     dom.settingsScreen.classList.add('hidden-view');
     dom.quizScreen.classList.add('hidden-view');
-    dom.quizSetupScreen.classList.add('hidden-view');
+    closeQuizSetup();
     dom.resultScreen.classList.remove('hidden-view');
     dom.progressContainer.classList.add('hidden-view');
 
@@ -1086,9 +1232,38 @@ dom.readTutorialBtn.addEventListener('click', () => {
     if (next) selectTheory({ chapterIndex: next.chapterIndex, blockIndex: next.blockIndex });
     showTutorial();
 });
+// ⚠ A click on the TITLE is deferred, because the first click of a double-click
+// would otherwise open or close the book -- and closing re-renders the grid, so the
+// card is gone before the second click lands and renaming was impossible. Anywhere
+// else on the card still opens or closes it immediately.
+let titleClickTimer = null;
+const TITLE_DBLCLICK_MS = 260;
+
 dom.libraryGrid.addEventListener('click', event => {
     const card = event.target.closest('[data-book]');
-    if (card) openBook(card.dataset.book);
+    if (!card) return;
+    const file = card.dataset.book;
+    if (event.target.closest('[data-rename]')) {
+        clearTimeout(titleClickTimer);
+        titleClickTimer = setTimeout(() => { titleClickTimer = null; openBook(file); }, TITLE_DBLCLICK_MS);
+        return;
+    }
+    openBook(file);
+});
+dom.libraryGrid.addEventListener('dblclick', event => {
+    const titleEl = event.target.closest('[data-rename]');
+    if (!titleEl) return;
+    event.preventDefault();
+    event.stopPropagation();
+    clearTimeout(titleClickTimer);          // cancel the deferred open
+    titleClickTimer = null;
+    beginRename(titleEl);
+});
+// role="button" carries no built-in key handling; these two put it back.
+dom.libraryGrid.addEventListener('keydown', event => {
+    const card = event.target.closest('[data-book]');
+    if (!card || event.target !== card) return;
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openBook(card.dataset.book); }
 });
 dom.prevBlockBtn.addEventListener('click', () => { const target = previousTheory(); if (target) selectTheory(target); });
 dom.nextBlockBtn.addEventListener('click', () => { const target = nextTheory(); if (target) selectTheory(target); });
@@ -1391,7 +1566,7 @@ function assetPanel(block, compact) {
     }
     if (block.caption) {
         const caption = document.createElement('figcaption');
-        caption.className = 'mt-3 text-sm text-gray-400 italic text-center max-w-[68ch] mx-auto';
+        caption.className = 'mt-3 text-sm text-gray-400 italic text-center mx-auto';
         caption.textContent = block.caption;
         panel.appendChild(caption);
     }
@@ -1399,7 +1574,7 @@ function assetPanel(block, compact) {
     // (user, 17-09-26: going back and forth to decode a formula is distracting).
     if (block.type === 'equation' && block.explain) {
         const explain = document.createElement('div');
-        explain.className = 'mt-4 pt-4 border-t border-gray-700 text-left text-sm leading-relaxed text-gray-300 max-w-[68ch] mx-auto overflow-x-auto';
+        explain.className = 'mt-4 pt-4 border-t border-gray-700 text-left text-sm leading-relaxed text-gray-300 mx-auto overflow-x-auto';
         explain.innerHTML = formatText(block.explain);
         panel.appendChild(explain);
     }
@@ -1422,12 +1597,17 @@ function appendTheoryContent(parent, block, theme) {
     }
     if (block.type === 'text') {
         const wrapper = document.createElement('div');
-        // Capped measure: ~68 characters a line is the readable band. The
-        // container is max-w-none so a figure can still go full width.
+        // The measure cap is GONE (user, 21-09-26: "the text have to fill the
+        // remaining space"). Do not reintroduce a max-width here in any unit.
+        // Leading is set inline instead of via `leading-relaxed`: the prose
+        // renders inside <rich-text-viewer>'s shadow DOM, whose :host inherits
+        // line-height -- so the value has to be on THIS element. The Tailwind
+        // class was winning at 1.625 and --reading-leading (1.8) never arrived.
         // overflow-wrap is inherited into the viewer's shadow DOM: a long inline
         // `code` span (e.g. KNeighborsRegressor(n_neighbors=3)) otherwise pushed
         // phones 20 px sideways on ch01-b08, measured 17-09-26.
-        wrapper.className = 'mb-6 leading-relaxed max-w-[68ch] [overflow-wrap:anywhere]';
+        wrapper.className = 'mb-6 [overflow-wrap:anywhere]';
+        wrapper.style.lineHeight = 'var(--reading-leading)';
         wrapper.innerHTML = formatText(block.content);
         parent.appendChild(wrapper);
         return;
@@ -1458,7 +1638,7 @@ function appendTheoryContent(parent, block, theme) {
         }
         if (block.caption) {
             const caption = document.createElement('figcaption');
-            caption.className = 'mt-4 text-sm text-gray-400 italic text-center max-w-[68ch] mx-auto';
+            caption.className = 'mt-4 text-sm text-gray-400 italic text-center mx-auto';
             caption.innerHTML = formatText(block.caption);
             figure.appendChild(caption);
         }
@@ -1893,6 +2073,13 @@ function renderDeeper(block) {
     return details;
 }
 
+// "20 theory blocks · pages 70-155" -> "pages 70-155". The note is written by the
+// importer, so a book without one simply contributes nothing.
+function chapterPages(chapter) {
+    const match = /pages?\s+[0-9]+\s*[-\u2013\u2014]\s*[0-9]+|pages?\s+[0-9]+/i.exec(String((chapter && chapter.note) || ''));
+    return match ? match[0].toLowerCase() : '';
+}
+
 function renderTheoryToc() {
     if (!dom.tocNav) return;
     dom.tocNav.innerHTML = '';
@@ -1941,7 +2128,10 @@ function renderTheoryToc() {
 
         const count = document.createElement('div');
         count.className = 'mt-1 text-[0.7rem] font-normal text-gray-500 tabular-nums';
-        count.textContent = `${done.done} of ${done.total} blocks`;
+        // The reader used to carry "N theory blocks · pages X-Y" above every lesson,
+        // which repeated a count the sidebar already showed. Only the page range was
+        // new, so it lands here beside the count (user, 21-09-26).
+        count.textContent = `${done.done} of ${done.total} blocks${chapterPages(chapter) ? ` · ${chapterPages(chapter)}` : ''}`;
         summary.appendChild(count);
         group.appendChild(summary);
 
@@ -1976,6 +2166,7 @@ function renderTheoryToc() {
 }
 
 function renderTheoryBlock() {
+    syncAiQuizButton();
     const chapter = theoryChapters()[currentTheory.chapterIndex];
     const blocks = theoryBlocks(currentTheory.chapterIndex);
     const block = blocks[currentTheory.blockIndex];
@@ -1990,7 +2181,6 @@ function renderTheoryBlock() {
         dom.theoryBlockPosition.className = blockDone ? 'text-green-400' : '';
     }
     dom.tutorialTitle.textContent = block.term || `Theory block ${currentTheory.blockIndex + 1}`;
-    dom.tutorialLead.textContent = chapter.note || '';
 
     dom.tutorialContent.innerHTML = '';
     // The exercise lesson renders as a form, not as a bulleted list: the book's
@@ -2225,6 +2415,13 @@ function exerciseVerdictNote(verdict, feedback) {
     return note;
 }
 
+// Submit was 18px/px-6 next to a 14px/px-4 Clear, so the pair read as a big button
+// and an afterthought in both write and choose mode (user, 21-09-26). One geometry,
+// two colours: emphasis comes from fill, not from size.
+const EXERCISE_ACTION_BASE = 'min-h-[44px] rounded-lg border-2 px-6 py-2 text-sm font-semibold uppercase tracking-wider transition-colors';
+const EXERCISE_ACTION_PRIMARY = `${EXERCISE_ACTION_BASE} border-brand-600 bg-brand-600 text-white hover:bg-brand-900`;
+const EXERCISE_ACTION_SECONDARY = `${EXERCISE_ACTION_BASE} border-gray-500 text-gray-300 hover:border-gray-400 hover:bg-gray-700 hover:text-white`;
+
 function renderExercises(parent, spec) {
     const state = readExerciseState();
     const hasChoices = spec.list.every(e => Array.isArray(e.options) && e.options.length > 1 && Number.isInteger(e.correct));
@@ -2282,7 +2479,7 @@ function renderExercises(parent, spec) {
     panel.appendChild(head);
 
     const hint = document.createElement('p');
-    hint.className = 'mb-5 text-sm text-gray-400 leading-relaxed max-w-[68ch]';
+    hint.className = 'mb-5 text-sm text-gray-400 leading-relaxed';
     hint.textContent = state.mode === 'write'
         ? 'Answer in your own words — you are marked on the meaning, not on matching the book\'s wording. Answer all of them, then submit once.'
         : 'Pick an answer and it is marked straight away. Nothing is sent anywhere, so this works even with the AI quota spent.';
@@ -2306,7 +2503,7 @@ function renderExercises(parent, spec) {
         row.className = 'mb-6 border-t border-gray-700/60 pt-5 first:border-t-0 first:pt-0';
         row.dataset.exerciseRow = String(entry.n);
         const prompt = document.createElement('div');
-        prompt.className = 'font-medium leading-relaxed max-w-[68ch] [overflow-wrap:anywhere]';
+        prompt.className = 'font-medium leading-relaxed [overflow-wrap:anywhere]';
         prompt.innerHTML = formatText(entry.prompt);
         row.appendChild(prompt);
 
@@ -2382,7 +2579,7 @@ function renderExercises(parent, spec) {
     // submit -- only a way back for the ones you got wrong.
     const submit = document.createElement('button');
     submit.type = 'button';
-    submit.className = 'min-h-[44px] rounded-lg border-2 border-brand-600 bg-brand-600 px-6 py-2 font-bold uppercase tracking-wider text-white transition-colors hover:bg-brand-900';
+    submit.className = EXERCISE_ACTION_PRIMARY;
     submit.textContent = 'Submit for marking';
     submit.addEventListener('click', () => submitWrittenExercises(spec, rows, submit, status, carry, retry));
     if (state.mode === 'write') actions.appendChild(submit);
@@ -2391,7 +2588,7 @@ function renderExercises(parent, spec) {
     // every answer, so one wrong mark out of nineteen meant re-reading the lot.
     const retry = document.createElement('button');
     retry.type = 'button';
-    retry.className = 'min-h-[44px] rounded-lg border-2 border-brand-600 bg-brand-600 px-6 py-2 font-bold uppercase tracking-wider text-white transition-colors hover:bg-brand-900 hidden-view';
+    retry.className = `${EXERCISE_ACTION_PRIMARY} hidden-view`;
     retry.textContent = 'Retry the wrong ones';
     retry.addEventListener('click', () => {
         const next = readExerciseState();
@@ -2409,7 +2606,7 @@ function renderExercises(parent, spec) {
 
     const clear = document.createElement('button');
     clear.type = 'button';
-    clear.className = 'min-h-[44px] rounded-lg border-2 border-gray-500 px-4 py-2 text-sm font-semibold uppercase tracking-wider text-gray-300 transition-colors hover:border-gray-400 hover:bg-gray-700 hover:text-white';
+    clear.className = EXERCISE_ACTION_SECONDARY;
     clear.textContent = state.mode === 'write' ? 'Clear' : 'Start over';
     clear.addEventListener('click', () => {
         const next = readExerciseState();
@@ -2586,6 +2783,10 @@ function selectTheory(selection) {
     writeTheoryHash();
     renderTheoryToc();
     renderTheoryBlock();
+    // The reading pane scrolls, not the window: without this, Next lands you
+    // halfway down the next lesson.
+    if (dom.tutorialArticle) dom.tutorialArticle.scrollTop = 0;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 // Entry point kept under the original name so loadModuleData() is untouched.
@@ -2957,16 +3158,19 @@ function openQuizSetup(mode) {
             ? 'Back to results' : `Resume ${saved.currentQuestionIndex + 1}/${saved.questions.length}`;
     }
 
-    dom.landingDashboard.classList.add('hidden-view');
-    dom.contentSection.classList.remove('hidden-view');
-    dom.tutorialScreen.classList.add('hidden-view');
-    dom.settingsScreen.classList.add('hidden-view');
-    dom.quizScreen.classList.add('hidden-view');
-    dom.resultScreen.classList.add('hidden-view');
-    dom.progressContainer.classList.add('hidden-view');
+    // Nothing is hidden. The dialog opens over whatever is on screen -- a quiz in
+    // progress included -- so Cancel is a real way back and "New" stopped being a
+    // one-way door (user, 21-09-26). The nav underline moves at Start, not here,
+    // because opening the picker is not yet navigating anywhere.
     dom.quizSetupScreen.classList.remove('hidden-view');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    updateNavUI(mode === 'practice' ? 'quiz' : 'generated-quiz');
+    document.body.classList.add('overflow-hidden');
+    if (dom.setupStartBtn) dom.setupStartBtn.focus();
+}
+
+function closeQuizSetup() {
+    if (!dom.quizSetupScreen) return;
+    dom.quizSetupScreen.classList.add('hidden-view');
+    document.body.classList.remove('overflow-hidden');
 }
 
 dom.setupTree.addEventListener('change', event => {
@@ -2989,6 +3193,11 @@ dom.setupTree.addEventListener('click', event => {
 });
 dom.setupAllBtn.addEventListener('click', () => { allBlockIds().forEach(id => setupSelected.add(id)); syncSetupTree(); });
 dom.setupNoneBtn.addEventListener('click', () => { setupSelected.clear(); syncSetupTree(); });
+dom.setupCancelBtn.addEventListener('click', closeQuizSetup);
+dom.setupBackdrop.addEventListener('click', closeQuizSetup);
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !dom.quizSetupScreen.classList.contains('hidden-view')) closeQuizSetup();
+});
 dom.setupResumeBtn.addEventListener('click', () => resumeQuizSession(setupMode));
 dom.setupStartBtn.addEventListener('click', () => {
     const ids = selectedBlockIds();
@@ -3049,6 +3258,23 @@ function setAiBlockStatus(message) {
     if (dom.aiBlockStatus) dom.aiBlockStatus.textContent = message || '';
 }
 
+// ⚠ aiReady() needs BOTH a provider and an open book. This used to be evaluated
+// once, inside refreshProviderStatus() on DOMContentLoaded -- before the book had
+// loaded -- and never again, so the button sat disabled for the whole session with
+// a healthy provider behind it (user, 21-09-26: "the AI quiz button is currently
+// greyed out"). It is recomputed from whatever is true NOW, at every point either
+// half can change.
+function syncAiQuizButton() {
+    if (!dom.blockAiQuizBtn) return;
+    const ready = aiReady();
+    dom.blockAiQuizBtn.disabled = !ready;
+    dom.blockAiQuizBtn.title = providerStatusUnknown
+        ? 'Provider status unavailable; the book quizzes still work'
+        : ready
+            ? `Generate questions with ${providerModel || 'the connected model'}`
+            : (providerReady ? AI_ONLY_ON_LIBRARY_BOOKS : 'Unavailable until an operator configures a provider on the server');
+}
+
 async function refreshProviderStatus() {
     try {
         const response = await fetch('api/provider', { cache: 'no-store' });
@@ -3056,15 +3282,12 @@ async function refreshProviderStatus() {
         providerReady = Boolean(data.ready);
         providerTokenRequired = Boolean(data.token_required);
         providerModel = data.model || '';
-        dom.blockAiQuizBtn.disabled = !aiReady();
-        dom.blockAiQuizBtn.title = aiReady()
-            ? `Generate questions with ${data.model}`
-            : (providerReady ? AI_ONLY_ON_LIBRARY_BOOKS : 'Unavailable until an operator configures a provider on the server');
+        providerStatusUnknown = false;
     } catch (error) {
         providerReady = false;
-        dom.blockAiQuizBtn.disabled = true;
-        dom.blockAiQuizBtn.title = 'Provider status unavailable; the book quizzes still work';
+        providerStatusUnknown = true;
     }
+    syncAiQuizButton();
     if (tutorialData.title) renderHome();
 }
 
@@ -3097,7 +3320,7 @@ async function startBlockAiQuiz() {
     } catch (error) {
         setAiBlockStatus(error.message);
     } finally {
-        dom.blockAiQuizBtn.disabled = !providerReady;
+        syncAiQuizButton();
     }
 }
 

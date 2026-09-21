@@ -112,13 +112,38 @@
             #tutorial-screen { display: block !important; height: auto !important; max-width: none !important; }
             #tutorial-screen article { height: auto !important; border: 0 !important; box-shadow: none !important;
                                        background: #fff !important; padding: 0 !important; }
+            #tutorial-article { overflow: visible !important; height: auto !important; max-height: none !important; }
             #tutorial-screen article > div { overflow: visible !important; height: auto !important; padding: 0 !important; }
-            #content-section { padding: 0 !important; display: block !important; }
+            body.reader-mode { height: auto !important; overflow: visible !important; }
+            #content-section, #content-section.reader-mode { padding: 0 !important; display: block !important; }
             #tutorial-main-title, #tutorial-content, #tutorial-content * { color: #000 !important; }
             #tutorial-content section { border: 1px solid #bbb !important; background: #f6f6f6 !important;
                                         break-inside: avoid; page-break-inside: avoid; }
             @page { margin: 16mm; }
         }
+        /* --- Reader shell ---------------------------------------------------
+           The reader is the one screen that fills the box below the header
+           instead of sitting in a padded column: two square panes with a gap,
+           each scrolling on its own (user, 21-09-26). Every other screen keeps
+           the shell's padding, so adding one cannot forget it. */
+        /* ⚠ The cap has to start at <body>. It is min-h-screen, so every flex
+           child below it inherits min-height:auto and grows with its content --
+           measured: the article rendered 3367px tall inside a 824px parent and the
+           PAGE scrolled, not the pane. Only the reader takes this; every other
+           screen keeps normal page scrolling. */
+        body.reader-mode { height: 100vh; height: 100dvh; overflow: hidden; }
+        body.reader-mode #app-container { min-height: 0; }
+        #content-section.reader-mode { padding: 6px; min-height: 0; }
+
+        /* ⛔ KaTeX stretchy radicals. Something in the cascade overrides the
+           height KaTeX sets inline on its own <svg>, so the sqrt bar rendered
+           1.9px tall over a 70.3px radicand -- 21 equations in geron-homl3 showed
+           the fraction OUTSIDE the root. `height: inherit` is KaTeX's OWN
+           declaration; this restores it. `!important` is required to win, and the
+           rule MUST stay .katex-scoped -- an unscoped svg{} rule relayouts the
+           brand logo, the nav icons and every injected book figure. */
+        .katex svg { height: inherit !important; }
+
         .explanation-text { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.4s; }
         .explanation-text.expanded { grid-template-rows: 1fr; }
         .explanation-inner { overflow: hidden; }
@@ -170,7 +195,7 @@
             <!-- Home: the current book first, then the library to pick another (17-09-26) -->
             <div class="w-full bg-gray-900 px-4 pt-6 sm:pt-10 pb-20">
                 <!-- No space-y here: the hidden loading section would still push the panel down -->
-                <div class="max-w-5xl mx-auto">
+                <div class="max-w-7xl mx-auto">
 
                     <!-- Writing an AI quiz -->
                     <section id="loading-screen" class="hidden-view flex flex-col items-center justify-center text-center py-24 animate-fade-in">
@@ -184,8 +209,12 @@
                     </section>
 
                     <!-- Current book -->
-                    <section id="welcome-screen" class="hidden-view animate-fade-in bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8">
+                    <section id="welcome-screen" class="animate-fade-in bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8">
                         <p class="text-xs font-semibold uppercase tracking-widest text-brand-600">Current book</p>
+                        <!-- Shown when no book is selected. The panel itself stays put so the
+                             home page does not reflow when a book is closed (user, 21-09-26). -->
+                        <p id="welcome-empty" class="hidden-view mt-3 text-gray-400">No book selected. Pick one from the library below.</p>
+                        <div id="welcome-body">
                         <h1 id="welcome-title" class="mt-2 text-3xl sm:text-4xl font-light text-white leading-tight"></h1>
                         <p id="current-meta" class="mt-2 text-sm text-gray-400"></p>
                         <div class="mt-6">
@@ -203,13 +232,14 @@
                             <button id="start-btn" type="button" class="inline-flex items-center justify-center min-h-[44px] px-5 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">Practice</button>
                             <button id="start-generated-btn" type="button" class="inline-flex items-center justify-center min-h-[44px] px-5 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">Generate quiz</button>
                         </div>
+                        </div>
                     </section>
 
                     <!-- Across-the-library totals, shown only when no book is open, so the
                          home page says something useful instead of going straight to a grid. -->
                     <section id="home-kpis" class="hidden-view mt-10" aria-labelledby="home-kpis-heading">
                         <h2 id="home-kpis-heading" class="text-2xl text-white font-light mb-4">Your progress</h2>
-                        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                             <div class="rounded-2xl border border-gray-700 bg-gray-800 px-5 py-4">
                                 <p class="text-xs uppercase tracking-wider text-gray-400">Lessons done</p>
                                 <p id="kpi-lessons" class="mt-1 text-3xl text-white font-bold tabular-nums">—</p>
@@ -242,11 +272,10 @@
                         <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
                             <h2 id="library-heading" class="text-2xl text-white font-light">Library</h2>
                             <div class="flex flex-wrap gap-2">
-                                <a id="import-book-link" href="#" target="_blank" rel="noopener" class="inline-flex items-center justify-center min-h-[44px] px-5 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 disabled:opacity-50 disabled:cursor-not-allowed">Import PDF</a>
-                                <label for="custom-data-upload" class="inline-flex items-center justify-center min-h-[44px] px-5 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">Upload JSON</label>
+                                <a id="import-book-link" href="#" target="_blank" rel="noopener" class="inline-flex items-center justify-center min-h-[44px] px-5 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600">Import</a>
                             </div>
                         </div>
-                        <div id="library-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+                        <div id="library-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"></div>
                         <div id="empty-state" class="hidden-view rounded-2xl border border-dashed border-gray-700 px-6 py-12 text-center">
                             <p class="text-white text-lg">No books yet</p>
                             <p class="mt-1 text-sm text-gray-400">Import a PDF or upload a module.</p>
@@ -260,16 +289,16 @@
         <!-- ======================= -->
         <!-- 2. CONTENT VIEWS        -->
         <!-- ======================= -->
-        <div id="content-section" class="w-full bg-gray-900 flex-grow flex flex-col items-center py-6 px-4 hidden-view">
+        <div id="content-section" class="w-full bg-gray-900 flex-grow flex flex-col min-h-0 px-4 py-6 hidden-view">
             
             <!-- Tutorial View -->
-            <div id="tutorial-screen" class="hidden-view w-full flex flex-col lg:flex-row lg:items-start gap-6">
+            <div id="tutorial-screen" class="hidden-view w-full flex-1 min-h-0 flex flex-col lg:flex-row gap-2">
 
                 <!-- Backdrop: mobile drawer only; lg:hidden keeps it out of the desktop layout -->
                 <div id="toc-backdrop" class="hidden-view fixed inset-0 z-40 bg-black/60 lg:hidden"></div>
 
                 <!-- Table of contents. Overlay drawer below lg, static column at lg+. -->
-                <aside id="toc-panel" class="fixed lg:static inset-y-0 left-0 z-50 w-80 max-w-[85vw] lg:w-72 lg:max-w-none shrink-0 flex flex-col bg-gray-800 border border-gray-700 lg:rounded-2xl lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)]" aria-label="Table of contents">
+                <aside id="toc-panel" class="fixed lg:static inset-y-0 left-0 z-50 w-80 max-w-[85vw] lg:w-72 xl:w-80 lg:max-w-none shrink-0 flex flex-col min-h-0 bg-gray-800 border border-gray-700 rounded-xl lg:h-full" aria-label="Table of contents">
                     <div class="px-5 py-4 border-b border-gray-700 flex items-start justify-between gap-3 shrink-0">
                         <div>
                             <p class="text-white font-semibold text-sm uppercase tracking-widest">Contents</p>
@@ -283,34 +312,30 @@
                 </aside>
 
                 <!-- One theory block at a time -->
-                <article class="min-w-0 flex-1 flex flex-col bg-gray-800 border border-gray-700 shadow-xl rounded-2xl">
-                    <div class="flex-1 p-6 sm:p-8 lg:p-10">
+                <article id="tutorial-article" class="min-w-0 flex-1 min-h-0 overflow-y-auto flex flex-col bg-gray-800 border border-gray-700 rounded-xl">
+                    <div class="flex-1 w-full p-6 sm:p-8 lg:p-10">
                         <div class="flex items-center gap-3 mb-4">
-                            <button id="toc-toggle-btn" class="min-h-[44px] px-4 rounded-lg border border-gray-600 text-gray-300 hover:text-white hover:border-brand-600 transition-colors active:scale-95 flex items-center gap-2 shrink-0" aria-controls="toc-panel" aria-expanded="true">
+                            <button id="toc-toggle-btn" class="min-h-[44px] min-w-[44px] rounded-lg border border-gray-600 text-gray-300 hover:text-white hover:border-brand-600 transition-colors active:scale-95 flex items-center justify-center shrink-0" aria-controls="toc-panel" aria-expanded="true" aria-label="Contents" title="Contents">
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
-                                <span class="text-xs font-semibold uppercase tracking-wider">Contents</span>
                             </button>
-                            <p class="text-[0.8rem] uppercase tracking-widest text-gray-400 min-w-0 truncate">
-                                <span id="theory-chapter-label"></span><span class="text-gray-600" aria-hidden="true"> / </span><span id="theory-block-position"></span>
-                            </p>
                         </div>
 
-                        <h2 id="tutorial-main-title" class="text-[1.875rem] sm:text-4xl text-white font-light mb-2"></h2>
-                        <p id="tutorial-lead" class="text-brand-600 uppercase tracking-widest text-[0.9rem] mb-8 font-semibold"></p>
+                        <h2 id="tutorial-main-title" class="text-[1.875rem] sm:text-4xl text-white font-light mb-8"></h2>
                         <div id="tutorial-content" class="text-gray-300 prose prose-invert max-w-none"></div>
 
-                        <div class="mt-10 pt-6 border-t border-gray-700 flex flex-col sm:flex-row gap-3 sm:justify-between">
-                            <button id="prev-block-btn" class="min-h-[44px] px-6 rounded-lg border border-gray-600 text-gray-200 font-semibold uppercase tracking-wider text-sm transition-colors hover:bg-gray-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed">Previous</button>
-                            <button id="next-block-btn" class="min-h-[44px] px-6 rounded-lg bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider text-sm transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed">Next</button>
-                        </div>
-
-                        <div class="mt-4 flex flex-col sm:flex-row gap-3">
-                            <button id="tutorial-to-quiz-btn" class="min-h-[44px] px-6 rounded-lg border border-brand-600 text-brand-400 hover:bg-brand-600 hover:text-white font-bold uppercase tracking-wider text-sm transition-colors active:scale-95">
+                        <!-- One row, one button size. These four were two stacked rows at two
+                             different sizes; moving between blocks and starting the assessment
+                             are peers and now read as peers (user, 21-09-26). flex-wrap is what
+                             carries it down to a phone -- no separate mobile layout. -->
+                        <div class="mt-10 pt-6 border-t border-gray-700 flex flex-wrap items-center gap-3">
+                            <button id="prev-block-btn" class="min-h-[44px] px-5 rounded-lg border border-gray-600 text-gray-200 font-semibold uppercase tracking-wider text-sm transition-colors hover:bg-gray-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed">Previous</button>
+                            <button id="tutorial-to-quiz-btn" class="min-h-[44px] px-5 rounded-lg border border-brand-600 text-brand-400 hover:bg-brand-600 hover:text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95">
                                 <span id="tutorial-to-quiz-label">Begin Assessment</span>
                             </button>
-                            <button id="block-ai-quiz-btn" class="min-h-[44px] px-6 rounded-lg border border-gray-600 text-gray-300 hover:border-brand-600 hover:text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed">
-                                AI quiz on this block
+                            <button id="block-ai-quiz-btn" class="min-h-[44px] px-5 rounded-lg border border-gray-600 text-gray-300 hover:border-brand-600 hover:text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed">
+                                AI quiz
                             </button>
+                            <button id="next-block-btn" class="min-h-[44px] px-5 rounded-lg bg-brand-600 hover:bg-brand-900 text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ml-auto">Next</button>
                         </div>
                         <p id="ai-block-status" class="mt-3 text-xs text-gray-500" role="status"></p>
                     </div>
@@ -318,7 +343,7 @@
             </div>
 
             <!-- Settings View -->
-            <div id="settings-screen" class="hidden-view w-full max-w-3xl mx-auto space-y-6">
+            <div id="settings-screen" class="hidden-view w-full max-w-5xl mx-auto space-y-6">
 
                 <div class="bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8">
                     <h2 class="text-3xl text-white font-light mb-2">Settings</h2>
@@ -376,7 +401,7 @@
 
                     <div class="bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8">
                         <h3 class="text-xl text-white font-semibold mb-6">Study preferences</h3>
-                        <div class="grid gap-5 sm:grid-cols-2">
+                        <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
                             <div>
                                 <label for="set-ai-count" class="block text-sm font-semibold text-gray-200 mb-2">Questions per AI quiz</label>
                                 <input id="set-ai-count" type="number" min="3" max="10" class="w-full min-h-[44px] rounded-lg border border-gray-600 bg-gray-900 px-3 py-2 text-white placeholder-gray-500 focus:border-brand-600 focus:outline-none transition-colors">
@@ -397,33 +422,9 @@
                 </div>
             </div>
 
-            <!-- Quiz View -->
-            <!-- Quiz setup: PRACTICE and GENERATE QUIZ pick any mix of chapters and blocks first -->
-            <div id="quiz-setup-screen" class="hidden-view w-full max-w-3xl mx-auto">
-                <div class="bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8">
-                    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-                        <h2 id="setup-title" class="text-3xl text-white font-light">Practice</h2>
-                        <div class="flex gap-2">
-                            <button id="setup-all-btn" type="button" class="min-h-[44px] px-4 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white text-sm font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600">All</button>
-                            <button id="setup-none-btn" type="button" class="min-h-[44px] px-4 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white text-sm font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600">None</button>
-                        </div>
-                    </div>
-                    <!-- min-w-0: a fieldset will not shrink below its widest line by default, and long chapter titles scrolled the page sideways on phones -->
-                    <fieldset class="min-w-0">
-                        <legend class="sr-only">Chapters and blocks</legend>
-                        <div id="setup-tree" class="max-h-[55vh] overflow-y-auto overscroll-contain rounded-xl border border-gray-700 bg-gray-900/60 divide-y divide-gray-700/70"></div>
-                    </fieldset>
-                    <p id="setup-count" class="mt-4 text-sm text-gray-400" role="status" aria-live="polite"></p>
-                    <div class="mt-6 flex flex-wrap gap-3">
-                        <button id="setup-start-btn" type="button" class="min-h-[44px] px-8 rounded-lg bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider text-sm transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50 disabled:cursor-not-allowed">Start</button>
-                        <button id="setup-resume-btn" type="button" class="hidden-view min-h-[44px] px-4 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white text-sm font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 px-6">Resume</button>
-                    </div>
-                </div>
-            </div>
-
             <!-- pb-32 is not padding for looks: it reserves the pinned action bar's
                  height so the bar can never sit on top of the last option. -->
-            <div id="quiz-screen" class="hidden-view w-full max-w-3xl mx-auto pb-32">
+            <div id="quiz-screen" class="hidden-view w-full pb-32">
                 <div class="flex justify-between items-center mb-8 border-b border-gray-700 pb-4">
                     <div class="min-w-0">
                         <div class="text-xl text-white font-light">Question <span class="font-bold text-brand-600" id="question-number-badge">1</span></div>
@@ -438,10 +439,17 @@
                 
                 <div id="question-asset"></div>
                 <h3 id="question-text" class="text-xl text-white mb-8 leading-relaxed font-medium"></h3>
-                <div id="options-container" class="space-y-4 mb-8"></div>
+                <!-- Two options per row from lg up, one below it. A grid (not space-y) so the
+                     four answers use the width the question now has; grid's default
+                     align-items:stretch is what keeps a short answer level with a long
+                     one, so a row never reads ragged (user, 21-09-26). -->
+                <div id="options-container" class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8"></div>
                 
                 <!-- Pinned above the progress line (bottom-1.5 clears its 6px), aligned to
-                     the same max-w-3xl column as the question so it reads as part of it.
+                     the same column as the question so it reads as part of it: no width cap
+                     on either, and this bar's px-4 mirrors #content-section's px-4, so its
+                     content box lands exactly on #quiz-screen's box. Cap one without the
+                     other and Next visibly detaches from the answers.
                      The left label exists because pinning costs the reader the header's
                      "Question N", which scrolls away; the bar gives it back.
                      ⚠ It stays INSIDE #quiz-screen on purpose. position:fixed escapes the
@@ -449,7 +457,7 @@
                      Hoisted out, it would linger over the result screen and the reader.
                      Same trick #toc-backdrop already uses inside #tutorial-screen. -->
                 <div id="action-container" class="hidden-view glass-bar fixed inset-x-0 bottom-1.5 z-40">
-                    <div class="action-bar-inner mx-auto flex max-w-3xl items-center justify-between gap-4 px-4 py-3"
+                    <div class="action-bar-inner mx-auto flex w-full items-center justify-between gap-4 px-4 py-3"
                          style="padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));">
                         <p id="next-hint" class="min-w-0 truncate text-xs font-semibold uppercase tracking-widest text-gray-500"></p>
                         <button id="next-btn" class="min-h-[44px] shrink-0 bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider py-3 px-8 transition-colors rounded-lg">
@@ -460,7 +468,7 @@
             </div>
 
             <!-- Result Screen -->
-            <div id="result-screen" class="hidden-view w-full max-w-3xl mx-auto bg-gray-800 p-10 md:p-16 border border-gray-700 text-center shadow-xl rounded-2xl">
+            <div id="result-screen" class="hidden-view w-full max-w-5xl mx-auto bg-gray-800 p-8 sm:p-10 md:p-16 border border-gray-700 text-center shadow-xl rounded-2xl">
                 <h2 class="text-4xl font-light text-white mb-2">Assessment <span class="font-bold text-brand-600">Complete</span></h2>
                 <p class="text-gray-500 uppercase tracking-widest text-sm font-semibold mb-12">Final Results</p>
                 
@@ -497,6 +505,39 @@
             </div>
         </div>
     </div>
+
+    <!-- Quiz setup: PRACTICE and GENERATE QUIZ pick any mix of chapters and blocks first.
+         ⚠ It is a DIALOG, not a screen, and it lives at body level on purpose. As a child
+         of #content-section it could not open over the home page (a fixed element inside a
+         display:none parent does not render), and as a screen it REPLACED a quiz in
+         progress with no way back -- pressing New mid-run was a one-way door (user,
+         21-09-26). Opening it now hides nothing, so Cancel is simply "close". -->
+    <div id="quiz-setup-screen" class="hidden-view fixed inset-0 z-[60] overflow-y-auto">
+        <div id="setup-backdrop" class="fixed inset-0 bg-black/70"></div>
+        <div class="relative min-h-full flex items-start sm:items-center justify-center p-4">
+            <div role="dialog" aria-modal="true" aria-labelledby="setup-title" class="w-full max-w-3xl bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8 shadow-2xl">
+                    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+                        <h2 id="setup-title" class="text-3xl text-white font-light">Practice</h2>
+                        <div class="flex gap-2">
+                            <button id="setup-all-btn" type="button" class="min-h-[44px] px-4 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white text-sm font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600">All</button>
+                            <button id="setup-none-btn" type="button" class="min-h-[44px] px-4 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white text-sm font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600">None</button>
+                        </div>
+                    </div>
+                    <!-- min-w-0: a fieldset will not shrink below its widest line by default, and long chapter titles scrolled the page sideways on phones -->
+                    <fieldset class="min-w-0">
+                        <legend class="sr-only">Chapters and blocks</legend>
+                        <div id="setup-tree" class="max-h-[55vh] overflow-y-auto overscroll-contain rounded-xl border border-gray-700 bg-gray-900/60 divide-y divide-gray-700/70"></div>
+                    </fieldset>
+                    <p id="setup-count" class="mt-4 text-sm text-gray-400" role="status" aria-live="polite"></p>
+                    <div class="mt-6 flex flex-wrap items-center gap-3">
+                        <button id="setup-start-btn" type="button" class="min-h-[44px] px-8 rounded-lg bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider text-sm transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50 disabled:cursor-not-allowed">Start</button>
+                        <button id="setup-resume-btn" type="button" class="hidden-view min-h-[44px] px-6 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white text-sm font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600">Resume</button>
+                        <button id="setup-cancel-btn" type="button" class="min-h-[44px] px-6 rounded-lg text-sm font-semibold uppercase tracking-wider text-gray-400 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 ml-auto">Cancel</button>
+                    </div>
+                </div>
+        </div>
+    </div>
+
 
     <!-- Ask about this lesson: a tutor that reads what you are reading. -->
     <button id="ask-fab" type="button" aria-label="Ask about this lesson" aria-expanded="false" aria-controls="ask-panel"
