@@ -1,0 +1,28 @@
+{
+ "chrome": {
+  "logo": {
+   "found": true,
+   "display": "block",
+   "w": 32,
+   "h": 32
+  },
+  "upload": {
+   "found": true,
+   "display": "block",
+   "w": 24,
+   "h": 24
+  },
+  "burger": {
+   "found": true,
+   "display": "block",
+   "w": 24,
+   "h": 24
+  }
+ },
+ "outside": {
+  "found": true,
+  "visible": true,
+  "svg": 61.9,
+  "radicand": 61.1
+ }
+}
