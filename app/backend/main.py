@@ -22,24 +22,34 @@ that is Phases 3-4, and gates/gate-routes.mjs burns the list down.
    runs them in a threadpool, which is the behaviour we want. Phase 2 has no such handler;
    the rule is recorded here before the first one is written.
 
-⛔ /book/ AND /assets/<moduleId>/ WILL BE CUSTOM FileResponse ROUTES, NEVER StaticFiles
-   (plan C4). StaticFiles serves anything beneath its root, which would drop the
-   ASSET_FILE allowlist — import-report.json (233 KB) sits beside module.json in every
-   library package and must stay non-servable. FileResponse also streams instead of
-   reading a 5.4 MB asset into RAM.
+⛔ /book/ AND /assets/<moduleId>/ ARE CUSTOM FileResponse ROUTES, NEVER StaticFiles
+   (plan C4, landed in Phase 03 slice D). StaticFiles serves anything beneath its root,
+   which would drop the ASSET_FILE allowlist — import-report.json (233 KB of import
+   internals) sits beside module.json and must stay non-servable. FileResponse also streams
+   instead of reading a 5.4 MB asset into RAM.
+   ⚠ CORRECTED 21-09-26 (measured): import-report.json is NOT "in every library package".
+   It exists under openintro-statistics-2019-1045f2f5 and is ABSENT under geron-homl3, so
+   only the openintro module is a real gate for it.
+
+⛔ PHASE 03 IS READ-ONLY. There is no POST/PUT/PATCH/DELETE route in this file and no code
+   path here opens a file for writing. The exit gate asserts progress.json's sha256 is
+   unchanged across a full browse — before and after IN THE SAME RUN, never against a frozen
+   literal, because the user studies live on :8767 and that service writes the same file.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Query, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from settings import store_paths
+import content
+import store
+from settings import provider_config, store_paths
 
-PHASE = "phase-02-new-stack-empty"
+PHASE = "phase-03-read-only-parity"
 
 # The deployed tree is:
 #   /srv/foxai/edu-study/backend/main.py   <- this file
@@ -57,7 +67,7 @@ SPA_ASSETS = WEB_ROOT / "assets"
 app = FastAPI(
     title="FoxAI Edu Study",
     version="0.1.0",
-    description="Phase 02 skeleton: /api/health plus the built SPA. No ported routes yet.",
+    description="Phase 03: the five READ routes plus guarded file serving. No write route exists.",
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
@@ -89,6 +99,111 @@ def health() -> Response:
             "paths": store_paths(),
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 03 slice D — the FIVE READ routes of the frozen 15-route contract.
+# The remaining ten are POST and belong to Phase 04. Nothing here writes.
+# ---------------------------------------------------------------------------
+@app.get("/api/general")
+def api_general() -> Response:
+    """The three general settings. Defaults when the file is absent or corrupt."""
+    return JSONResponse(store.read_general_settings())
+
+
+@app.get("/api/modules")
+def api_modules() -> Response:
+    """The library list: legacy data/*.json books first, then packaged library/<id>/ books."""
+    return JSONResponse({"books": content.list_modules()})
+
+
+@app.get("/api/progress")
+def api_progress(module: str = Query(default="")) -> Response:
+    """Read one module's completed blocks. An unknown/invalid module falls back to the
+    legacy key, exactly as edu_server.py:module_key does — never a 400, so a stale
+    bookmark degrades to the default book instead of breaking the page."""
+    return JSONResponse(store.read_progress(store.module_key(module)))
+
+
+@app.get("/api/provider")
+def api_provider() -> Response:
+    """Provider READINESS — never the credential.
+
+    ⛔ This route returns BOOLEANS and a model name, never a key. On :8792 there is no
+    credential at all (the unit carries no EnvironmentFile=, gate R-SEP3/R-SEP4), so
+    provider_config() is None by construction and this reports not-ready. That is correct
+    for Phase 03: the read stack has no reason to reach a provider.
+    """
+    config = provider_config()
+    general = store.read_general_settings()
+    return JSONResponse({
+        "ready": config is not None,
+        "model": None,
+        "token_required": bool(general["require_access_token"]) and config is not None,
+        "admin_required": False,
+    })
+
+
+@app.get("/api/settings")
+def api_settings() -> Response:
+    """The settings page payload.
+
+    ⛔ THE API KEY IS NEVER RETURNED, not even partially — only whether one is set. That is
+    the legacy contract (edu_server.py:1016) and it is the property that actually matters on
+    an unauthenticated LAN service. :8792 holds no credential, so every _set flag is False.
+
+    ⚠ The legacy route gates on admin_ok(), which is OPEN unless EDU_ADMIN_TOKEN is set.
+    :8792 must not carry that token (R-SEP4), so replicating the gate here would either be
+    permanently open or require a credential this stack is forbidden to hold. The payload
+    carries no secret, so the route is open and says so.
+    """
+    return JSONResponse({
+        "api_url": "",
+        "model": "",
+        "json_mode": True,
+        "api_key_set": False,
+        "access_token_set": False,
+        "ready": provider_config() is not None,
+        "general": store.read_general_settings(),
+        "admin_required": False,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Guarded file serving. ⛔ REGISTERED BEFORE THE StaticFiles MOUNT — see the note below.
+# ---------------------------------------------------------------------------
+_NOT_FOUND_BOOK = JSONResponse({"error": "No such book file."}, status_code=404)
+_NOT_FOUND_ASSET = JSONResponse({"error": "No such asset."}, status_code=404)
+
+# A refusal and a genuine not-found return the SAME flat body on purpose. Distinguishing them
+# tells an unauthenticated caller which paths exist, which is the information disclosure this
+# whole guard exists to prevent.
+
+
+@app.get("/book/{rest:path}")
+def book_file(rest: str) -> Response:
+    """/book/<moduleId>/module.json and /book/<moduleId>/assets/<fig-N-N.png>. Nothing else.
+
+    ⚠ ``rest:path`` receives the URL-DECODED path, so %2e%2e%2f arrives here as ``..`` and is
+    rejected by MODULE_ID / the two-name allowlist. A raw ``../`` (curl --path-as-is) arrives
+    intact and is rejected the same way. Neither is normalised away before this function.
+    """
+    try:
+        target, ctype = content.resolve_book_file([p for p in rest.split("/") if p != ""])
+    except content.NotAFile:
+        return _NOT_FOUND_BOOK
+    return FileResponse(target, media_type=ctype, headers={"Cache-Control": "public, max-age=3600"})
+
+
+@app.get("/assets/{module_id}/{name}")
+def asset_file(module_id: str, name: str) -> Response:
+    """/assets/<moduleId>/<fig-10-3.png>. TWO segments — Vite's own one-segment build assets
+    fall through to the StaticFiles mount below, which is why the order is load-bearing."""
+    try:
+        target = content.resolve_asset_file(module_id, name)
+    except content.NotAFile:
+        return _NOT_FOUND_ASSET
+    return FileResponse(target, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
 
 
 # ---------------------------------------------------------------------------

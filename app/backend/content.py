@@ -1,0 +1,200 @@
+"""Book listing and GUARDED file resolution for the edu-study service (:8792).
+
+edu-replatform Phase 03, slice D.
+
+⛔ THE THREE CONTAINMENT RULES ARE NOT INTERCHANGEABLE (Phase 02 A4, measured).
+   Applying one rule uniformly breaks book assets or widens the /assets/ allowlist:
+
+     send_asset            edu_server.py:1042   PARENT EQUALITY   path.parent == ASSET_ROOT/<module>
+     packaged_module_path  edu_server.py:338    PARENT EQUALITY   candidate.parent == book
+     send_book             edu_server.py:1073   PREFIX            str(target).startswith(book + os.sep)
+
+   ``send_book`` MUST be a prefix check because /book/<id>/assets/<file> is TWO levels deep.
+   A parent-equality rule there would 404 every book figure.
+
+⛔ THESE ARE NOT StaticFiles. StaticFiles serves ANYTHING beneath its root, which drops the
+   ASSET_FILE allowlist — and ``import-report.json`` (233 KB of import internals) sits beside
+   module.json in a library package. :8792 is UNAUTHENTICATED and ufw rule #1 blanket-allows
+   192.168.100.0/24, so anything servable here is readable by the whole LAN.
+   ⚠ Measured 21-09-26: import-report.json is present under
+   ``openintro-statistics-2019-1045f2f5`` and ABSENT under ``geron-homl3``. Only the openintro
+   module is a real gate for it — a 404 under geron-homl3 is a not-found, not a refusal.
+   (This corrects main.py's and README's inherited "in every library package".)
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+from settings import store_path
+from store import (
+    ASSET_FILE,
+    DEFAULT_MODULE,
+    MODULE_ID,
+    MODULE_NAME,
+    clean_title,
+    last_read_at,
+    module_id_for,
+    mtime,
+    read_library_meta,
+)
+
+
+class NotAFile(Exception):
+    """Resolution refused. Carries no path detail — the caller returns a flat 404."""
+
+
+# --------------------------------------------------------------------------- resolution
+def resolve_book_file(segments: list[str]) -> tuple[Path, str]:
+    """/book/<moduleId>/module.json  or  /book/<moduleId>/assets/<fig-1-21.png>.
+
+    ``segments`` is everything after /book/. PREFIX containment (two levels deep).
+    """
+    if not segments or not MODULE_ID.match(segments[0]):
+        raise NotAFile
+    book = (store_path("EDU_LIBRARY_ROOT") / segments[0]).resolve()
+    if len(segments) == 2 and segments[1] == "module.json":
+        target, ctype = book / "module.json", "application/json; charset=utf-8"
+    elif len(segments) == 3 and segments[1] == "assets" and ASSET_FILE.match(segments[2]):
+        target, ctype = book / "assets" / segments[2], "image/png"
+    else:
+        # EVERYTHING ELSE under the book folder is refused by name, including
+        # import-report.json. This is the allowlist; there is no fallthrough.
+        raise NotAFile
+    target = target.resolve()
+    if not str(target).startswith(str(book) + os.sep) or not target.is_file():
+        raise NotAFile
+    return target, ctype
+
+
+def resolve_asset_file(module: str, name: str) -> Path:
+    """/assets/<moduleId>/<fig-10-3.png>. PARENT EQUALITY containment."""
+    if not MODULE_ID.match(module) or not ASSET_FILE.match(name):
+        raise NotAFile
+    root = store_path("EDU_ASSET_ROOT")
+    path = (root / module / name).resolve()
+    if path.parent != (root / module).resolve() or not path.is_file():
+        raise NotAFile
+    return path
+
+
+def packaged_module_path(name: str | None) -> Path | None:
+    """library/<moduleId>/module.json, or None. PARENT EQUALITY containment."""
+    if not name or not MODULE_ID.match(name):
+        return None
+    root = store_path("EDU_LIBRARY_ROOT")
+    candidate = (root / name / "module.json").resolve()
+    if candidate.parent != (root / name).resolve() or not candidate.is_file():
+        return None
+    return candidate
+
+
+def resolve_data_module(name: str | None) -> Path:
+    """A legacy book is a JSON module in <web>/data/. Fixtures are not books."""
+    from main import WEB_ROOT  # local import: WEB_ROOT is main's layout fact, not a store path
+
+    name = name or DEFAULT_MODULE
+    data_dir = (WEB_ROOT / "data").resolve()
+    path = (data_dir / name).resolve()
+    if (
+        not MODULE_NAME.fullmatch(name)
+        or name.startswith("test_")
+        or path.parent != data_dir
+        or not path.is_file()
+    ):
+        raise NotAFile
+    return path
+
+
+# --------------------------------------------------------------------------- listing
+def _decorate(entry: dict[str, Any], source: Path, titles: dict[str, Any]) -> dict[str, Any]:
+    override = clean_title(titles.get(entry["file"]))
+    if override:
+        entry["title"] = override
+        entry["renamed"] = True
+    entry["addedAt"] = mtime(source)
+    entry["lastReadAt"] = last_read_at(entry["moduleId"])
+    return entry
+
+
+def _shape(data: dict[str, Any]) -> tuple[dict[str, Any], list[Any]] | None:
+    tutorial = data.get("tutorialData")
+    sections = tutorial.get("sections") if isinstance(tutorial, dict) else None
+    if not isinstance(sections, list) or not isinstance(data.get("quizData"), list):
+        return None
+    return tutorial, sections
+
+
+def list_packaged_books() -> list[dict[str, Any]]:
+    """Books in library/<moduleId>/. ``base`` tells the page where this book's own assets
+    live, so its ``src`` values stay relative to the BOOK rather than to us."""
+    out: list[dict[str, Any]] = []
+    titles = read_library_meta()["titles"]
+    root = store_path("EDU_LIBRARY_ROOT")
+    if not root.is_dir():
+        return out
+    for folder in sorted(p for p in root.iterdir() if p.is_dir()):
+        if not MODULE_ID.match(folder.name):
+            continue
+        try:
+            data = json.loads((folder / "module.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        shaped = _shape(data) if isinstance(data, dict) else None
+        if shaped is None:
+            continue
+        tutorial, sections = shaped
+        out.append(_decorate({
+            # The folder name doubles as ``file`` so every existing library code path
+            # (progress key, card click, "is this the open book") keeps working unchanged;
+            # ``book`` is what marks it packaged.
+            "file": folder.name,
+            "book": folder.name,
+            "base": f"book/{folder.name}/",
+            "moduleId": module_id_for(data),
+            "title": str(tutorial.get("title") or folder.name),
+            "chapters": len(sections),
+            "lessons": sum(len(s.get("items") or []) for s in sections if isinstance(s, dict)),
+            "questions": len(data["quizData"]),
+            "default": folder.name == DEFAULT_MODULE,
+        }, folder, titles))
+    return out
+
+
+def list_data_books() -> list[dict[str, Any]]:
+    """The legacy data/*.json shape. Still serves; it is not the packaged shape."""
+    from main import WEB_ROOT
+
+    out: list[dict[str, Any]] = []
+    titles = read_library_meta()["titles"]
+    data_dir = WEB_ROOT / "data"
+    if not data_dir.is_dir():
+        return out
+    for path in sorted(data_dir.glob("*.json")):
+        if path.name.startswith("test_"):
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        shaped = _shape(data) if isinstance(data, dict) else None
+        if shaped is None:
+            continue
+        tutorial, sections = shaped
+        out.append(_decorate({
+            "file": path.name,
+            "moduleId": module_id_for(data),
+            "title": str(tutorial.get("title") or path.stem),
+            "chapters": len(sections),
+            "lessons": sum(len(s.get("items") or []) for s in sections if isinstance(s, dict)),
+            "questions": len(data["quizData"]),
+            "default": path.name == DEFAULT_MODULE,
+        }, path, titles))
+    return out
+
+
+def list_modules() -> list[dict[str, Any]]:
+    return list_data_books() + list_packaged_books()

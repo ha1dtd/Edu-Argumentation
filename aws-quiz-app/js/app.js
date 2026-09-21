@@ -1589,6 +1589,58 @@ function assetPanel(block, compact) {
     return panel;
 }
 
+// ⛔⛔ THE TAILWIND PURGE LANDMINE — edu-replatform Phase 03 slice C (ruling R8).
+//
+// This used to be built from BOOK DATA at line ~1664:
+//     `text-lg font-semibold text-${theme} mb-3`        theme = chapter.themeColor
+//
+// The Tailwind CDN generated CSS at RUNTIME by watching the DOM, so an assembled class name
+// worked. A REAL BUILD PURGES BY SCANNING SOURCE: it keeps only classes whose COMPLETE NAME
+// appears literally in a scanned file. No literal "text-indigo-500" existed anywhere, so the
+// build emitted none of them and EVERY themed chapter-panel title rendered colourless. The
+// CDN hid this for the app's whole life.
+//
+// ⛔ DO NOT "FIX" THIS WITH A tailwind.config.js `safelist`. A safelist makes the build green
+//    while LEAVING THE CONSTRUCTION IN PLACE, so the next themeColor a book introduces loses
+//    its colour silently all over again. The whole point of the lookup is that an unknown
+//    value is VISIBLE.
+//
+// ⛔ EVERY VALUE HERE IS A COMPLETE CLASS STRING. Never build one by concatenation, never
+//    interpolate into one — the moment you do, the purge stops seeing it.
+//
+// The 9 keys are MEASURED, not guessed (21-09-26, both production books):
+//   geron-homl3  indigo-500 x3, emerald-500 x3, purple-500 x2, teal-500 x3,
+//                amber-500 x3, sky-500 x2, rose-500 x2, violet-500 x1
+//   openintro    indigo-500 x2, emerald-500 x2, sky-500 x1, amber-500 x1,
+//                rose-500 x1, violet-500 x1, teal-500 x1
+//   plus brand-600, which is the `chapter.themeColor || 'brand-600'` default (app.js ~2182).
+const THEME_TITLE_CLASS = {
+    'indigo-500':  'text-lg font-semibold text-indigo-500 mb-3',
+    'emerald-500': 'text-lg font-semibold text-emerald-500 mb-3',
+    'purple-500':  'text-lg font-semibold text-purple-500 mb-3',
+    'teal-500':    'text-lg font-semibold text-teal-500 mb-3',
+    'amber-500':   'text-lg font-semibold text-amber-500 mb-3',
+    'sky-500':     'text-lg font-semibold text-sky-500 mb-3',
+    'rose-500':    'text-lg font-semibold text-rose-500 mb-3',
+    'violet-500':  'text-lg font-semibold text-violet-500 mb-3',
+    // blue-500 is carried ONLY by the legacy data/Deployment-MLOps.json book, which IS deployed
+    // (deploy.sh excludes only data/geron_hands_on_ml_ch01_ch09.json) and IS live on nn. It is a
+    // real Tailwind colour, so it rendered blue under the CDN and a build WOULD have purged it.
+    // Measured 21-09-26 by browsing all six books, not by reading the two packaged ones.
+    'blue-500':    'text-lg font-semibold text-blue-500 mb-3',
+    'brand-600':   'text-lg font-semibold text-brand-600 mb-3',
+};
+// ⛔ `aws-indigo` (data/Deployment-MLOps.json, one chapter) is DELIBERATELY ABSENT.
+// It is not a Tailwind colour and was never in the brand palette, so `text-aws-indigo` produced
+// NO RULE under the CDN either — that title has been colourless for the app's whole life.
+// Inventing a hex for it would be guessing at a designer's intent. It therefore takes the
+// brand-600 fallback and STAMPS data-theme-fallback="aws-indigo", which turns a silent
+// pre-existing data defect into a visible one. That is the improvement, not a regression.
+// An unknown themeColor renders in the brand colour AND stamps data-theme-fallback="<value>"
+// on the element, so a gate can find it by selector instead of a person noticing a wrong
+// shade. Exit gate: a full browse of BOTH books yields ZERO [data-theme-fallback] elements.
+const THEME_TITLE_CLASS_FALLBACK = THEME_TITLE_CLASS['brand-600'];
+
 function appendTheoryContent(parent, block, theme) {
     if (!block || typeof block !== 'object') return;
     if (block.type === 'code_cells') {
@@ -1659,9 +1711,13 @@ function appendTheoryContent(parent, block, theme) {
         : 'my-6 rounded-xl border border-gray-700 bg-gray-900/60 p-5';
     if (block.title) {
         const title = document.createElement('h3');
-        title.className = block.type === 'callout'
-            ? 'text-lg font-semibold text-brand-400 mb-3'
-            : `text-lg font-semibold text-${theme} mb-3`;
+        if (block.type === 'callout') {
+            title.className = 'text-lg font-semibold text-brand-400 mb-3';
+        } else {
+            // Lookup, never interpolation — see THEME_TITLE_CLASS above.
+            title.className = THEME_TITLE_CLASS[theme] || THEME_TITLE_CLASS_FALLBACK;
+            if (!THEME_TITLE_CLASS[theme]) title.dataset.themeFallback = String(theme);
+        }
         title.textContent = block.title;
         panel.appendChild(title);
     }

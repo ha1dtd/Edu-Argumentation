@@ -40,6 +40,7 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -51,6 +52,21 @@ const FASTAPI_APP = join(REPO_ROOT, 'app', 'backend', 'main.py');
 
 const EXPECTED_GET = 5;
 const EXPECTED_POST = 10;
+
+// ---------------------------------------------------------------------------
+// E0e / Phase-02 FAIL F-4 — THE NAME LIST, NOT ONLY THE COUNTS.
+//
+// The count self-check above cannot see a RENAME. Rename /api/run/stop to /api/run/halt in
+// the (frozen) legacy file and the extractor still finds 5 GET + 10 POST, the burn-down still
+// prints "15 missing · 0 extra", and the gate reads as a faithfully tracked contract. That is
+// harmless at 15-missing and LOAD-BEARING the moment Phase 3 starts driving the number down:
+// a ported route could be matched against a name the legacy server never had.
+//
+// So the identity of the 15 is pinned too. sha256 over the sorted "METHOD /path" lines,
+// newline-joined with a trailing newline. The legacy server is FROZEN and will never change
+// again, so this constant can only move if the PARSE broke or someone edited a frozen file —
+// both of which are the failure this pin exists to surface.
+const EXPECTED_LIST_SHA = 'bdd9eef35ff1d3a8b6f327513b22333fd4a348f8f40a08596636703ac7bcfdbc';
 
 // Routes the new app is allowed to have that the legacy app never had.
 const ALLOWED_EXTRA = new Set(['GET /api/health']);
@@ -128,6 +144,22 @@ if (legacy.get.length !== EXPECTED_GET || legacy.post.length !== EXPECTED_POST) 
   process.exit(1);
 }
 console.log(`EXTRACTOR OK: ${legacy.get.length} GET + ${legacy.post.length} POST`);
+
+const legacyList = [
+  ...legacy.get.map((r) => `GET ${r}`),
+  ...legacy.post.map((r) => `POST ${r}`),
+].sort();
+const legacyListSha = createHash('sha256').update(legacyList.join('\n') + '\n').digest('hex');
+if (legacyListSha !== EXPECTED_LIST_SHA) {
+  console.error('EXTRACTOR FAILED: the route NAME LIST moved (a rename keeps the counts intact).');
+  console.error(`  expected sha256 ${EXPECTED_LIST_SHA}`);
+  console.error(`  actual   sha256 ${legacyListSha}`);
+  console.error('  list:');
+  for (const r of legacyList) console.error(`    ${r}`);
+  console.error('  The legacy server is FROZEN. Fix the parse or revert the edit; do NOT re-pin.');
+  process.exit(1);
+}
+console.log(`NAME LIST OK: sha256 ${legacyListSha} over ${legacyList.length} sorted routes`);
 
 const expected = new Set([
   ...legacy.get.map((r) => `GET ${r}`),

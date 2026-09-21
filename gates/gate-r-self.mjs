@@ -1,0 +1,132 @@
+#!/usr/bin/env node
+/**
+ * gate-r-self.mjs — THE R- SUITE'S OWN INVARIANT CHECK, and the home of the frozen
+ * DOM-contract sha256 pin.
+ *
+ * edu-replatform Phase 03, checklist E0a / E0b. Runs LAST — it parses the transcripts the
+ * R- suites above already produced (R5), so it launches no browser and re-runs nothing.
+ *
+ * ⛔⛔ WHY THE PIN BELOW IS THE MOST IMPORTANT LINE IN THE PHASE.
+ *
+ *   gates/selector-contract.json is GENERATED FROM THE GATE SOURCES by
+ *   gen-selector-contract.mjs. A React suite that queries fewer things therefore regenerates
+ *   a SMALLER contract and then passes against it — green, and meaningless. That is the
+ *   A-G17 failure in a new costume (A-G17 passed 21/21 against an unfixed file).
+ *
+ *   So the React gates read selector-contract.FROZEN.json, never the regenerated file, and
+ *   this pin is what stops the frozen copy being quietly re-frozen smaller. Regeneration is
+ *   a Phase 04 decision, not a Phase 03 convenience.
+ *
+ * ⛔ THE PIN WAS TAKEN **AFTER** knownAbsent WAS ADDED, never before. knownAbsent does NOT
+ *   exist in selector-contract.json; E1c assertions 2 and 3 read it, and freezing the file
+ *   unchanged would leave them red forever — or, worse, "fixed" with `?? []`, which makes
+ *   assertion 3 ("each entry genuinely does not resolve") VACUOUS ON AN EMPTY LIST.
+ *   ⛔ `?? []` IS BANNED. RS-KNOWNABSENT asserts the list is non-empty and is EXACTLY
+ *   ['#home-screen'], so a second phantom cannot be added to dodge a red gate.
+ *
+ * ⛔ #home-screen IS A GENUINE PHANTOM, NOT A MISSING ELEMENT. Measured 21-09-26: it is in
+ *   the contract's `ids`; it is queried by b15probe.mjs:12; and
+ *   `grep -c home-screen aws-quiz-app/index.html` = 0. DO NOT CREATE AN ELEMENT TO SATISFY A
+ *   TYPO — if #home-screen ever turns out to be load-bearing that is a ruling, not an edit.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+
+const DIR = path.dirname(fileURLToPath(import.meta.url));
+const OUT = process.env.R_OUT_DIR || '/var/tmp/p3-react';
+const FROZEN = path.join(DIR, 'selector-contract.frozen.json');
+
+// Taken 21-09-26 with `sha256sum selector-contract.frozen.json`, AFTER knownAbsent was added.
+const FROZEN_SHA = '5e54f0d033b8f889629ab7bc9da05b163d6b1b4299fbe5c933c632cc98df83c7';
+
+const results = [];
+const check = (id, pass, detail) => {
+  results.push({ id, pass });
+  console.log(`${pass ? 'PASS' : 'FAIL'}  ${id}  ${detail}`);
+};
+
+// TWO trailing spaces. The one-space form also matches the "FAILED: ..." summary line and
+// over-counts a red run.
+const countLines = (f) => {
+  const p = path.join(OUT, f);
+  if (!fs.existsSync(p)) return -1;
+  return fs.readFileSync(p, 'utf8').split('\n').filter((l) => /^(PASS|FAIL)  /.test(l)).length;
+};
+
+/* ---- RS-COUNT: each R- suite emits exactly the number of result lines it claims ---- */
+for (const [tag, file, want] of [['gate-r-sep.mjs', 'rsep.txt', 6], ['gate-r-read.mjs', 'rread.txt', 12]]) {
+  const n = countLines(file);
+  check(`RS-COUNT ${tag} emits exactly ${want} result lines`, n === want,
+    n < 0 ? `transcript ${file} MISSING — run via run-gates-react.sh` : `counted=${n} expected=${want}`);
+}
+
+/* ---- RS-FROZEN-SHA: the frozen DOM contract is byte-identical to what was pinned ---- */
+const frozenExists = fs.existsSync(FROZEN);
+const frozenSha = frozenExists
+  ? createHash('sha256').update(fs.readFileSync(FROZEN)).digest('hex')
+  : 'ABSENT';
+check('RS-FROZEN-SHA selector-contract.frozen.json matches the pin (it cannot be re-frozen smaller)',
+  frozenSha === FROZEN_SHA,
+  `got=${frozenSha} pinned=${FROZEN_SHA}`);
+
+/* ---- RS-KNOWNABSENT: exactly one named phantom, and the list is NOT empty ---- */
+let ka = null;
+let selectors = null;
+try {
+  const c = JSON.parse(fs.readFileSync(FROZEN, 'utf8'));
+  ka = c.knownAbsent;
+  selectors = c.counts?.selectors;
+} catch { /* leave null */ }
+check('RS-KNOWNABSENT knownAbsent is EXACTLY ["#home-screen"] and non-empty (`?? []` is banned)',
+  Array.isArray(ka) && ka.length === 1 && ka[0] === '#home-screen' && selectors === 47,
+  `knownAbsent=${JSON.stringify(ka)} counts.selectors=${selectors} (an empty list makes "each entry genuinely does not resolve" vacuous)`);
+
+/* ---- RS-FROZEN-SOURCE: no R- gate may read the REGENERATED contract ---- */
+// A gate that reads selector-contract.json passes against whatever the current gate sources
+// happen to query — which is the whole failure this freeze exists to prevent.
+// Scanned LINE-WISE with comment lines skipped. A file-wide regex flags this very file,
+// whose prose necessarily names the regenerated contract in order to ban it — a gate that
+// cannot describe what it forbids is a gate nobody will keep.
+const rFiles = fs.readdirSync(DIR).filter((f) => /^gate-r-.*\.mjs$/.test(f));
+const offenders = [];
+for (const f of rFiles) {
+  const lines = fs.readFileSync(path.join(DIR, f), 'utf8').split('\n');
+  lines.forEach((l, i) => {
+    const t = l.trim();
+    if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')) return;   // prose
+    const code = l.replace(/selector-contract\.frozen\.json/g, '');
+    if (/selector-contract\.json/.test(code)) offenders.push(`${f}:${i + 1}`);
+  });
+}
+// Assembled from fragments for the same reason gate-self.mjs assembles its ban list: a gate
+// that forbids a string cannot contain that string, or it matches ITSELF.
+const GENERATED = 'selector-contract' + '.json';
+check(`RS-FROZEN-SOURCE no gate-r-*.mjs reads the REGENERATED ${GENERATED}`,
+  offenders.length === 0,
+  offenders.length ? `offenders (non-comment lines)=${offenders.join(' ')}` : `scanned ${rFiles.length} R- gate file(s): ${rFiles.join(' ')}`);
+
+/* ---- RS-PORTABLE: the ban-list, scoped, same rule as gate-self.mjs ---- */
+// /var/tmp/edu-smoke and /var/tmp/p3-* are REQUIRED by the runners and are real disk on both
+// of the user's machines, so a blanket "no absolute paths" ban would false-red on correct code.
+// The pattern is assembled from fragments so this line cannot match ITSELF.
+const EXEMPT = 'self-ban' + '-exempt';
+const BAN = new RegExp(['/home/' + 'daniel', '/Use' + 'rs/', '/var/tmp/' + 'edu-verify',
+                        'chromium' + '-12[0-9][0-9]'].join('|'));
+const scan = [];
+for (const f of [...rFiles, 'run-gates-react.sh', 'selector-contract.frozen.json']) {
+  const p = path.join(DIR, f);
+  if (!fs.existsSync(p)) continue;
+  fs.readFileSync(p, 'utf8').split('\n').forEach((l, i) => {
+    if (BAN.test(l) && !l.includes(EXEMPT)) scan.push(`${f}:${i + 1}`);
+  });
+}
+check('RS-PORTABLE no machine-local path or pinned chromium revision in the R- suite',
+  scan.length === 0,
+  scan.length ? `hits=${scan.join(' ')}` : 'ban-list clean: home dir, Mac home, edu-verify, pinned chromium rev');
+
+console.log(`\n${results.filter((r) => r.pass).length}/${results.length} passed`);
+const failed = results.filter((r) => !r.pass);
+if (failed.length) console.log('FAILED: ' + failed.map((r) => r.id).join(', '));
+if (failed.length) process.exit(1);
