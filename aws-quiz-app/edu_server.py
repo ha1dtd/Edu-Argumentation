@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import math
 import os
@@ -62,6 +63,68 @@ _BOOK_CHAPTERS: dict[str, list[tuple[int, int, int]]] = {}
 ASK_SAME_CHAPTER_BOOST = 2.5
 ASK_NEAR_CHAPTER_BOOST = 1.4
 ASK_COMMON_TERM_SHARE = 0.12
+
+# --- The tutor can SEE the page's visuals (22-09-26) -------------------------
+# Until today the tutor was blind to every figure and equation in the lesson it
+# was tutoring. source_for_block() builds the lesson text from `content`, callout
+# `items` and code `cells` ONLY, so a `figure` or `equation` block was dropped
+# whole -- the model never even saw the caption. Asked "what does Figure 2-9
+# show?" it had nothing at all and answered from general knowledge.
+#
+# Two layers, cheapest first:
+#
+# 1. ALWAYS -- put what the package already knows into the context: each visual's
+#    title, caption, alt, `description` (written by the 22-09-26 backfill; still
+#    absent from every figure on the box at the time of writing and handled as
+#    absent), and for an equation its LaTeX. 88 of the 90 equations carry
+#    `latex`, which the model reads natively, so MATH IS LARGELY SOLVED WITHOUT
+#    VISION and costs a few hundred characters.
+# 2. ONLY when the question is about a picture that LAYER 1 CANNOT ANSWER --
+#    attach the actual PNG. See ask_wants_image() for the trigger and why it
+#    cannot fire on an ordinary text question.
+#
+# A STORED DESCRIPTION BEATS A FRESH READING (user ruling, 22-09-26). A
+# description is written once, checked, and identical on every ask; a vision
+# reply is a reading, and two readings of one crop disagree -- measured on
+# fig-2-10, where one run got the ordering exactly right and another called two
+# bars "roughly symmetrical" when the ground truth is 6,570 against 3,620. So
+# once a figure carries a usable description the picture is NOT sent, whatever
+# the question. That branch shipped on 22-09-26 and could not fire until the
+# backfill landed; see ask_wants_image() condition 3.
+#
+# Scope is the CURRENT BLOCK, never the chapter: this tutor's value is being
+# cheap enough to use constantly, and a whole chapter's visual metadata on every
+# ask would be several KB of prompt the reader did not ask for.
+ASK_VISUAL_CHARS = 2_200          # hard cap on the whole "VISUALS ON THIS PAGE" section
+ASK_VISUAL_EXPLAIN_CHARS = 400    # per-equation slice of the book's own written explanation
+ASK_VISION_MAX_IMAGES = 2
+ASK_VISION_MAX_BYTES = 1_200_000  # a crop this big is a page scan, not a figure; skip it
+# A vision ask is a much bigger call than a text ask, so it is NOT free against
+# the ask budget -- it costs this many slots out of ASK_RATE_LIMIT_REQUESTS. If
+# the bucket lacks that much headroom the ask still answers, from text only:
+# degrading the answer beats a 429 mid-lesson, and it can never drain the budget
+# silently because the reply and the ask log both carry vision=true/false.
+ASK_VISION_COST = 3
+
+# The trigger, in two halves that must BOTH match.
+# a) an explicit book reference -- "Figure 2-9", "fig. 2.9"
+ASK_FIGURE_REF = re.compile(r"\b(?:figure|fig\.?)\s*(\d{1,3})[-.](\d{1,3})\b", re.I)
+# b) a DEICTIC reference -- "the figure", "this chart", "that histogram". The
+#    determiner is required and it is what makes the trigger tight: "how do I
+#    plot a histogram in pandas?" is a code question and does NOT match, while
+#    "what does the histogram show?" does. A bare visual noun never fires.
+ASK_VISUAL_DEICTIC = re.compile(
+    r"\b(?:the|this|that|these|those|its|it's)\s+(?:"
+    r"figure|chart|graph|diagram|plot|histogram|image|picture|screenshot|"
+    r"axis|axes|legend|curve|scatter\s?plot|bar\s?chart|y-axis|x-axis)\b", re.I)
+# c) the "layer 1 cannot answer this" half is NO LONGER A VERB TEST. It used to
+#    be a "show/see/read/where" regex, which meant a figure WITH a description
+#    still escalated for "what does the y-axis read?". Retired 22-09-26 by user
+#    ruling (above): the question no longer decides, the presence of a usable
+#    stored description does. Conditions (a) and (b) are untouched.
+# A description shorter than this is a stub ("Figure", "A chart") and is not
+# allowed to suppress the picture.
+ASK_DESCRIPTION_MIN_CHARS = 40
 
 # --- End-of-chapter exercises (19-09-26) -------------------------------------
 # Every chapter ends with the book's own exercises. Until now the reader could
@@ -123,6 +186,17 @@ ASSET_ROOT = Path(os.getenv("EDU_ASSET_ROOT", "/home/ubuntu/foxai-data/edu-argum
 # JSON lived in data/ (inside the deploy tree), the crops in assets/<id>/, and
 # a human copied between them. Zip one of these folders and it ships.
 LIBRARY_ROOT = Path(os.getenv("EDU_LIBRARY_ROOT", "/home/ubuntu/foxai-data/edu-argumentation/library"))
+# Every question the reader asks the tutor, one JSON line each. His questions are the
+# best signal of WHICH LESSON FAILED -- asked in the moment, at the exact block that
+# broke down -- and until 22-09-26 they were not recorded anywhere, so "which lessons
+# are bad" was an audit guess instead of a ranked list written by real use.
+# Beside the importer's own job logs. LOCAL ONLY, never committed: it is his study data.
+ASK_LOG_PATH = Path(os.getenv("EDU_ASK_LOG_PATH", "/home/ubuntu/foxai-data/edu-argumentation/logs/ask.jsonl"))
+# The asset id as module.json stores it, with no extension -- figure_bytes()
+# builds BOTH crop file names from it (see there). Kept separate from
+# ASSET_FILE, which guards what the BROWSER may fetch: the model crop is for the
+# provider, not a route the page can ask for.
+ASSET_ID = re.compile(r"^(fig|eq)-\d{1,3}[-.]\d{1,3}$")
 ASSET_FILE = re.compile(r"^(fig|eq)-\d{1,3}[-.]\d{1,3}\.png$")  # both separators: a book numbers figures its own way -- "Figure 1-1." (O'Reilly/Geron) vs "Figure 1.1:" (OpenIntro). Digits stay REQUIRED on both sides, so ".." can never match; do not narrow this back to a hyphen.
 
 GENERAL_DEFAULTS: dict[str, Any] = {
@@ -218,6 +292,42 @@ def reset_progress(module: str) -> dict[str, Any]:
     store["modules"].pop(module, None)
     _write_store(store)
     return read_progress(module)
+
+
+def log_ask(book: str, chapter: int, block: int, term: str, question: str,
+            reply: dict[str, Any]) -> None:
+    """Append one answered question to the ask log. Best-effort and silent.
+
+    Called AFTER the reply has already been sent, and every error is swallowed,
+    so a full disk or a bad permission can never cost the reader an answer. The
+    log is a study-quality signal, not part of the tutor's contract.
+    """
+    try:
+        entry = {
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "module": book,
+            "chapter": chapter,
+            "block": block,
+            "lesson": f"ch{chapter:02d}-b{block:02d}",
+            "term": term,
+            "question": question,
+            # "lesson" | "book" | "general" -- the label the tutor already puts on
+            # its own answer. A run of "general" on one block means that block did
+            # not contain what the reader needed.
+            "source": reply.get("source"),
+            # 22-09-26: did this ask escalate to the vision path, and on which
+            # figure. A vision ask costs ASK_VISION_COST slots of the ask budget,
+            # so it is recorded rather than spent quietly.
+            "vision": bool(reply.get("vision")),
+            "figures": reply.get("figures") or [],
+            # why the vision path did or did not run: "none" | "described" | "vision"
+            "visionReason": reply.get("visionReason") or "none",
+        }
+        ASK_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with ASK_LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except (OSError, TypeError, ValueError):
+        pass
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -803,6 +913,208 @@ def book_search(module_id: str, query: str, limit: int = ASK_BOOK_PAGES, chapter
     return out
 
 
+def block_visuals(module: dict[str, Any], chapter: int, block: int) -> list[dict[str, Any]]:
+    """Every figure and equation printed in ONE lesson, in the order it is read.
+
+    Read straight off the module -- these are the book's own blocks, so the asset
+    name is the package's, never the client's."""
+    try:
+        item = module["tutorialData"]["sections"][chapter - 1]["items"][block - 1]
+    except (KeyError, IndexError, TypeError):
+        return []
+    if not isinstance(item, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for content in item.get("blocks", []) or []:
+        if isinstance(content, dict) and content.get("type") in ("figure", "equation"):
+            out.append(content)
+    return out
+
+
+def visual_context(visuals: list[dict[str, Any]]) -> str:
+    """LAYER 1. What the package already knows about the page's visuals, as text.
+
+    Costs a few hundred characters and is sent on EVERY ask, because it is the
+    difference between "I cannot see the figure" and "Figure 2-9 is a histogram
+    of income categories" -- and, for an equation, between guessing and reading
+    the actual LaTeX. Capped, and scoped to the open lesson only.
+    """
+    if not visuals:
+        return ""
+    lines: list[str] = []
+    budget = ASK_VISUAL_CHARS
+    for visual in visuals:
+        title = str(visual.get("title") or "").strip() or ("Equation" if visual.get("type") == "equation" else "Figure")
+        caption = str(visual.get("caption") or "").strip()
+        entry = [f"[{title}] {caption}" if caption else f"[{title}]"]
+        alt = str(visual.get("alt") or "").strip()
+        # alt is usually just "<title>: <caption>" -- only worth sending when it
+        # actually carries something the caption does not.
+        if alt and alt not in (f"{title}: {caption}", caption, title):
+            entry.append(f"  alt text: {alt}")
+        # Written by a sibling backfill; absent from every figure today, which is
+        # exactly why the vision layer below exists.
+        description = str(visual.get("description") or "").strip()
+        if description:
+            entry.append(f"  what it shows: {description}")
+        if visual.get("type") == "equation":
+            latex = str(visual.get("latex") or "").strip()
+            if latex:
+                entry.append(f"  LaTeX (read this, it is the equation itself): {latex}")
+            explain = str(visual.get("explain") or "").strip()
+            if explain:
+                explain = explain[:ASK_VISUAL_EXPLAIN_CHARS].rstrip()
+                entry.append(f"  the lesson's own note on it: {explain}")
+        elif not description:
+            entry.append("  (no written description of this picture is stored)")
+        text = "\n".join(entry)
+        if len(text) + 1 > budget:
+            break
+        budget -= len(text) + 1
+        lines.append(text)
+    if not lines:
+        return ""
+    return ("VISUALS PRINTED IN THIS LESSON\nThese are the book's own figures and equations, in the order they "
+            "appear on the page the reader is looking at. Refer to one by its title, e.g. \"Figure 2-9\". "
+            "Unless an image is attached below you have NOT seen the picture itself -- say so plainly rather "
+            "than inventing what is in it.\n\n" + "\n".join(lines))
+
+
+def has_description(visual: dict[str, Any]) -> bool:
+    """Does this visual carry a written description good enough to answer from?
+
+    Length is the whole test on purpose. The backfill writes a grounded
+    paragraph; anything under ASK_DESCRIPTION_MIN_CHARS is a stub or a repeated
+    title, and letting a stub suppress the picture would make the tutor answer
+    a figure question out of nothing at all.
+    """
+    return len(str(visual.get("description") or "").strip()) >= ASK_DESCRIPTION_MIN_CHARS
+
+
+def ask_wants_image(question: str, visuals: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    """LAYER 2 TRIGGER. Which of this lesson's figures, if any, must actually be SEEN.
+
+    Returns (figures to attach, why). The reason is "none" when the question was
+    never about a picture on this page, "described" when it WAS but layer 1's
+    stored description already answers it, and "vision" when a crop must go out.
+    Only the reason tells "described" apart from "none", and the reader is shown
+    the difference -- see ask_notice().
+
+    Returns [] for an ordinary question -- and that is the point. Three conditions
+    must ALL hold, so a text question cannot reach the expensive path:
+
+      1. THIS LESSON CONTAINS A FIGURE. An equation is excluded on purpose: 88 of
+         90 carry LaTeX, which layer 1 already sends, so sending a picture of one
+         buys nothing. A lesson with no figure can never escalate, whatever is asked.
+      2. THE QUESTION POINTS AT A PICTURE -- either a book reference ("Figure 2-9")
+         or a DETERMINER plus a visual noun ("the chart", "this histogram"). The
+         determiner is the tight part: "how do I plot a histogram in pandas?" has
+         the noun but no determiner pointing at the page, so it does not match.
+         A bare visual noun never fires.
+      3. LAYER 1 CANNOT ANSWER IT -- the target figure has NO usable stored
+         `description`. A figure that carries one is answered from that text and
+         the picture is never sent, whatever the question is (user ruling,
+         22-09-26: a written description is steady, a vision reading is not).
+         Before the backfill every figure was description-less, so this condition
+         was always true and every figure escalated; that is the behaviour this
+         replaces, not a behaviour it breaks.
+    """
+    figures = [v for v in visuals if v.get("type") == "figure" and v.get("asset")]
+    if not figures:
+        return [], "none"                           # 1
+    named = ASK_FIGURE_REF.search(question)
+    if not (named or ASK_VISUAL_DEICTIC.search(question)):
+        return [], "none"                           # 2
+    targets: list[dict[str, Any]] = []
+    if named:
+        wanted = {f"fig-{named.group(1)}-{named.group(2)}", f"fig-{named.group(1)}.{named.group(2)}"}
+        label = f"{named.group(1)}-{named.group(2)}"
+        for figure in figures:
+            title = str(figure.get("title") or "")
+            if str(figure.get("asset") or "") in wanted or label in title.replace(".", "-"):
+                targets.append(figure)
+        # A number that is NOT on this page. Measured 22-09-26: asking "what does
+        # Figure 2-9 show?" while ch02-b09 was open attached Figures 2-16 and 2-14
+        # and the tutor answered off the wrong pictures. A named figure we do not
+        # have is a question the images on this page cannot answer, so send none
+        # and let it say so from text.
+        if not targets:
+            return [], "none"
+    # No number given: the reader is pointing at what is in front of them.
+    targets = targets or figures
+    # 3. Only the figures layer 1 is BLIND to. A figure whose description the
+    #    backfill wrote is answered from that description -- dropping it here is
+    #    what stops the expensive, variable vision call once the text is good
+    #    enough. If every target has one, nothing is sent at all.
+    blind = [t for t in targets if not has_description(t)]
+    if not blind:
+        return [], "described"                      # 3
+    return blind[:ASK_VISION_MAX_IMAGES], "vision"
+
+
+def ask_notice(reason: str, images: list[tuple[str, bytes]]) -> str:
+    """One line saying HOW the tutor got its answer, prepended to the reply.
+
+    WHY THIS IS IN THE ANSWER AND NOT A NEW FIELD. The reply already carries
+    `vision` and `figures`, and the page ignores both: js/app.js renders exactly
+    three things -- the SOURCE badge, its page number, and `answer`. That file is
+    frozen, so `answer` is the only server-controlled thing the reader ever sees.
+    A new key would be true, logged, and invisible.
+
+    WHAT THIS DOES NOT FIX. It cannot make the WAIT legible. The reply is one
+    JSON at the end of the call, so nothing the server writes can reach the
+    screen while the reader is waiting -- the grey "Reading the lesson..." line
+    is written by the page at submit time and never changes. Reading a figure
+    took 4.6-26.6 s measured 22-09-26 against 4.9 s for a text ask, and during
+    that gap the page says the same thing either way. Telling the two apart
+    while it happens needs a client change; this line is the honest half that
+    can be done from here, and it lands the moment the answer does.
+    """
+    if images:
+        titles = ", ".join(title for title, _ in images)
+        return (f"_Read the picture — {titles}. Looking at a figure takes several times longer than "
+                "a text answer, so this one was slower._")
+    if reason == "vision":
+        # The trigger fired but no crop went out: the budget could not pay
+        # ASK_VISION_COST in full, or the file was missing/oversized. The reader
+        # is owed that, because the answer is weaker than it looks.
+        return "_Answered from the lesson text only — the picture itself was not attached this time._"
+    if reason == "described":
+        # Layer 1 had a written description of the figure, so the picture was not
+        # needed. Worth saying: it is why this answer came back fast.
+        return "_Answered from the book's own written description of the figure, without looking at the picture._"
+    return ""
+
+
+def figure_bytes(module_id: str, asset: str) -> bytes | None:
+    """The PNG for one of THIS book's figures, or None.
+
+    PREFERS `<asset>.model.png` (22-09-26). The importer writes every crop
+    TWICE: `<asset>.png` is the one the PAGE displays, and `<asset>.model.png`
+    is the one it makes for a model -- same picture, about a third of the bytes
+    (measured: fig-2-10 25,855 vs 65,856; fig-2-11 84,447 vs 246,084). Sending
+    the display crop was uploading two thirds more than the provider needs on
+    the slowest call this app makes. Falls back to the display crop when a book
+    has no model variant, so an older package still answers.
+
+    Same containment rule as send_book(): the module id and the asset id are
+    pattern-checked and the resolved path must stay inside this book's own
+    assets/ folder. The id comes from module.json, never from the request --
+    there is no client-supplied path anywhere on this route.
+    """
+    if not MODULE_ID.match(module_id or "") or not ASSET_ID.match(asset or ""):
+        return None
+    book = (LIBRARY_ROOT / module_id).resolve()
+    for name in (f"{asset}.model.png", f"{asset}.png"):
+        target = (book / "assets" / name).resolve()
+        if not str(target).startswith(str(book) + os.sep) or not target.is_file():
+            continue
+        if target.stat().st_size > ASK_VISION_MAX_BYTES:
+            continue
+        return target.read_bytes()
+    return None
+
+
 ASK_SYSTEM = (
     "You are the learner's tutor inside a study app. They are a junior data engineer: strong on SQL, "
     "tables, Spark and ETL, new to machine learning, and weak on Python, pandas and NumPy.\n\n"
@@ -828,15 +1140,41 @@ SOURCE_LINE = re.compile(r"^\s*SOURCE:\s*(lesson|book|general)\b[^\n]*", re.I)
 
 
 def ask_tutor(config: "ProviderConfig", chapter_title: str, lesson_term: str, lesson: str,
-              question: str, history: list[dict[str, str]], excerpts: list[dict[str, Any]]) -> dict[str, Any]:
+              question: str, history: list[dict[str, str]], excerpts: list[dict[str, Any]],
+              visuals: list[dict[str, Any]] | None = None,
+              images: list[tuple[str, bytes]] | None = None) -> dict[str, Any]:
     context = [f"THE LESSON THEY ARE READING\nChapter: {chapter_title}\nLesson: {lesson_term}\n\n{lesson}"]
+    # LAYER 1. The page's figures and equations as text. source_for_block() drops
+    # those blocks when it builds `lesson`, so without this the tutor cannot even
+    # name a figure that is on the reader's screen.
+    seen = visual_context(visuals or [])
+    if seen:
+        context.append(seen)
     if excerpts:
         joined = "\n\n".join(f"[book page {e['page']}]\n{e['text']}" for e in excerpts)
         context.append("BOOK EXCERPTS THAT MAY BE RELEVANT\n\n" + joined)
-    messages: list[dict[str, str]] = [{"role": "system", "content": ASK_SYSTEM},
+    if images:
+        # LAYER 2. An attached crop is the book's own figure, printed in the lesson
+        # in front of them -- so it is the LESSON, and the existing SOURCE: contract
+        # needs no new value. The persona above is untouched.
+        titles = ", ".join(title for title, _ in images)
+        context.append(f"ATTACHED IMAGE(S): {titles}. This is the book's own figure from the lesson they are "
+                       "reading, so it counts as THE LESSON (answer with SOURCE: lesson). Read what is "
+                       "actually in the picture -- the axes and their units, what the shapes or bars do, "
+                       "where the mass sits, which parts stand out -- and answer from that, not from what "
+                       "a figure with this caption usually looks like.")
+    messages: list[dict[str, Any]] = [{"role": "system", "content": ASK_SYSTEM},
                                       {"role": "system", "content": "\n\n".join(context)}]
     messages.extend(history[-ASK_HISTORY_TURNS:])
-    messages.append({"role": "user", "content": question})
+    if images:
+        parts: list[dict[str, Any]] = [{"type": "text", "text": question}]
+        for _, raw in images:
+            encoded = base64.b64encode(raw).decode("ascii")
+            parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}})
+        messages.append({"role": "user", "content": parts})
+    else:
+        # A text ask stays byte-identical to what it has always sent.
+        messages.append({"role": "user", "content": question})
     body = {"model": config.model, "messages": messages, "temperature": 0.4, "stream": True}
     request = Request(config.api_url, data=json.dumps(body).encode("utf-8"),
                       headers={"Authorization": f"Bearer {config.api_key}", "Content-Type": "application/json"},
@@ -861,7 +1199,11 @@ def ask_tutor(config: "ProviderConfig", chapter_title: str, lesson_term: str, le
         page = int(found.group(1)) if found else None
         content = content[match.end():].lstrip("\n").strip()
     return {"answer": content, "source": source, "page": page,
-            "pages": [e["page"] for e in excerpts]}
+            "pages": [e["page"] for e in excerpts],
+            # Extra keys only -- the page ignores what it does not know. They exist
+            # so a vision ask is never silent: it shows up here and in the ask log.
+            "vision": bool(images),
+            "figures": [title for title, _ in (images or [])]}
 
 
 EXERCISE_SYSTEM = (
@@ -1344,17 +1686,47 @@ class EduHandler(SimpleHTTPRequestHandler):
                 chapter_title, lesson = source_for_block(self.root, chapter, block, book)
                 module = load_module(self.root, book)
                 term = module["tutorialData"]["sections"][chapter - 1]["items"][block - 1].get("term", "")
-                excerpts = book_search(module_id_for(module), f"{question} {term}", chapter=chapter)
+                module_id = module_id_for(module)
+                excerpts = book_search(module_id, f"{question} {term}", chapter=chapter)
+                # The figures and equations printed in THIS lesson. Always sent as
+                # text (layer 1); the pictures themselves only on the tight trigger.
+                visuals = block_visuals(module, chapter, block)
             except (ValueError, TypeError, IndexError, KeyError, AttributeError, json.JSONDecodeError) as error:
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
                 return
+            images: list[tuple[str, bytes]] = []
+            wanted, vision_reason = ask_wants_image(question, visuals)
+            # A vision ask costs ASK_VISION_COST slots of this reader's ask budget,
+            # and it is only taken when the budget can pay for it in full. Short of
+            # headroom, the ask still answers from text -- degraded, never silent.
+            if wanted and len(asked) + ASK_VISION_COST <= ASK_RATE_LIMIT_REQUESTS:
+                for figure in wanted:
+                    raw = figure_bytes(module_id, str(figure.get("asset") or ""))
+                    if raw:
+                        images.append((str(figure.get("title") or figure.get("asset")), raw))
             asked.append(moment)
+            if images:
+                for _ in range(ASK_VISION_COST - 1):
+                    asked.append(moment)
             try:
-                reply = ask_tutor(config, chapter_title, term, lesson, question, turns, excerpts)
+                reply = ask_tutor(config, chapter_title, term, lesson, question, turns, excerpts,
+                                  visuals=visuals, images=images)
             except ValueError as error:
                 self.send_json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
                 return
+            # FIX 3 (22-09-26): say how the answer was got. `vision`/`figures`
+            # are already on the reply and already logged, but the page renders
+            # only `answer`, so this is the one place the reader can see it.
+            # "none" | "described" | "vision" -- see ask_wants_image(). Logged so
+            # the backfill can be judged by use: a block whose figure questions
+            # stop escalating is a description that worked.
+            reply["visionReason"] = vision_reason
+            notice = ask_notice(vision_reason, images)
+            if notice:
+                reply["notice"] = notice
+                reply["answer"] = f"{notice}\n\n{reply.get('answer') or ''}".strip()
             self.send_json(HTTPStatus.OK, reply)
+            log_ask(book, chapter, block, term, question, reply)
             return
 
         if route == "/api/exercise/grade":

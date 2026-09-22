@@ -6,7 +6,20 @@ G1 PLACEMENT   every numbered visual whose number is named in its item's prose s
                AFTER the naming text block with NO text block in between.
 G3 CONSERVED   visual multiset identical; non-whitespace prose characters identical;
                block accounting exact (blocks_after - blocks_before == extra text pieces);
-               every non-text, non-visual block preserved in order.
+               every non-text, non-visual, NON-CARD block preserved in order;
+               cards conserved as a MULTISET (same cards, same count) but NOT in order.
+
+               WHY CARDS ARE EXEMPT FROM THE ORDER ASSERTION (22-09-26):
+               ruling R6 ("every visual renders at its point of mention") was extended to
+               CARDS. A card is now interleaved to sit beside the prose that needs it, so
+               R6 MOVES cards on purpose. The old `ob == oa` order assertion therefore
+               asserted the opposite of what the ruling now requires: it was stale BY
+               CONSTRUCTION, not failing because anything broke. Deleting it outright would
+               have left cards unguarded, so it is REPLACED by the property that does still
+               hold under R6 -- a card may move, but no card may be added, dropped or
+               altered. Every other non-text non-visual block is still order-locked exactly
+               as before, and G1 PLACEMENT and every figure/equation assertion are
+               UNCHANGED. Fault-proved: deleting one card turns G3 RED.
 
 (G2 idempotence is proved by the caller with sha256 of two consecutive runs.)
 
@@ -161,7 +174,8 @@ def prose_nonws(doc):
 
 def census(doc):
     vis = collections.Counter()
-    other = []
+    other = []                      # order-locked: every non-text, non-visual, non-card block
+    cards = collections.Counter()   # multiset only -- R6 moves cards on purpose (see module docstring)
     text_n = blocks_n = 0
     for it in items(doc):
         for b in it.get('blocks', []) or []:
@@ -171,9 +185,11 @@ def census(doc):
                 vis[visual_key(b)] += 1
             elif t == 'text':
                 text_n += 1
+            elif t == 'card':
+                cards[json.dumps(b, sort_keys=True, ensure_ascii=False)] += 1
             else:
                 other.append(json.dumps(b, sort_keys=True, ensure_ascii=False))
-    return vis, other, text_n, blocks_n
+    return vis, other, cards, text_n, blocks_n
 
 
 def main():
@@ -193,17 +209,25 @@ def main():
     else:
         print('G1 RESULT    : GREEN')
 
-    vb, ob, tb, bb = census(before)
-    va, oa, ta, ba = census(after)
+    vb, ob, cb, tb, bb = census(before)
+    va, oa, ca, ta, ba = census(after)
     pb, pa = prose_nonws(before), prose_nonws(after)
     print(f'G3 VISUALS   : before={sum(vb.values())} after={sum(va.values())} '
           f'identical={vb == va}')
     print(f'G3 PROSE     : non-whitespace chars before={pb} after={pa} equal={pb == pa}')
-    print(f'G3 OTHER     : non-text non-visual blocks before={len(ob)} after={len(oa)} '
-          f'identical-in-order={ob == oa}')
+    print(f'G3 OTHER     : non-text non-visual non-card blocks before={len(ob)} '
+          f'after={len(oa)} identical-in-order={ob == oa}')
+    # R6 moves cards deliberately, so ORDER is not asserted here. What is asserted is that
+    # the set of cards is untouched: same cards, same count, byte-identical content.
+    print(f'G3 CARDS     : cards before={sum(cb.values())} after={sum(ca.values())} '
+          f'multiset-identical={cb == ca} (order deliberately NOT asserted -- ruling R6)')
+    if cb != ca:
+        miss = sum((cb - ca).values())
+        extra = sum((ca - cb).values())
+        print(f'   FAIL: {miss} card(s) lost or altered, {extra} card(s) added or altered')
     print(f'G3 ACCOUNTING: blocks {bb} -> {ba} (delta {ba - bb}); '
           f'text {tb} -> {ta} (delta {ta - tb}); exact={ba - bb == ta - tb}')
-    if not (vb == va and pb == pa and ob == oa and ba - bb == ta - tb):
+    if not (vb == va and pb == pa and ob == oa and cb == ca and ba - bb == ta - tb):
         red = True
         print('G3 RESULT    : RED')
     else:

@@ -1887,9 +1887,13 @@ function syncCellView(lesson, cell, initial = false) {
     const state = cellState(lesson, cell);
     const runningId = lessonRuns.get(`${moduleId}|${lesson}`);
     const isRunning = runningId === cell.id;
-    setCellButton(view.run, isRunning ? 'stop' : 'run', isRunning ? 'Stop' : 'Run');
-    view.run.setAttribute('aria-label', `${isRunning ? 'Stop' : 'Run'} cell ${view.number}`);
-    view.run.disabled = Boolean(runningId) && !isRunning;
+    // Ruling R13: a cell too heavy for this box ships with NO Run button at all,
+    // so `view.run` is absent. Everything else about the cell still works.
+    if (view.run) {
+        setCellButton(view.run, isRunning ? 'stop' : 'run', isRunning ? 'Stop' : 'Run');
+        view.run.setAttribute('aria-label', `${isRunning ? 'Stop' : 'Run'} cell ${view.number}`);
+        view.run.disabled = Boolean(runningId) && !isRunning;
+    }
     view.edit.disabled = isRunning;
     view.reset.disabled = isRunning;
     view.edited.classList.toggle('hidden-view', state.source === state.original);
@@ -1922,14 +1926,27 @@ function renderCodeCells(block) {
         label.appendChild(edited);
         const actions = document.createElement('div');
         actions.className = 'flex items-center gap-1';
+        // Ruling R13. `runnable: false` means this machine cannot run the cell --
+        // a missing library, a broken earlier cell, or too slow/too heavy for the
+        // runner's 60 s and 6 GB caps. Render NO Run button and say why, so the
+        // reader knows it is this box's limit and can run it on a stronger one.
+        // A dead Run button is worse than no button (R7 s4).
+        const runnable = cell.runnable !== false;
         const edit = cellButton(false);
         const reset = cellButton(false);
-        const run = cellButton(true);
+        const run = runnable ? cellButton(true) : null;
         setCellButton(edit, 'edit', 'Edit');
         setCellButton(reset, 'reset', 'Reset');
         edit.setAttribute('aria-label', `Edit cell ${number}`);
         reset.setAttribute('aria-label', `Reset cell ${number}`);
-        actions.append(edit, reset, run);
+        if (run) actions.append(edit, reset, run);
+        else {
+            actions.append(edit, reset);
+            const badge = document.createElement('span');
+            badge.className = 'rounded bg-amber-900/60 px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wider text-amber-200';
+            badge.textContent = 'Run disabled';
+            actions.insertBefore(badge, edit);
+        }
         header.append(label, actions);
 
         const code = document.createElement('code');
@@ -1960,6 +1977,17 @@ function renderCodeCells(block) {
         output.append(status, items);
 
         card.append(header, pre, editor, hint, output);
+        if (!runnable) {
+            const warn = document.createElement('p');
+            warn.className = 'border-t border-amber-800/60 bg-amber-950/40 px-4 py-3 text-sm leading-6 text-amber-200';
+            warn.setAttribute('role', 'note');
+            warn.setAttribute('data-not-runnable', cell.id);
+            const why = typeof cell.runnableReason === 'string' && cell.runnableReason.trim()
+                ? cell.runnableReason.trim()
+                : 'this cell cannot run on the machine hosting the code runner.';
+            warn.textContent = `Run is disabled for this cell - ${why} You can still read and edit it here, and run it on a stronger machine (ml/study/geron-lab).`;
+            card.appendChild(warn);
+        }
         wrapper.appendChild(card);
 
         const view = { root: card, number, edit, reset, run, code, pre, editor, output, status, items, edited, editing: false };
@@ -2007,7 +2035,7 @@ function renderCodeCells(block) {
             if (view.editing) editor.value = state.source;
             syncCellView(lesson, cell);
         });
-        run.addEventListener('click', () => {
+        if (run) run.addEventListener('click', () => {
             if (lessonRuns.get(`${moduleId}|${lesson}`) === cell.id) stopCell(lesson, cell);
             else runCell(lesson, cell);
         });

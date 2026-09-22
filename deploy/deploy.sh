@@ -149,8 +149,16 @@ snapshot() {
   log "snapshot id: edu-arg-deploy-${SNAP_TS}"
 }
 
+# ORDERING IS BY NAME, AND THAT IS DELIBERATE — do not "fix" it to `ls -t`.
+# Audited 2026-09-22 against defect D-13 in the sibling deploy-study.sh, and this
+# script is NOT affected: both this prune and do_rollback's no-argument resolution
+# already use `LC_ALL=C sort` on the id, which is ISO-8601 basic format and
+# therefore sorts chronologically. D-13 is what happens when this is mtime-based:
+# snapshot() copies with `cp -a`, which preserves the SOURCE mtime, so every
+# snapshot ties and an mtime sort deletes an arbitrary one. ⛔ Never switch this
+# to `ls -t`, `ls -1dt` or any other mtime-derived ordering.
 prune_snapshots() {
-  log "retention: keeping the newest ${RETAIN} edu-arg-deploy-* snapshots"
+  log "retention: keeping the newest ${RETAIN} edu-arg-deploy-* snapshots (ordered BY NAME, never mtime)"
   ssh "$HOST" "cd \"\$HOME/foxai-backups\" 2>/dev/null || exit 0
     ls -1d edu-arg-deploy-* 2>/dev/null | LC_ALL=C sort | head -n -${RETAIN} \
       | while read -r d; do echo \"[deploy] pruning \$d\"; rm -rf \"\$d\"; done
@@ -203,7 +211,20 @@ verify() {
   log "verify: FAILED — AUTO-INVOKING ROLLBACK (this is the fix for the siblings' split state)"
   restore_snapshot "edu-arg-deploy-${SNAP_TS}"
   restart_service
-  fail "sha256 verify failed; the tree was rolled back to edu-arg-deploy-${SNAP_TS}"
+  # ASYMMETRY CLOSED 2026-09-22. Until now this path stopped at restart_service,
+  # while the explicit --rollback ran nrestarts_check + content_gate + health.
+  # A sha-mismatch recovery therefore brought the service back up WITHOUT EVER
+  # ASSERTING THE LIBRARY WAS INTACT -- and `content_gate` is the only gate here
+  # that can tell "serving" from "serving the right thing": a wrong library root
+  # returns 200 with an EMPTY book list. Both rollback paths now verify identically.
+  # If a gate below fails, its message is the right one to surface: it means the
+  # ROLLBACK is bad, which is strictly worse news than the sha mismatch above.
+  log "verify: rollback restored — now re-verifying it (stability + content + health)"
+  nrestarts_check
+  content_gate
+  health
+  log "verify: rollback VERIFIED"
+  fail "sha256 verify failed; the tree was rolled back to edu-arg-deploy-${SNAP_TS} and the rollback was verified"
 }
 
 # ---------------------------------------------------------------------------

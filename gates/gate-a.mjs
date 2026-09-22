@@ -132,9 +132,20 @@ const g17 = await page.evaluate(async () => {
 });
 const g17bad = g17.rows.filter(r => !r.parsed || !r.visible || r.bad.length);
 const g17withSqrt = g17.rows.filter(r => r.sqrtCount > 0).length;
+// ⛔ THE `=== 21` LITERAL IS DEAD (edu-replatform Phase 03, E1d iii). It was a STALE LITERAL:
+//    it pinned a count of the book's radical equations, so re-importing geron-homl3 with one
+//    more or one fewer would have turned a CORRECT gate red. The expectation is now DERIVED —
+//    `g17.total` is the count walked out of the source module.json above, and `g17withSqrt` is
+//    the count that actually RENDERED a `.sqrt`. Those are two independent numbers, so
+//    comparing them is an assertion and not a tautology.
+// ⛔ THE `> 0` FLOOR IS LOAD-BEARING: without it, rendering NOTHING is green.
+// ⚠ CONTAINMENT (closest('figure') / closest('#tutorial-content')) IS DELIBERATELY NOT
+//    ASSERTED HERE. This gate builds its own <figure class="my-8"> wrapper, so asserting the
+//    wrapper it just created would be a tautology. The real containment gate runs against the
+//    REACT DOM, on the real rendered reader: gate-r-dom.mjs R-G17b.
 check('A-G17 all radical/overline equations cover their radicand',
-  g17.total === 21 && g17withSqrt === 21 && g17bad.length === 0,
-  `found=${g17.total} withSqrt=${g17withSqrt} bad=${g17bad.length} ${g17bad.length ? JSON.stringify(g17bad.slice(0, 3)) : ''}`);
+  g17.total > 0 && g17withSqrt === g17.total && g17bad.length === 0,
+  `derivedFromModuleJson=${g17.total} withSqrt=${g17withSqrt} bad=${g17bad.length} ${g17bad.length ? JSON.stringify(g17bad.slice(0, 3)) : ''} (the \`=== 21\` literal is dead; expectation derived, \`> 0\` floor present)`);
 
 // ---------- A-G18: nothing else relayouted ----------
 const keys = ['logo', 'upload', 'burger'];

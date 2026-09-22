@@ -56,7 +56,39 @@ const countLines = (f) => {
 };
 
 /* ---- RS-COUNT: each R- suite emits exactly the number of result lines it claims ---- */
-for (const [tag, file, want] of [['gate-r-sep.mjs', 'rsep.txt', 6], ['gate-r-read.mjs', 'rread.txt', 12]]) {
+for (const [tag, file, want] of [
+  ['gate-r-sep.mjs', 'rsep.txt', 6],
+  ['gate-r-read.mjs', 'rread.txt', 12],
+  ['gate-r-contract.mjs', 'rcontract.txt', 7],
+  ['gate-r-dom.mjs', 'rdom.txt', 8],
+  ['gate-r-ro.mjs', 'rro.txt', 3],
+  // ⚑ ADDED 22-09-26 (EVL cycle 2, gap G-EVL-4). Seven Exit Gate assertions had NO COMMAND
+  //    ANYWHERE and were about to be frozen as Phase 04's fence in that state. A suite whose
+  //    self-check disagrees with its own registrations is the next vacuous gate, so this row
+  //    and run-gates-react.sh's spec list move together, always.
+  ['gate-r-trap.mjs', 'rtrap.txt', 8],
+  // ⚑ ADDED 22-09-26 (EVL fix 004). The journey suite — the first gate here that finishes a
+  //    quiz. D-10 (the run never reached #result-screen) was invisible to all 54 preceding
+  //    gates because every one of them measures a SURFACE and stops. This row and
+  //    run-gates-react.sh's spec list move together, always: a suite whose self-check
+  //    disagrees with its own registrations is the next vacuous gate.
+  // ⚑ 4 -> 6 on 22-09-26 (EVL fix 005): R-J5 (D-11, the closed card leaked its explanation)
+  //    and R-J6 (D-12, only 2 of 4 cards resolved). Moves WITH run-gates-react.sh's spec row.
+  ['gate-r-journey.mjs', 'rjourney.txt', 6],
+  // ⛑ THREE ROWS ADDED 22-09-26 (item A / D / E supplement). Each suite closes an Exit
+  //    Gate row that NAMED A COMMAND WHICH DID NOT EXIST — the same hole as G-EVL-4, where
+  //    seven assertions were neither passing nor failing but ABSENT, and the R- vector was
+  //    about to be frozen as Phase 04's fence in that state.
+  //    · rtheme  — item A: the Tailwind CDN is gone; the BUILD carries all 10 theme classes.
+  //    · rmodal  — item E: the quiz-setup picker has a visible way out, with the D-8 and
+  //                 B6/B6b fences asserted so a later layering change cannot undo them.
+  //    · rr6     — item D: ruling R6's four-condition placement test, DATA and RENDERED.
+  //    ⛔ These rows and run-gates-react.sh's spec list move together, always: a suite whose
+  //      self-check disagrees with its own registrations is the next vacuous gate.
+  ['gate-r-theme.mjs', 'rtheme.txt', 6],
+  ['gate-r-modal.mjs', 'rmodal.txt', 5],
+  ['gate-r6-placement.mjs', 'rr6.txt', 3],
+]) {
   const n = countLines(file);
   check(`RS-COUNT ${tag} emits exactly ${want} result lines`, n === want,
     n < 0 ? `transcript ${file} MISSING — run via run-gates-react.sh` : `counted=${n} expected=${want}`);

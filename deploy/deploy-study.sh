@@ -73,7 +73,9 @@ usage: deploy-study.sh [--install-unit] [--rollback [SNAPSHOT]] [--list-snapshot
                       restart -> stability -> health
   --install-unit      also create the venv, install python deps and write the
                       systemd unit. OPT-IN. Used exactly once, in Phase 02.
-  --rollback [SNAP]   restore the newest snapshot (or the named one) and restart
+  --rollback [SNAP]   restore the newest snapshot BY NAME (or the named one),
+                      restart, then re-run stability + content + health. The same
+                      code path the auto-rollback uses, so the two cannot differ.
   --list-snapshots    show retained snapshots on the target host
 USAGE
 }
@@ -118,7 +120,36 @@ snapshot() {
     log "no existing tree at ${REMOTE_DIR} — first deploy, nothing to snapshot"
     SNAP_DIR=""
   fi
-  ssh "$HOST" "ls -1dt '${REMOTE_DIR}.snapshots'/* 2>/dev/null | tail -n +$((RETAIN+1)) | xargs -r rm -rf" || true
+  prune_snapshots
+}
+
+# ---------------------------------------------------------------------------
+# Retention prune — ORDERED BY NAME, NEVER BY MTIME (defect D-13, 2026-09-22)
+# ---------------------------------------------------------------------------
+# snapshot() copies with `cp -a`, which PRESERVES THE SOURCE DIRECTORY'S MTIME.
+# Every snapshot therefore inherits ONE identical mtime -- measured on this host
+# as `2026-09-21 08:35:38.308862641` on all five retained snapshots, to the
+# nanosecond. `ls -1dt` sorts by mtime, so with the times tied it carries NO
+# ordering information and falls back to arbitrary filesystem order. The prune
+# consequently deleted an ARBITRARY snapshot, and it had already destroyed two
+# published rollback targets (20260922T050832Z and 20260922T052610Z -- the
+# latter being the snapshot the SAME deploy run had just taken for itself).
+#
+# The snapshot id is ISO-8601 basic format (YYYYMMDDTHHMMSSZ), fixed width and
+# zero padded, so LEXICOGRAPHIC order IS chronological order. Sort by name.
+# ⛔ Never reintroduce `ls -t`, `ls -1dt`, `sort -t`, `find -printf '%T@'` or any
+#    other mtime-derived ordering here: `cp -a` guarantees the times are tied.
+#
+# RETAIN=5 is unchanged and is still correct. The old prune kept the right
+# NUMBER of snapshots and chose the WRONG ONES; the count was never the defect.
+prune_snapshots() {
+  ssh "$HOST" "ls -1d '${REMOTE_DIR}.snapshots'/* 2>/dev/null | LC_ALL=C sort | head -n -${RETAIN} | while read -r d; do echo '[deploy-study] pruning '\"\$d\"; rm -rf \"\$d\"; done; true" || true
+}
+
+# Newest retained snapshot, BY NAME. Single source of truth for --rollback with
+# no argument and for --list-snapshots, so the two can never disagree.
+newest_snapshot() {
+  ssh "$HOST" "ls -1d '${REMOTE_DIR}.snapshots'/* 2>/dev/null | LC_ALL=C sort | tail -1"
 }
 
 # ---------------------------------------------------------------------------
@@ -158,14 +189,210 @@ verify_sha() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 6 — content gate
+# Step 6 — content gate  (STRENGTHENED 2026-09-22, defect D-14)
 # ---------------------------------------------------------------------------
+# ⛔ WHAT THIS REPLACED, AND WHY. Until 2026-09-22 this gate was EXISTENCE-ONLY:
+# four `test -f` / `ls` checks. It CANNOT distinguish "the file is there" from
+# "the file is right", and that was MEASURED, not theorised -- during the D-13
+# fault-injection drill it returned PASS on an `index.html` with a `CORRUPT`
+# line appended past `</html>`, while `:8792` served that corrupted document and
+# systemd reported `active`. An existence check on a corrupted file is a gate
+# that reports green on exactly the failure it exists to catch.
+#
+# THE STANDARD IT NOW MEETS is deploy.sh's (:8767), which asserts a MEASURED
+# baseline rather than presence. That script and this one stay SEPARATE (see the
+# file header); this borrows the DESIGN, not the code:
+#   · a canonical form derived from the artifact, compared, not eyeballed
+#   · each RED path names its own failure mode instead of one generic message
+#   · one comparison function used by the live gate so drills exercise the REAL one
+#
+# ⛔ NO HARDCODED BUNDLE HASH, AND NONE MAY EVER BE ADDED. The hashed bundle name
+# changes on EVERY build, so a literal would need editing each deploy or would rot
+# into a stale-literal gate -- the class that has already bitten this program five
+# times (`total === 21`, `-eq 49`, the B1 `=== 41` temptation, F-1's mtime, A-G17's
+# fixture). The expected asset list is DERIVED FROM THE SERVED index.html itself,
+# so it is correct for whatever build is deployed, including an older one restored
+# by --rollback. That derivation is also why this same function is valid on BOTH
+# the deploy-verify path and the rollback path: it makes no reference to the
+# workstation's current build.
+#
+# ⛔ ASSERT WHAT IS SERVED OVER HTTP, not only what sits on disk. The D-13
+# corruption was visible in the served page; a disk-only gate is one layer short.
+# ⛔ ALWAYS `curl -o <file>` then `cmp`. NEVER `curl | sha256sum`: that pipeline
+# reports a phantom 1-byte difference on this workstation.
+BASE_URL="${EDU_STUDY_BASE_URL:-http://192.168.100.66:${PORT}}"
+
+# Fetch a URL to a file; echo the HTTP status code (000 on transport failure).
+fetch_to() {
+  curl -s --max-time 20 -o "$2" -w '%{http_code}' "$1" || printf '000'
+}
+
+# Every `/assets/...` reference the document actually makes, sorted and deduped.
+# This IS the expected-asset list -- read out of the artifact, never written down.
+index_asset_refs() {
+  grep -oE '/assets/[A-Za-z0-9][A-Za-z0-9._-]*' "$1" | LC_ALL=C sort -u
+}
+
+# Structural assertions on an index.html. Each expectation is read from the
+# document's own shape, so there is nothing here to go stale.
+#   · non-empty                      -> catches a zero-length write
+#   · last non-blank line is </html> -> catches BOTH truncation (the tail is gone)
+#                                       and append-corruption (something follows it),
+#                                       which is the exact D-13 drill fault
+#   · <div id="root"></div>          -> catches a truncated head/body or a wrong doc;
+#                                       without the mount point React renders nothing
+#   · >=1 .js and >=1 .css ref       -> catches a build that emitted no bundle
+index_structure_check() {
+  local f="$1" label="$2" last refs
+  [[ -s "$f" ]] || { echo "content gate RED: ${label} index.html is EMPTY (0 bytes)" >&2; return 1; }
+  last="$(grep -v '^[[:space:]]*$' "$f" | tail -1 | tr -d '\r')"
+  if [[ "$last" != "</html>" ]]; then
+    echo "content gate RED: ${label} index.html does not end at </html> -- truncated or corrupted." >&2
+    echo "  last non-blank line: ${last}" >&2
+    return 1
+  fi
+  grep -q '<div id="root"></div>' "$f" \
+    || { echo "content gate RED: ${label} index.html has no <div id=\"root\"></div> mount point" >&2; return 1; }
+  refs="$(index_asset_refs "$f")"
+  printf '%s\n' "$refs" | grep -q '\.js$' \
+    || { echo "content gate RED: ${label} index.html references no /assets/*.js bundle" >&2; return 1; }
+  printf '%s\n' "$refs" | grep -q '\.css$' \
+    || { echo "content gate RED: ${label} index.html references no /assets/*.css stylesheet" >&2; return 1; }
+  return 0
+}
+
+# --- THE LIBRARY ASSERTION (item B, 2026-09-22) -------------------------------
+# ⛔⛔ WHY THIS EXISTS. Measured 22-09-26: `grep -c 'api/modules' deploy-study.sh` = 0.
+#    Everything above this line asserts that the APP is served; NOTHING asserted that the
+#    BOOKS are. Those are different failures and only one of them is visible to a status
+#    check. A deploy that points EDU_LIBRARY_ROOT at a wrong or empty directory passes
+#    EVERY other gate in this file -- index.html whole, bundle byte-matched, systemd
+#    active, /api/health 200 -- and the learner opens the app to ZERO BOOKS. deploy.sh
+#    (:8767) has caught that class since it was written; Phase 06 RETIRES deploy.sh and
+#    replaces :8767's runtime with this stack, so without this function the cutover would
+#    LOSE a check the app the user reads daily has today.
+#
+# ⛔ THE DESIGN IS BORROWED FROM deploy.sh, THE CODE IS NOT (the file header requires the
+#    two scripts stay separate). Same three properties, restated so they are not lost:
+#      · a CANONICAL form derived from the payload -- "<count> <sorted moduleId list>"
+#      · a SORTED LIST, never a set: a set lets a lost book pass silently when another
+#        book legitimately duplicates a moduleId
+#      · ONE comparison function used by the live gate, so a fault drill exercises the
+#        REAL comparison and not a copy of it
+#
+# ⛔ THIS BASELINE IS MEASURED, THEN FROZEN. It is not assumed, and it is not derived from
+#    the workstation. Measured on live :8792 at 2026-09-22:
+#        2 ['geron-homl3', 'openintro-statistics-2019-1045f2f5']
+#    ⚠ It is a LITERAL, and this program has been bitten by stale literals six times
+#      (`total === 21`, `-eq 49`, the B1 `=== 41` temptation, F-1's mtime, A-G17's
+#      fixture, R-B15b's pinned hash). This one is deliberate and is NOT that class: the
+#      library is the thing being asserted, so deriving the expectation from the library
+#      would make the gate assert nothing at all. The difference is that a stale literal
+#      describes a MEASUREMENT THAT MOVES ON ITS OWN; a book list only changes when
+#      someone imports a book, which is exactly the event this gate must not let pass
+#      silently. Override for a legitimate change with EDU_STUDY_EXPECT_MODULES rather
+#      than editing this line in a hurry.
+EDU_STUDY_EXPECT_MODULES="${EDU_STUDY_EXPECT_MODULES:-2 ['geron-homl3', 'openintro-statistics-2019-1045f2f5']}"
+
+# Parse a /api/modules payload on stdin into the canonical "<count> <sorted list>" form.
+# Exits non-zero on malformed JSON or a missing `books` key -- a 200 that is not the
+# expected shape is a failure, never an empty list.
+parse_modules() {
+  python3 -c "import sys,json
+d=json.load(sys.stdin)
+b=d['books']
+print(len(b), sorted(x['moduleId'] for x in b))"
+}
+
+# Compare a canonical form against the frozen expectation. Each RED path names its own
+# failure mode; a single generic message would make the drill unreadable.
+compare_modules() {
+  local got="$1"
+  if [[ -z "$got" ]]; then
+    echo "library gate RED: /api/modules returned nothing parseable (transport error, or not the {books:[...]} shape)" >&2
+    return 1
+  fi
+  if [[ "$got" == 0\ * ]]; then
+    echo "library gate RED: 0 books -- wrong or empty library root." >&2
+    echo "  This is the 'healthy and empty' failure every other gate in this file passes:" >&2
+    echo "  index.html whole, bundle byte-matched, systemd active, /api/health 200, ZERO books." >&2
+    return 1
+  fi
+  if [[ "$got" != "$EDU_STUDY_EXPECT_MODULES" ]]; then
+    echo "library gate RED: the module list changed." >&2
+    echo "  expected: ${EDU_STUDY_EXPECT_MODULES}" >&2
+    echo "  got:      ${got}" >&2
+    echo "  If a book was legitimately added or removed, re-measure and update" >&2
+    echo "  EDU_STUDY_EXPECT_MODULES -- do not delete this gate." >&2
+    return 1
+  fi
+  return 0
+}
+
+# Live gate. Called from content_gate(), so it runs on BOTH the deploy-verify path and
+# the rollback path -- a rollback that restores a tree with no books is still a failure.
+library_gate() {
+  local out
+  out="$(curl -s --max-time 20 "${BASE_URL}/api/modules" | parse_modules || true)"
+  log "library gate: ${out:-<unparseable>}"
+  compare_modules "$out" || fail "library gate failed"
+  log "library gate: OK (matches the frozen measured baseline)"
+}
+
 content_gate() {
-  ssh "$HOST" "test -f '${REMOTE_DIR}/web/index.html'" || fail "content gate: no index.html on ${HOST}"
-  ssh "$HOST" "ls '${REMOTE_DIR}/web/assets'/*.js >/dev/null 2>&1" || fail "content gate: no hashed asset on ${HOST}"
-  ssh "$HOST" "test -f '${REMOTE_DIR}/backend/main.py'" || fail "content gate: no backend/main.py on ${HOST}"
-  ssh "$HOST" "test ! -e '${REMOTE_DIR}/node_modules'" || fail "content gate: a dependency tree is present in the deploy root"
-  log "content gate PASS"
+  mkdir -p "$SCRATCH"
+  local served="${SCRATCH}/served-index.html"
+  local ondisk="${SCRATCH}/disk-index.html"
+  local code ref rc n=0
+
+  # --- 1. the document is actually served -------------------------------------
+  code="$(fetch_to "${BASE_URL}/" "$served")"
+  [[ "$code" == "200" ]] || fail "content gate RED: GET / returned ${code} (expected 200)"
+
+  # --- 2. served == on disk ----------------------------------------------------
+  # A mismatch means a stale worker, a cache, or a different tree being served
+  # than the one the sha256 gate just verified.
+  ssh "$HOST" "cat '${REMOTE_DIR}/web/index.html'" > "$ondisk" \
+    || fail "content gate RED: no index.html on ${HOST} at ${REMOTE_DIR}/web/"
+  cmp -s "$served" "$ondisk" \
+    || fail "content gate RED: the served index.html differs from the one on disk"
+
+  # --- 3. the served document is structurally whole ----------------------------
+  index_structure_check "$served" "served" || fail "content gate failed"
+
+  # --- 4. every asset it references exists, serves 200, and matches disk -------
+  # ⛔ `ssh -n` IS LOAD-BEARING IN THIS LOOP, not a style choice. Plain `ssh`
+  # reads stdin, and stdin here is the asset list being iterated -- so the first
+  # `ssh` SWALLOWS THE REMAINING REFERENCES and the loop silently checks exactly
+  # one asset then stops. Measured on the first run of this gate: 2 referenced
+  # assets, `1 referenced asset(s) verified`. A loop that reports green after
+  # checking one of two items is a vacuous gate. Never drop the -n.
+  while read -r ref; do
+    [[ -n "$ref" ]] || continue
+    n=$((n + 1))
+    ssh -n "$HOST" "test -f '${REMOTE_DIR}/web${ref}'" \
+      || fail "content gate RED: index.html references ${ref} but that file is MISSING on ${HOST}"
+    code="$(fetch_to "${BASE_URL}${ref}" "${SCRATCH}/asset.bin")"
+    [[ "$code" == "200" ]] \
+      || fail "content gate RED: referenced asset ${ref} returned ${code} (expected 200)"
+    [[ -s "${SCRATCH}/asset.bin" ]] \
+      || fail "content gate RED: referenced asset ${ref} served 0 bytes"
+    ssh -n "$HOST" "cat '${REMOTE_DIR}/web${ref}'" > "${SCRATCH}/asset.disk"
+    cmp -s "${SCRATCH}/asset.bin" "${SCRATCH}/asset.disk" \
+      || fail "content gate RED: served bytes for ${ref} differ from the file on disk"
+  done < <(index_asset_refs "$served")
+  (( n > 0 )) || fail "content gate RED: no asset references were checked"
+
+  # --- 5. structural fences retained from the original gate --------------------
+  ssh "$HOST" "test -f '${REMOTE_DIR}/backend/main.py'" || fail "content gate RED: no backend/main.py on ${HOST}"
+  ssh "$HOST" "test ! -e '${REMOTE_DIR}/node_modules'" || fail "content gate RED: a dependency tree is present in the deploy root"
+
+  # --- 6. THE LIBRARY (item B) -------------------------------------------------
+  # Steps 1-5 prove the APP is served. This proves the BOOKS are. See library_gate's
+  # header: every check above passes on an app serving zero books.
+  library_gate
+
+  log "content gate PASS — served index.html whole and identical to disk; ${n} referenced asset(s) verified byte-for-byte; library asserted"
 }
 
 # ---------------------------------------------------------------------------
@@ -263,16 +490,39 @@ PY
 # ---------------------------------------------------------------------------
 # rollback
 # ---------------------------------------------------------------------------
+# ONE function serves BOTH the explicit `--rollback` and the auto-rollback that
+# verify_sha() invokes on a sha256 mismatch, so the two CANNOT verify differently.
+# Before 2026-09-22 this restored and restarted and stopped there: a sha-mismatch
+# recovery put a tree back and brought the service up WITHOUT EVER ASSERTING THE
+# LIBRARY WAS INTACT. A rollback that restores the wrong thing and reports success
+# is worse than no rollback, because it is trusted.
 do_rollback() {
   local snap="${1:-}"
   if [[ -z "$snap" ]]; then
-    snap="$(ssh "$HOST" "ls -1dt '${REMOTE_DIR}.snapshots'/* 2>/dev/null | head -1")"
+    # BY NAME, never by mtime -- see prune_snapshots (D-13).
+    snap="$(newest_snapshot)"
+    log "no snapshot id given; newest BY NAME is: ${snap:-<none>}"
   fi
   [[ -n "$snap" ]] || fail "no snapshot available to roll back to"
   ssh "$HOST" "test -d '$snap'" || fail "snapshot not found: $snap"
   ssh "$HOST" "rm -rf '${REMOTE_DIR}.rollback-tmp' && cp -a '$snap' '${REMOTE_DIR}.rollback-tmp' && rm -rf '$REMOTE_DIR' && mv '${REMOTE_DIR}.rollback-tmp' '$REMOTE_DIR'"
   log "rolled back to ${snap}"
-  ssh "$HOST" "sudo -n systemctl restart '$SERVICE'" || log "service restart after rollback failed (unit may not be installed yet)"
+  verify_rollback
+}
+
+# Post-rollback verification. Identical on both paths by construction.
+verify_rollback() {
+  mkdir -p "$SCRATCH"
+  if ! ssh "$HOST" "systemctl cat '$SERVICE' >/dev/null 2>&1"; then
+    log "WARNING: ${SERVICE} is not installed on ${HOST} — the restored tree is UNVERIFIED (no service to gate)"
+    return 0
+  fi
+  ssh "$HOST" "sudo -n systemctl restart '$SERVICE'" || fail "rollback restored the tree but ${SERVICE} would not restart"
+  sleep 3
+  stability_gate
+  content_gate
+  health_gate
+  log "rollback VERIFIED: stability + content + health all green"
 }
 
 # ---------------------------------------------------------------------------
@@ -290,7 +540,9 @@ main() {
   done
 
   case "$mode" in
-    list)     ssh "$HOST" "ls -1dt '${REMOTE_DIR}.snapshots'/* 2>/dev/null || echo '(none)'"; exit 0 ;;
+    list)     ssh "$HOST" "ls -1d '${REMOTE_DIR}.snapshots'/* 2>/dev/null | LC_ALL=C sort || true"
+              log "newest BY NAME (what --rollback with no argument restores): $(newest_snapshot)"
+              exit 0 ;;
     rollback) do_rollback "$snap_arg"; exit 0 ;;
   esac
 
