@@ -1,6 +1,19 @@
 #!/usr/bin/env node
 /**
- * gate-r-ro.mjs — R-suite: PHASE 03 IS READ-ONLY, PROVED THREE WAYS.
+ * gate-r-ro.mjs — R-suite: BROWSING WRITES NOTHING; WRITES GO THROUGH ONE PRIMITIVE.
+ *
+ * ⚑ RE-BASELINED FOR PHASE 04 (23-09-26) — re-baselined, NOT deleted. Phase 03 asserted the
+ *   build could not write at all. Phase 04 adds the ten write routes, so the three assertions
+ *   now say what must STILL be true once writes exist:
+ *     R-RO1  the bundle carries EXACTLY ONE write shape — data/writes.ts:postJson. A second
+ *            primitive, or a write literal anywhere else, is a new un-reviewed write path.
+ *     R-RO2  (a) a SEEDED pending queue flushes EXACTLY ONCE — one POST /api/progress, and the
+ *            queue key is gone afterwards (flushPendingProgress, app.js:1167 — legacy behaviour);
+ *            (b) an UNSEEDED full browse sends ZERO non-GET requests, with the positive control.
+ *     R-RO3  the store is BYTE-IDENTICAL across that unseeded browse (reading never writes).
+ *   ⛔ Each was fault-proved red on the Phase-04 build — see the P4 report.
+ *
+ * (Phase 03's original header follows.) PHASE 03 IS READ-ONLY, PROVED THREE WAYS.
  *
  * edu-replatform Phase 03, checklist E1e. Tier 1/2, browser-backed.
  *
@@ -82,25 +95,41 @@ const countOf = (needle) => bundle.split(needle).length - 1;
 const hits = WRITE_PATTERNS.map((p) => [p, countOf(p)]).filter(([, n]) => n > 0);
 const rejectedHits = REJECTED_PATTERNS.map((p) => [p, countOf(p)]);
 
-check(`R-RO1 the built bundle contains ZERO non-GET WRITE SHAPES (${WRITE_PATTERNS.length} patterns over ${jsFiles.length} file(s))`,
-  jsFiles.length > 0 && bundle.length > 1000 && hits.length === 0,
-  `scanned=${jsFiles.join(',')} bytes=${bundle.length} writeShapeHits=${hits.length}`
-  + (hits.length ? ` <-- ${JSON.stringify(hits)}` : '')
-  + ` | REPORTED-NOT-ASSERTED ${JSON.stringify(rejectedHits)}: the plan's bare \`api/progress\``
-  + ' substring is a LEGITIMATE GET route (queries.ts:146) and makes this gate RED ON A CORRECT BUILD');
+const totalWriteShapes = hits.reduce((n, [, c]) => n + c, 0);
+check(`R-RO1 the built bundle contains EXACTLY ONE non-GET WRITE SHAPE — the data/writes.ts postJson primitive (${WRITE_PATTERNS.length} patterns over ${jsFiles.length} file(s))`,
+  jsFiles.length > 0 && bundle.length > 1000 && totalWriteShapes === 1,
+  `scanned=${jsFiles.join(',')} bytes=${bundle.length} writeShapeHits=${totalWriteShapes} ${JSON.stringify(hits)}`
+  + ' (0 = the write path is gone; 2+ = a second, un-reviewed write primitive)'
+  + ` | REPORTED-NOT-ASSERTED ${JSON.stringify(rejectedHits)}`);
 
-/* ═════════ the browse ═════════ */
+/* ═════════ R-RO2(a): a SEEDED queue flushes exactly once ═════════ */
+const browser = await chromium.launch({ executablePath: process.env.GATE_CHROME || chromium.executablePath() });
+// A VALID completion body on the probe module — the suite's own store, never the user's.
+const SEED = { module: 't-progress-probe-md', block: 'ch01-b01', score: 1, total: 1, source: 'written' };
+const seedCtx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+const seedPage = await seedCtx.newPage();
+// ⛔ BEFORE page load. An init script added after goto() never runs for that document — and it
+//    must run ONCE, or every reload re-seeds the queue the flush just emptied.
+await seedPage.addInitScript(([key, body]) => {
+  try {
+    if (!window.sessionStorage.getItem('__seeded')) {
+      window.localStorage.setItem(key, body);
+      window.sessionStorage.setItem('__seeded', '1');
+    }
+  } catch { /* storage may be blocked */ }
+}, [PENDING_KEY, JSON.stringify([SEED])]);
+const flushed = [];
+seedPage.on('request', (req) => { if (req.method() !== 'GET') flushed.push(`${req.method()} ${new URL(req.url()).pathname}`); });
+await seedPage.goto(BASE, { waitUntil: 'networkidle' });
+await seedPage.waitForTimeout(2500);
+const queueLeft = await seedPage.evaluate((k) => window.localStorage.getItem(k), PENDING_KEY);
+await seedCtx.close();
+
+/* ═════════ R-RO2(b) + R-RO3: an UNSEEDED full browse writes nothing ═════════ */
 const before = fs.existsSync(PROGRESS)
   ? createHash('sha256').update(fs.readFileSync(PROGRESS)).digest('hex') : 'ABSENT';
-
-const browser = await chromium.launch({ executablePath: process.env.GATE_CHROME || chromium.executablePath() });
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
 const page = await ctx.newPage();
-
-// ⛔ BEFORE page load. An init script added after goto() never runs for that document.
-await page.addInitScript(([key, body]) => {
-  try { window.localStorage.setItem(key, body); } catch { /* storage may be blocked */ }
-}, [PENDING_KEY, JSON.stringify([{ module: 'geron-homl3', chapterIndex: 0, blockIndex: 0, done: true, ts: 1 }])]);
 
 const observed = { get: 0, nonGet: [], control: 0 };
 let windowOpen = true;
@@ -124,39 +153,40 @@ const gotoBlock = async (ci, bi) => {
 
 await page.goto(BASE, { waitUntil: 'networkidle' });
 await page.waitForTimeout(1200);
-const seeded = await page.evaluate((k) => window.localStorage.getItem(k), PENDING_KEY);
-await page.locator(`#library-grid [data-book="${MODULE}"]`).click();
-await page.waitForTimeout(1500);
+// The default book auto-opens; the card for the open book CLOSES it, so only click if it is not current.
+const isCurrent = await page.locator(`#library-grid [data-book="${MODULE}"]`).getAttribute('aria-current');
+if (isCurrent !== 'true') {
+  await page.locator(`#library-grid [data-book="${MODULE}"]`).click();
+  await page.waitForTimeout(1500);
+}
 await page.locator('#read-tutorial-btn').click();
 await page.waitForTimeout(1400);
 const chapters = await page.$$eval('#toc-nav details', (d) => d.length);
-// Every chapter, three blocks deep — enough traversal for a flush to have fired many times.
+// Every chapter, three blocks deep.
 for (let c = 0; c < chapters; c += 1) for (let b = 0; b < 3; b += 1) await gotoBlock(c, b);
 await page.locator('#nav-quiz').click();
 await page.waitForTimeout(900);
+await page.keyboard.press('Escape');
 await page.evaluate(() => document.getElementById('nav-settings')?.click());
-await page.waitForTimeout(900);
-await page.waitForTimeout(1200);   // let any deferred flush land inside the window
+await page.waitForTimeout(2100);
 
 /* ---- the positive control: prove the listener CAN see a non-GET ---- */
 windowOpen = false;
 await page.evaluate(() => fetch('/api/health', { method: 'POST' }).catch(() => {}));
 await page.waitForTimeout(900);
 
-check('R-RO2 ZERO non-GET requests across a full browse — with the pending-progress queue SEEDED and a POSITIVE CONTROL',
-  observed.nonGet.length === 0 && observed.get > 0 && observed.control === 1 && seeded !== null,
-  `GET=${observed.get} nonGET=${observed.nonGet.length}${observed.nonGet.length ? ' ' + JSON.stringify(observed.nonGet.slice(0, 4)) : ''}`
-  + ` control(deliberate POST caught)=${observed.control} seeded=${seeded === null ? 'NO <-- FLOOR FAILED' : 'yes'}`
-  + ` chapters=${chapters}`
-  + ' — ⛔ without the seed flushPendingProgress() returns early on an empty queue (app.js:1170)'
-  + ' and zero is measured whether or not a write path exists; without the control, zero is also'
-  + ' true of a listener that never attached');
+const flushOk = flushed.length === 1 && flushed[0] === 'POST /api/progress' && queueLeft === null;
+check('R-RO2 a SEEDED queue flushes EXACTLY ONCE, and an UNSEEDED full browse sends ZERO non-GET (positive control)',
+  flushOk && observed.nonGet.length === 0 && observed.get > 0 && observed.control === 1 && chapters > 0,
+  `seeded-flush=${JSON.stringify(flushed)} queueAfter=${queueLeft === null ? 'empty' : 'NOT EMPTIED <--'}`
+  + ` | unseeded: GET=${observed.get} nonGET=${observed.nonGet.length}${observed.nonGet.length ? ' ' + JSON.stringify(observed.nonGet.slice(0, 4)) : ''}`
+  + ` control(deliberate POST caught)=${observed.control} chapters=${chapters}`);
 
 await browser.close();
 
 const after = fs.existsSync(PROGRESS)
   ? createHash('sha256').update(fs.readFileSync(PROGRESS)).digest('hex') : 'ABSENT';
-check('R-RO3 the progress store is BYTE-IDENTICAL across the browse (the suite\'s own store, never the user\'s)',
+check('R-RO3 the progress store is BYTE-IDENTICAL across the UNSEEDED browse (the suite\'s own store, never the user\'s)',
   before === after && before !== 'ABSENT',
   `path=${PROGRESS} before=${before} after=${after}`
   + (before === 'ABSENT' ? ' <-- FLOOR FAILED: no store on disk, so "unchanged" proves nothing' : ''));

@@ -1,49 +1,17 @@
-// Seam 17 (reader/codecells) — CELL STATE. ⛔ RULING R7: RENDER ONLY IN PHASE 03.
-//     process/features/ml/active/edu-replatform_21-09-26/RULING-R7-runnable-python_21-09-26.md
+// Seam 17 (reader/codecells) — CELL HELPERS. Static listings since ruling R24.
 //
-// ⛔ PHASE 03 RENDERS CELLS. IT DOES NOT EXECUTE THEM. The run path (/api/run,
-//    /api/run/stop, /api/run/reset-kernel proxied to the runner on .68:8790) is PHASE 04.
-//    `Run` renders DISABLED here. Do not wire a fetch from this seam.
+// ⚑ RULING R24 (23-09-26) — THE CODE RUNNER IS REMOVED. "it is not a good way of learning, and it
+//   adds complexity to the interface itself." Supersedes R7 (every block runnable) and R13 (runner
+//   weight limit). A `code_cells` block now renders as STATIC code with a Copy button: no Edit,
+//   no Reset, no Run, no kernel, no run status. The DATA is untouched (module.json keeps its
+//   code_cells); only the rendering changed. Practice happens in a local terminal with the
+//   geron-lab viewer, fed by each lesson's run-verified "Full script" block.
 //
-// ⛔⛔ TWO BEHAVIOURS ARE EASY TO LOSE IN A COMPONENT SPLIT, AND BOTH BREAK REAL CELLS
-//     (F7b):
-//   (i)  CELL NUMBERING IS **CHAPTER-SCOPED**, NOT BLOCK-SCOPED. `lessonCodeCells`
-//        scans EVERY item in the chapter, because a long walkthrough is split across
-//        several lessons that still share one kernel via the parent `lesson` id. Scope
-//        the scan to the visible block and ch01-b08d's predict cell runs in a page that
-//        never executed ch01-b08c's fit — `NameError: model`.
-//   (ii) RUN ORDER IS **DERIVED FROM PAGE ORDER**. `runCell` sends cells.slice(0, upTo+1).
-//        The ordering contract is explicit in the data and enforced in the UI; it is
-//        never left to the reader.
-//
-// ⛔ `codeCellViews` IS DELETED, NOT PORTED (A2d). It was a Map of DOM handles — a cache
-//    React does not need and must not grow back.
-//    `codeCellState` and `lessonRuns` DO port: edited source and run status survive
-//    leaving a lesson and coming back, and nothing is saved on the server.
-import { useCallback, useRef } from 'react';
+// ⛔ CELL NUMBERING STAYS CHAPTER-SCOPED (F7b(i)). The number on a card is its position among
+//    the chapter's cells for its `lesson` — the same number the book's walkthrough refers to.
 import type { CodeCell, SubBlock, TheoryBlock } from '../../data/types';
 
-export type CellTone = 'muted' | 'ok' | 'error';
-
-export interface CellRuntimeState {
-  original: string;
-  source: string;
-  outputs: unknown[];
-  status: string;
-  tone: CellTone;
-  started: number;
-}
-
-/** `${moduleId}|${lesson}|${cellId}` — module-scoped, or two books share state. */
-export function cellKey(moduleId: string, lesson: string, cellId: string): string {
-  return `${moduleId}|${lesson}|${cellId}`;
-}
-
-/**
- * lessonCodeCells — ⛔ scans the WHOLE CHAPTER. See (i) in the header.
- * Returns the chapter's cells for one `lesson`, in page order. The 1-based position in
- * this array IS the cell number shown in the UI and IS `ordinal` (R7).
- */
+/** lessonCodeCells — ⛔ scans the WHOLE CHAPTER (a walkthrough spans several lessons). */
 export function lessonCodeCells(chapterBlocks: TheoryBlock[], lesson: string): CodeCell[] {
   return chapterBlocks
     .flatMap((item) => (item && Array.isArray(item.blocks) ? item.blocks : []))
@@ -55,71 +23,46 @@ export function lessonCodeCells(chapterBlocks: TheoryBlock[], lesson: string): C
     .filter((cell) => cell && typeof cell.id === 'string' && typeof cell.source === 'string');
 }
 
-/** R7: every consumer reads the language through here, never off the raw field. */
-export function cellLanguage(cell: CodeCell): string {
-  return cell.language ?? 'python';
-}
-
-/**
- * cellsUpTo — ⛔ F7b(ii). RUN ORDER IS DERIVED FROM PAGE ORDER, and it is a pure slice.
- *
- * ⚑ WHY THIS EXISTS IN A PHASE THAT DOES NOT RUN ANYTHING. The legacy `runCell` sends
- *   `cells.slice(0, upTo + 1)` — every cell up to and including the one clicked, in page
- *   order — because the cells in a lesson SHARE A KERNEL and are meaningless out of
- *   sequence: `housing.hist()` needs the earlier `housing = load_housing_data()` to have
- *   run (ruling R7, constraint 2). That contract is one line of code and very easy to lose
- *   in a component split, where "run this cell" reads like an obviously-correct thing for a
- *   Run button to do. Phase 04 wires the fetch; if it has to REDISCOVER the slicing rule at
- *   that point, it will discover it as a `NameError` from a real kernel instead.
- *
- * ⛔ THIS IS NOT AN EXECUTION PATH AND MUST NOT BECOME ONE HERE. It takes a list and
- *    returns a shorter list. No fetch, no session, no side effect — Phase 03's bundle must
- *    contain ZERO non-GET call sites, and that is asserted against the built bundle.
- *
- * ⚠ `upTo` is an INDEX into `ordered`, not a 1-based cell number. The UI shows 1-based
- *   numbers (and R7's `ordinal` is 1-based), so passing the displayed number here runs one
- *   cell too many — off by one in the direction that silently succeeds.
- */
-export function cellsUpTo(ordered: CodeCell[], upTo: number): CodeCell[] {
-  if (!Number.isInteger(upTo) || upTo < 0) return [];
-  return ordered.slice(0, upTo + 1);
-}
-
-/**
- * cellOrdinal — the 1-based CHAPTER-scoped position, R7's `ordinal` when the data has one.
- * ⛔ F7b(i): the fallback scans the CHAPTER (`lessonCodeCells`), never the visible block.
- *    Scope it to the block and ch01-b08d's `predict` cell is numbered as if ch01-b08c's
- *    `fit` had never happened — which is exactly the state its kernel would be in.
- */
+/** The 1-based CHAPTER-scoped position (the legacy's `all.findIndex(...) + 1`). */
 export function cellOrdinal(cell: CodeCell, ordered: CodeCell[]): number | null {
-  if (typeof cell.ordinal === 'number') return cell.ordinal;
   const at = ordered.findIndex((entry) => entry.id === cell.id);
-  return at < 0 ? null : at + 1;
+  if (at >= 0) return at + 1;
+  return typeof cell.ordinal === 'number' ? cell.ordinal : null;
 }
 
-export function useCellState(moduleId: string) {
-  const store = useRef(new Map<string, CellRuntimeState>());
-  /** `${moduleId}|${lesson}` -> running cell id. Ports; Phase 04 uses it. */
-  const lessonRuns = useRef(new Map<string, string>());
-
-  const cellState = useCallback(
-    (lesson: string, cell: CodeCell): CellRuntimeState => {
-      const key = cellKey(moduleId, lesson, cell.id);
-      const existing = store.current.get(key);
-      if (existing) return existing;
-      const fresh: CellRuntimeState = {
-        original: cell.source,
-        source: cell.source,
-        outputs: [],
-        status: '',
-        tone: 'muted',
-        started: 0,
-      };
-      store.current.set(key, fresh);
-      return fresh;
-    },
-    [moduleId],
-  );
-
-  return { cellState, lessonRuns };
+/**
+ * eduCopyText (aws-quiz-app/js/rich-text-viewer.js, R24) — the SAME routine as the legacy's, so a
+ * Copy behaves identically on both ports. ⛔ :8792 is plain HTTP on the LAN: `navigator.clipboard`
+ * exists only in a secure context, so the textarea + execCommand('copy') fallback is the path that
+ * actually runs for the user, not an edge case. Focus is restored afterwards, as the legacy does.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      /* fall through */
+    }
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.top = '0';
+  area.style.left = '-9999px';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  const active = document.activeElement as HTMLElement | null;
+  area.select();
+  area.setSelectionRange(0, text.length);
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch {
+    ok = false;
+  }
+  area.remove();
+  if (active && typeof active.focus === 'function') active.focus();
+  return ok;
 }

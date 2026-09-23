@@ -1,109 +1,69 @@
-// Seam 17 (reader/codecells), part 2 — ONE CELL CARD.
+// Seam 17 (reader/codecells), part 2 — ONE CODE LISTING. Ruling R24: static, with a Copy button.
 //
-// Split out of renderCodeCells (118 lines — one of the six spanning functions). The card
-// is its own seam because renderCodeCells was doing three unrelated jobs at once:
-// building markup, wiring six listeners, and caching DOM handles. Only the first is a
-// component.
-//
-// ⛔ R7: RENDER ONLY. `Run` is DISABLED in Phase 03. The Edit/Reset affordances are
-//    local-only and touch nothing but in-memory state.
-//
-// Keyboard contract, ported verbatim — it is an accessibility obligation, not a nicety:
-//   · Tab inserts four spaces (and does NOT move focus) while editing;
-//   · Escape leaves the editor and returns focus to the Edit button;
-//   · the hint is announced via aria-describedby, id `cell-hint-<lesson>-<cellId>`;
-//   · every control carries a numbered aria-label ("Edit cell 3"), because "Edit" alone
-//     is ambiguous when a lesson has eleven cells.
-import { useRef, useState } from 'react';
+// ⚑ R24 (23-09-26) removed Edit / Reset / Run, the kernel status line, the output panel and the
+//   "Run disabled" badge (R13 is superseded — nothing runs, so nothing is disabled).
+// ⛔ PARITY: element for element the legacy's NEW renderCodeCells (aws-quiz-app/js/app.js, R24
+//    carve-out) — the same card, header, class strings, copy icon, `data-copy` / `data-copy-label` /
+//    `data-copy-state` hooks and `aria-label="Copy cell N"`. The label says "Copied" (or "Copy
+//    failed") for 1.5 s; the ICON does not change — the legacy's does not.
+import { useEffect, useRef, useState } from 'react';
 import type { CodeCell as CodeCellData } from '../../data/types';
-import { cellLanguage } from './useCellState';
+import { copyText } from './useCellState';
+
+const COPY_BUTTON_CLASS =
+  'inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 text-gray-300 hover:bg-gray-700 hover:text-white';
 
 export interface CodeCellProps {
   cell: CodeCellData;
-  lesson: string;
-  /** 1-based position in the CHAPTER's cell sequence. See useCellState (i). */
+  /** 1-based position in the CHAPTER's cell sequence. */
   number: number;
-  source: string;
-  original: string;
-  onSourceChange: (source: string) => void;
-  onReset: () => void;
 }
 
-export function CodeCell(props: CodeCellProps) {
-  const { cell, lesson, number, source, original, onSourceChange, onReset } = props;
-  const [editing, setEditing] = useState(false);
-  const editRef = useRef<HTMLButtonElement | null>(null);
-  const hintId = `cell-hint-${lesson}-${cell.id}`;
-  const edited = source !== original;
+export function CodeCell({ cell, number }: CodeCellProps) {
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const timer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (timer.current) window.clearTimeout(timer.current);
+  }, []);
+
+  const copy = async () => {
+    const ok = await copyText(cell.source);
+    setState(ok ? 'copied' : 'failed');
+    if (timer.current) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setState('idle'), 1500);
+  };
 
   return (
-    <section
-      className="overflow-hidden rounded-xl border border-gray-700 bg-gray-900/60"
-      aria-label={`Code cell ${number}`}
-      data-cell={cell.id}
-      data-language={cellLanguage(cell)}
-    >
+    <section className="overflow-hidden rounded-xl border border-gray-700 bg-gray-900/60" aria-label={`Code cell ${number}`} data-cell={cell.id}>
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-700 px-3 py-1">
-        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-gray-400">
-          {`Cell ${number}`}
-          <span className={edited ? undefined : 'hidden-view'}>edited</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            ref={editRef}
-            type="button"
-            aria-label={editing ? `Done editing cell ${number}` : `Edit cell ${number}`}
-            onClick={() => setEditing((on) => !on)}
+        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-gray-400">{`Cell ${number}`}</div>
+        <button
+          type="button"
+          className={COPY_BUTTON_CLASS}
+          data-copy=""
+          data-copy-state={state === 'idle' ? undefined : state}
+          aria-label={`Copy cell ${number}`}
+          onClick={() => void copy()}
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            className="h-4 w-4 shrink-0"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
           >
-            {editing ? 'Done' : 'Edit'}
-          </button>
-          <button type="button" aria-label={`Reset cell ${number}`} onClick={onReset}>
-            Reset
-          </button>
-          {/* ⛔ R7 / Phase 03: DISABLED. The runner is Phase 04. */}
-          <button type="button" disabled aria-label={`Run cell ${number} (available in a later phase)`}>
-            Run
-          </button>
-        </div>
+            <rect x="9" y="9" width="13" height="13" rx="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </svg>
+          <span data-copy-label="">{state === 'copied' ? 'Copied' : state === 'failed' ? 'Copy failed' : 'Copy'}</span>
+        </button>
       </div>
-
-      <pre
-        className={`m-0 overflow-x-auto whitespace-pre bg-transparent p-4 font-mono text-sm leading-6 text-gray-100${editing ? ' hidden-view' : ''}`}
-      >
-        <code>{source}</code>
+      <pre className="m-0 overflow-x-auto whitespace-pre bg-transparent p-4 font-mono text-sm leading-6 text-gray-100">
+        <code>{cell.source}</code>
       </pre>
-
-      <textarea
-        className={`block w-full resize-y whitespace-pre border-0 bg-gray-900 p-4 font-mono text-sm leading-6 text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-600${editing ? '' : ' hidden-view'}`}
-        spellCheck={false}
-        wrap="off"
-        autoCapitalize="off"
-        autoComplete="off"
-        aria-label={`Cell ${number} code`}
-        aria-describedby={hintId}
-        value={source}
-        onChange={(event) => onSourceChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Tab' && !event.shiftKey) {
-            event.preventDefault();
-            const field = event.currentTarget;
-            const { selectionStart, selectionEnd } = field;
-            onSourceChange(`${source.slice(0, selectionStart)}    ${source.slice(selectionEnd)}`);
-          } else if (event.key === 'Escape') {
-            event.preventDefault();
-            setEditing(false);
-            editRef.current?.focus();
-          }
-        }}
-      />
-
-      <span className="sr-only" id={hintId}>
-        Tab inserts spaces. Escape leaves the editor.
-      </span>
-
-      {/* A4/Phase 04 OWN the output panel: status (role="status", aria-atomic) + items,
-          rendered through sanitizeTable for HTML output. Hidden until a run exists. */}
-      <div className="hidden-view space-y-3 border-t border-gray-700 px-4 py-3" data-stub="P4: cell outputs" />
     </section>
   );
 }

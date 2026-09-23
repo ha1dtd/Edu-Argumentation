@@ -21,6 +21,10 @@
 // ⚠ It is a <div role="button" tabIndex={0}>, NOT a <button>. The title turns into an
 //   <input> on double-click, and an <input> inside a <button> is invalid and unfocusable
 //   in browsers. Do not "clean this up" into a <button>.
+import { useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from '../data/queries';
+import { postJson } from '../data/writes';
 import type { LibraryBook } from '../data/types';
 
 export interface BookCardProps {
@@ -48,8 +52,41 @@ const CARD_BASE =
 const CARD_CURRENT = 'border-brand-600 bg-gray-800';
 const CARD_OTHER = 'border-gray-700 bg-gray-800/60 hover:border-gray-500 hover:bg-gray-800';
 
+/** A click on the TITLE waits this long, so the first click of a double-click cannot open or
+ *  close the book before the second lands (app.js:1247 TITLE_DBLCLICK_MS). */
+const TITLE_DBLCLICK_MS = 260;
+
 export function BookCard({ book, current, done, onOpen }: BookCardProps) {
   const percent = book.lessons ? Math.round((done / book.lessons) * 100) : 0;
+  const [editing, setEditing] = useState(false);
+  const [shownTitle, setShownTitle] = useState<string | null>(null);
+  const titleTimer = useRef<number | null>(null);
+  const queryClient = useQueryClient();
+  const title = shownTitle ?? book.title;
+
+  /**
+   * renameBook (app.js:548) — optimistic: the card redraws at once; on failure it is put
+   * back rather than lying about it. The server owns the override (library-meta.json), so it
+   * survives another browser; module.json is never rewritten.
+   */
+  const rename = async (raw: string) => {
+    const clean = String(raw || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+    if (!clean || clean === title) return;
+    const previous = title;
+    setShownTitle(clean);
+    try {
+      const response = await postJson('/api/book/rename', { file: book.file, title: clean });
+      if (!response.ok) throw new Error(`Rename failed (${response.status}).`);
+      // Keep the listing's copy in step so a later render does not resurrect the old title.
+      queryClient.setQueryData(queryKeys.modules, (books: LibraryBook[] | undefined) =>
+        Array.isArray(books) ? books.map((entry) => (entry.file === book.file ? { ...entry, title: clean, renamed: true } : entry)) : books,
+      );
+    } catch (error) {
+      setShownTitle(previous);
+      window.alert(`Could not rename the book: ${(error as Error).message}`);
+    }
+  };
+
   return (
     <div
       role="button"
@@ -57,24 +94,70 @@ export function BookCard({ book, current, done, onOpen }: BookCardProps) {
       className={`${CARD_BASE} ${current ? CARD_CURRENT : CARD_OTHER}`}
       data-book={book.file}
       aria-current={current ? 'true' : 'false'}
-      onClick={() => onOpen(book.file)}
+      onClick={(event) => {
+        if (editing) return;
+        if ((event.target as HTMLElement).closest('[data-rename]')) {
+          if (titleTimer.current) window.clearTimeout(titleTimer.current);
+          titleTimer.current = window.setTimeout(() => {
+            titleTimer.current = null;
+            onOpen(book.file);
+          }, TITLE_DBLCLICK_MS);
+          return;
+        }
+        onOpen(book.file);
+      }}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           onOpen(book.file);
         }
       }}
     >
-      {/* The legacy wraps title + chip in a `head` div; the flex row is what puts the chip
-          on the title's right instead of on its own line. */}
       <div className="flex items-start justify-between gap-3">
-        <h3
-          className="text-white font-semibold leading-snug line-clamp-2"
-          data-rename={book.file}
-          title="Double-click to rename"
-        >
-          {book.title}
-        </h3>
+        {editing ? (
+          // beginRename (app.js:573): Enter commits, Escape and blur cancel; clicks inside must
+          // not reach the card, which would open the book.
+          <input
+            type="text"
+            defaultValue={title}
+            maxLength={160}
+            autoFocus
+            onFocus={(event) => event.currentTarget.select()}
+            className="w-full min-w-0 rounded-md border border-brand-600 bg-gray-900 px-2 py-1 text-white text-sm focus:outline-none"
+            onClick={(event) => event.stopPropagation()}
+            onDoubleClick={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                const value = event.currentTarget.value;
+                setEditing(false);
+                void rename(value);
+              } else if (event.key === 'Escape') {
+                event.preventDefault();
+                setEditing(false);
+              }
+            }}
+            onBlur={() => setEditing(false)}
+          />
+        ) : (
+          <h3
+            className="text-white font-semibold leading-snug line-clamp-2"
+            data-rename={book.file}
+            title="Double-click to rename"
+            onDoubleClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (titleTimer.current) window.clearTimeout(titleTimer.current);   // cancel the deferred open
+              titleTimer.current = null;
+              setEditing(true);
+            }}
+          >
+            {title}
+          </h3>
+        )}
         {current && (
           <span
             className="shrink-0 rounded-full bg-brand-600/15 px-2.5 py-1 text-xs font-semibold text-brand-400"
@@ -85,12 +168,12 @@ export function BookCard({ book, current, done, onOpen }: BookCardProps) {
         )}
       </div>
       <p className="text-xs text-gray-400">
-        {book.chapters === 1 ? '1 chapter' : `${book.chapters} chapters`}
+        {book.chapters === 1 ? '1 chapter' : `${book.chapters.toLocaleString()} chapters`}
       </p>
       <div
         className="h-1.5 rounded-full bg-gray-700 overflow-hidden"
         role="progressbar"
-        aria-label={`${book.title}: lessons done`}
+        aria-label={`${title}: lessons done`}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={percent}
@@ -98,12 +181,6 @@ export function BookCard({ book, current, done, onOpen }: BookCardProps) {
         <div className="h-full rounded-full bg-brand-600" style={{ width: `${percent}%` }} />
       </div>
       <p className="text-xs text-gray-400 tabular-nums">{`${done}/${book.lessons} lessons · ${percent}%`}</p>
-      {/*
-        PHASE 04 lands `#library-grid input[type="text"]` here — the rename input.
-        It is a WRITE (POST /api/rename), so it does not exist in this phase at all.
-        The contract selector is therefore a KNOWN GAP for the Phase-03 sweep, not a
-        missing element to fake with a disabled input.
-      */}
     </div>
   );
 }

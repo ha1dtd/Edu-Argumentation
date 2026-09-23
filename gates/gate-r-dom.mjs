@@ -107,7 +107,12 @@ const PRINT_IDS = idsInPrintBlock(legacyIndex) || [];
 //    rules are therefore inert (they hide elements that do not exist) — harmless, but the
 //    claim "all 14 resolve" is FALSE and is not going to be papered over.
 // ⛔ DO NOT CREATE ELEMENTS TO SATISFY THIS LIST.
-const PRINT_ID_DECLARED_ABSENT = ['#toc-toggle-btn', '#tutorial-to-quiz-btn'];
+// ⛑ CLOSED 23-09-26 (Phase 04): both are REAL legacy affordances — the contents toggle and
+//    Begin Assessment (the main way a block is completed) — that the port had dropped. They were
+//    restored FOR PARITY, not to satisfy this list, and this gate itself reported "NOW PRESENT".
+//    The list is now EMPTY and R-P3 asserts all 14 print ids resolve. Re-add an id here only for
+//    a legacy affordance that genuinely has no React equivalent, with the reason.
+const PRINT_ID_DECLARED_ABSENT = [];
 
 // Radical-bearing equations, derived from the READER-VISIBLE half of module.json
 // (tutorialData). ⚠ A whole-file walk returns 21 — that count includes quiz questions and
@@ -317,7 +322,10 @@ const chrome = await page.evaluate(() => {
     const r = e.getBoundingClientRect();
     return { found: true, w: +r.width.toFixed(1), h: +r.height.toFixed(1) };
   };
-  return { logo: pick('#brand-home svg'), upload: pick('label[for="custom-data-upload"] svg') };
+  // ⚑ 23-09-26 (user ruling): the top-bar upload icon is GONE (replaced by the text entry LOG OUT),
+  //   so the chrome SVGs are now the logo and the hamburger. `upload` is recorded as ABSENT and
+  //   asserted absent, so the icon cannot silently come back either.
+  return { logo: pick('#brand-home svg'), uploadGone: !document.querySelector('label[for="custom-data-upload"]') };
 });
 await page.setViewportSize({ width: 390, height: 844 });
 await page.waitForTimeout(400);
@@ -329,11 +337,11 @@ chrome.burger = await page.evaluate(() => {
 });
 await page.setViewportSize({ width: 1440, height: 1000 });
 await page.waitForTimeout(400);
-const chromeOk = ['logo', 'upload', 'burger'].every((k) => chrome[k].found && chrome[k].w > 0 && chrome[k].h > 0);
+const chromeOk = ['logo', 'burger'].every((k) => chrome[k].found && chrome[k].w > 0 && chrome[k].h > 0) && chrome.uploadGone === true;
 check('R-G17c the height:inherit fix is .katex-SCOPED and the chrome SVGs still have non-zero boxes (A-G18 analogue)',
   katexRules.length > 0 && unscoped.length === 0 && chromeOk,
   `svg-height rules=${svgHeightRules.length} katex-scoped=${JSON.stringify(katexRules)} unscoped=${JSON.stringify(unscoped)} chrome=${JSON.stringify(chrome)}`
-  + ' — an unscoped `svg{}` rule relayouts the brand logo, the upload icon and the hamburger');
+  + ' — an unscoped `svg{}` rule relayouts the brand logo and the hamburger (the upload icon was removed by user ruling 23-09-26)');
 
 /* ---- R-T2: zero [data-theme-fallback] over BOTH books ----------------------------------
  * ⛔⛔ TWO VACUITIES WERE MEASURED OUT OF THIS GATE ON 22-09-26. Both read GREEN on a book
@@ -364,7 +372,10 @@ const THEMED_PANEL_FN = `(known) => {
   const root = document.getElementById('tutorial-content');
   if (!root) return { panels: 0, fallback: 0 };
   const set = new Set(known);
-  const titles = [...root.querySelectorAll('[class]')].filter((e) => set.has(e.className.trim())).length;
+  // ⛔ getAttribute('class'), NOT e.className: on an <svg> className is an SVGAnimatedString, so
+  //    .trim() THROWS. Phase 04 put the legacy's own SVGs (the "Go deeper" chevron, the code-cell
+  //    icons) inside #tutorial-content and the gate crashed after 5 of its 8 lines (23-09-26).
+  const titles = [...root.querySelectorAll('[class]')].filter((e) => set.has((e.getAttribute('class') || '').trim())).length;
   const fb = root.querySelectorAll('[data-theme-fallback]').length;
   return { panels: titles + fb, fallback: fb };
 }`;
@@ -431,13 +442,11 @@ const unexpectedAbsent = absent.filter((i) => !PRINT_ID_DECLARED_ABSENT.includes
 const declaredButPresent = PRINT_ID_DECLARED_ABSENT.filter((i) => domIds[i] > 0);
 check(`R-P3 SUPPLEMENTARY (never the primary): ${PRINT_IDS.length} print ids in the React DOM — ${PRINT_ID_DECLARED_ABSENT.length} declared absent, exactly`,
   PRINT_IDS.length > 0 && unexpectedAbsent.length === 0 && declaredButPresent.length === 0
-  && PRINT_ID_DECLARED_ABSENT.length > 0,
+  && resolved.length === PRINT_IDS.length - PRINT_ID_DECLARED_ABSENT.length,
   `resolved=${resolved.length}/${PRINT_IDS.length} declaredAbsent=${JSON.stringify(PRINT_ID_DECLARED_ABSENT)}`
   + (unexpectedAbsent.length ? ` <-- UNEXPECTED ABSENT: ${unexpectedAbsent.join(' ')}` : '')
   + (declaredButPresent.length ? ` <-- NOW PRESENT, delete it from the list: ${declaredButPresent.join(' ')}` : '')
-  + ' — ⚠ PARITY GAP: the React port has no #toc-toggle-btn (it uses #toc-summary) and no'
-  + ' #tutorial-to-quiz-btn (it uses #block-ai-quiz-btn), so those two print rules are INERT.'
-  + ' ⛔ Do NOT create elements to satisfy this list.');
+  + ' — the Phase-03 gap (#toc-toggle-btn, #tutorial-to-quiz-btn) is closed by the Phase-04 parity port.');
 
 await browser.close();
 

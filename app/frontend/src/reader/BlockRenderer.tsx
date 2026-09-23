@@ -38,6 +38,7 @@ import type { SubBlock } from '../data/types';
 import { TextBlock } from './blocks/TextBlock';
 import { VisualBlock } from './blocks/VisualBlock';
 import { PanelBlock } from './blocks/PanelBlock';
+import { DeeperBlock } from './blocks/DeeperBlock';
 import { CodeCellsBlock } from './codecells/CodeCellsBlock';
 
 export interface BlockRendererProps {
@@ -71,7 +72,8 @@ function SubBlockView({ block, theme, assetBase }: { block: SubBlock; theme: str
 
   // A3 OWNS renderDeeper's own shape (a collapsible "go deeper" panel). It is routed
   // through PanelBlock here so the seam exists; the markup is not yet ported.
-  if (block.type === 'deeper') return <PanelBlock block={block} theme={theme} />;
+  // ⚑ Phase 04: renderDeeper, not the generic panel — the generic panel printed [object Object].
+  if (block.type === 'deeper') return <DeeperBlock block={block} />;
 
   if (block.type === 'equation' || (block.type === 'figure' && block.src && !block.svg)) {
     return <VisualBlock block={block} assetBase={assetBase} compact={false} />;

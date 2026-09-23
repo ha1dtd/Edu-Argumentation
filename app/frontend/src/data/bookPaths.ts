@@ -91,18 +91,39 @@ export function assetBaseFor(moduleId: string): string {
 }
 
 /**
- * The module id a book is keyed by — progress, exercise state and code-cell state are
- * all scoped by it, so getting it wrong silently mixes two books' state together.
+ * moduleIdFor (app.js:40) — PORTED VERBATIM, 23-09-26 (Phase 04).
  *
- * ⚠ The id may sit at the PAYLOAD root or inside tutorialData; store.py:119 reads both.
+ * The module id a book is keyed by — progress, exercise state and code-cell state are all
+ * scoped by it, so getting it wrong silently mixes two books' state together.
+ *
+ * ⛔⛔ THE PHASE-03 VERSION WAS A SIMPLIFICATION AND IT WAS DANGEROUS ONCE WRITES EXIST. It
+ *     returned the raw file stem ("SageMaker_Clarify") — uppercase and underscore, which the
+ *     server's MODULE_ID rejects, so store.module_key() SILENTLY FELL BACK TO "geron-homl3".
+ *     Measured on the live :8792 23-09-26: the SageMaker card showed "22 of 4 lessons" (the
+ *     Géron count) and the home KPIs read 26 / "2 started" against the legacy's 22 / 1. With the
+ *     Phase-04 write path, completing a block in a SageMaker book would have written it INTO the
+ *     user's real Géron progress. The legacy's rule, verbatim:
+ *       1. an explicit id (payload root or tutorialData), LOWERCASED, if it is a valid id;
+ *       2. else `f-<file stem>` slugged — two books with the same title (the two SageMaker
+ *          Clarify files) must NOT share progress;
+ *       3. else `t-<title slug>`, else 'module'.
  */
 export function moduleIdFor(data: ModulePayload | null, bookFile?: string | null): string {
-  const explicit = data?.moduleId ?? (data?.tutorialData?.moduleId as string | undefined);
-  if (typeof explicit === 'string' && explicit) return explicit;
-  if (bookFile) return stripExtension(bookFile);
-  return DEFAULT_BOOK;
-}
-
-function stripExtension(file: string): string {
-  return file.replace(/\.json$/i, '');
+  const tutorial = (data?.tutorialData ?? {}) as { moduleId?: unknown; title?: unknown };
+  const explicit = String(data?.moduleId || tutorial.moduleId || '').trim().toLowerCase();
+  if (/^[a-z0-9][a-z0-9-]{1,63}$/.test(explicit)) return explicit;
+  const stem = String(bookFile || '')
+    .replace(/\.json$/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 56);
+  if (stem.length >= 2) return `f-${stem}`;
+  const slug = String(tutorial.title || 'module')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 56);
+  return /^[a-z0-9]/.test(slug) && slug.length >= 2 ? `t-${slug}` : 'module';
 }

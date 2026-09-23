@@ -124,6 +124,10 @@ NEWTOTAL=0
 if [ -f "$GATES_DIR/gate-b456.mjs" ]; then
   run_suite gate-b456.mjs b456 "${GATE_B456_COUNT:-6}"; NEWTOTAL=$(( NEWTOTAL + ${COUNT[b456]} ))
 fi
+# Ruling R24 (23-09-26): code runner removed, Copy button added. Its own file, own count.
+if [ -f "$GATES_DIR/gate-copy.mjs" ]; then
+  run_suite gate-copy.mjs copy "${GATE_COPY_COUNT:-7}"; NEWTOTAL=$(( NEWTOTAL + ${COUNT[copy]} ))
+fi
 if [ -f "$GATES_DIR/gate-self.mjs" ]; then
   # gate-self.mjs parses the transcripts above (R5), so it MUST run last.
   run_suite gate-self.mjs self "${GATE_SELF_COUNT:-6}"; NEWTOTAL=$(( NEWTOTAL + ${COUNT[self]} ))
@@ -132,9 +136,9 @@ fi
 echo
 echo "===================== SUMMARY ====================="
 echo " frozen suites : $FROZEN / 49   (gate 27 | gate-q 12 | gate-a 10)"
-echo " new suites    : $NEWTOTAL       (gate-b456 + gate-self — asserted separately, R1)"
+echo " new suites    : $NEWTOTAL       (gate-b456 + gate-copy + gate-self — asserted separately, R1)"
 echo " total         : $(( FROZEN + NEWTOTAL ))"
-echo " transcripts   : $OUT_DIR/{gate,gateq,gatea,b456,self}.txt"
+echo " transcripts   : $OUT_DIR/{gate,gateq,gatea,b456,copy,self}.txt"
 [ "$RC" -eq 0 ] && echo " RESULT        : ALL GREEN" || echo " RESULT        : FAILED"
 echo "==================================================="
 exit $RC

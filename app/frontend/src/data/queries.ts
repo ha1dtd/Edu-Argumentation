@@ -161,7 +161,7 @@ export function useProgress(moduleId: string) {
  *     while the current-book line two elements above said `18 / 310 lessons done` and the
  *     card below said `18/310 lessons · 6%`. Both of those read LIVE progress for the OPEN
  *     book; only the KPI panel needs every book, and only it was missing its source.
- *     ⛔ The KPI arithmetic in library/HomePanel was ported VERBATIM and is CORRECT. Do not
+ *     ⛔ The KPI arithmetic (now library/LibraryScreen HomeKpis) was ported VERBATIM and is CORRECT. Do not
  *        "fix" the KPIs by changing that maths — the input was empty, not the formula.
  *
  * ⛔ READ-ONLY. GET only, no body, no write. Phase 03's whole claim is that `progress.json`

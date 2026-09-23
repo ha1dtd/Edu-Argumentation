@@ -9,3 +9,9 @@ fastapi==0.141.1
 starlette==1.6.0
 uvicorn==0.52.0
 pydantic==2.13.5
+# ⚑ Phase 06a (23-09-26): the per-account store is PostgreSQL (edu_study on nn:5432). Same pins
+#   as the CoreX console (platform/console/main/requirements-fastapi.txt:90-91): the pure-Python
+#   frontend plus the compiled libpq backend, as two flat lines. Installed into
+#   /home/ubuntu/edu-study-venv on 23-09-26 and measured: psycopg 3.2.12, impl "binary".
+psycopg==3.2.12
+psycopg-binary==3.2.12

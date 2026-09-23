@@ -91,6 +91,10 @@ preflight() {
   [[ -n "$avail" ]] || fail "could not read available memory on ${HOST}"
   log "available memory on ${HOST}: ${avail} MB (floor ${MIN_AVAIL_MB} MB)"
   (( avail >= MIN_AVAIL_MB )) || fail "available memory ${avail} MB is below the ${MIN_AVAIL_MB} MB floor"
+  # ⚑ Phase 06a: the backend imports psycopg (the per-account store). A venv without it would
+  #   pass the sha gate and then crash-loop on restart, so check BEFORE anything is transferred.
+  ssh "$HOST" "'$VENV/bin/python' -c 'import psycopg'" \
+    || fail "psycopg is missing from ${VENV} -- install requirements.txt (psycopg==3.2.12, psycopg-binary==3.2.12) first"
 }
 
 # ---------------------------------------------------------------------------
@@ -292,7 +296,14 @@ index_structure_check() {
 #      someone imports a book, which is exactly the event this gate must not let pass
 #      silently. Override for a legitimate change with EDU_STUDY_EXPECT_MODULES rather
 #      than editing this line in a hurry.
-EDU_STUDY_EXPECT_MODULES="${EDU_STUDY_EXPECT_MODULES:-2 ['geron-homl3', 'openintro-statistics-2019-1045f2f5']}"
+# ⚑ RE-MEASURED 23-09-26 (Phase 04): 2 -> 5. The three legacy-shape books (data/*.json — the
+#   SageMaker/MLOps sets) now ship in the build and are listed, so :8792's library equals the
+#   live :8767's EXACTLY. Measured on BOTH sides with this file's own parse_modules():
+#       :8767  5 ['geron-homl3', 'openintro-statistics-2019-1045f2f5', 't-domain-4-deep-dive-deployment-mlops', 't-sagemaker-clarify-bias-mastery', 't-sagemaker-clarify-bias-mastery']
+#       build  (identical)
+#   The duplicated t-sagemaker-clarify-bias-mastery is REAL and is the legacy's too: two files
+#   (SageMaker_Clarify.json, SageMakerClarifyBiasMastery.json) carry the same title.
+EDU_STUDY_EXPECT_MODULES="${EDU_STUDY_EXPECT_MODULES:-5 ['geron-homl3', 'openintro-statistics-2019-1045f2f5', 't-domain-4-deep-dive-deployment-mlops', 't-sagemaker-clarify-bias-mastery', 't-sagemaker-clarify-bias-mastery']}"
 
 # Parse a /api/modules payload on stdin into the canonical "<count> <sorted list>" form.
 # Exits non-zero on malformed JSON or a missing `books` key -- a 200 that is not the
@@ -331,9 +342,30 @@ compare_modules() {
 
 # Live gate. Called from content_gate(), so it runs on BOTH the deploy-verify path and
 # the rollback path -- a rollback that restores a tree with no books is still a failure.
+# ⚑ PHASE 06a — /api/modules NOW REQUIRES A SIGNED-IN SESSION (ruling R25). The gate authenticates
+#   with a SHORT-LIVED machine session minted on the box by the admin CLI (purpose='gate', 120 s,
+#   never slid forward) and REVOKED right after. The token travels ssh-stdout -> a shell variable ->
+#   curl's config on STDIN (`-K -`), so it is never in argv, a file, or this script's output.
+#   ⚠ On a tree without admin.py (a rollback to a pre-06a snapshot) minting fails quietly and the
+#     request goes out without a cookie — which is correct, because that code has no sign-in.
+mint_gate_session() {
+  ssh "$HOST" "cd '${REMOTE_DIR}/backend' 2>/dev/null && test -f admin.py && '$VENV/bin/python' -m admin mint-session --ttl 120" 2>/dev/null || true
+}
+revoke_gate_session() {
+  [[ -n "${1:-}" ]] || return 0
+  printf '%s\n' "$1" | ssh "$HOST" "cd '${REMOTE_DIR}/backend' && '$VENV/bin/python' -m admin revoke-session" >/dev/null 2>&1 || true
+}
+
 library_gate() {
-  local out
-  out="$(curl -s --max-time 20 "${BASE_URL}/api/modules" | parse_modules || true)"
+  local out tok
+  tok="$(mint_gate_session)"
+  if [[ -n "$tok" ]]; then
+    out="$(printf 'cookie = "edu_session=%s"\n' "$tok" | curl -s --max-time 20 -K - "${BASE_URL}/api/modules" | parse_modules || true)"
+  else
+    out="$(curl -s --max-time 20 "${BASE_URL}/api/modules" | parse_modules || true)"
+  fi
+  revoke_gate_session "$tok"
+  log "library gate: authenticated=$([[ -n "$tok" ]] && echo yes || echo no)"
   log "library gate: ${out:-<unparseable>}"
   compare_modules "$out" || fail "library gate failed"
   log "library gate: OK (matches the frozen measured baseline)"
@@ -346,8 +378,15 @@ content_gate() {
   local code ref rc n=0
 
   # --- 1. the document is actually served -------------------------------------
+  # ⚑ Phase 06a: `/` needs a session and answers 302 -> /login, which serves the SAME document
+  #   (the SPA renders the sign-in form there). A pre-06a tree (rollback) still answers 200 on `/`.
+  #   Either way the document fetched must be the one on disk.
   code="$(fetch_to "${BASE_URL}/" "$served")"
-  [[ "$code" == "200" ]] || fail "content gate RED: GET / returned ${code} (expected 200)"
+  if [[ "$code" == "302" ]]; then
+    code="$(fetch_to "${BASE_URL}/login" "$served")"
+    log "content gate: / redirects to sign-in; checking the document served at /login"
+  fi
+  [[ "$code" == "200" ]] || fail "content gate RED: the SPA document returned ${code} (expected 200)"
 
   # --- 2. served == on disk ----------------------------------------------------
   # A mismatch means a stale worker, a cache, or a different tree being served
@@ -393,6 +432,18 @@ content_gate() {
   library_gate
 
   log "content gate PASS — served index.html whole and identical to disk; ${n} referenced asset(s) verified byte-for-byte; library asserted"
+}
+
+# ---------------------------------------------------------------------------
+# Step 5b — database migrations (Phase 06a)
+# ---------------------------------------------------------------------------
+# admin.py migrate takes a pg_dump of edu_study into ~/foxai-snapshots/ FIRST and refuses to touch
+# the schema if the dump fails (ruling R25). Migrations are versioned and idempotent, so a deploy
+# with nothing new applies nothing. ⛔ Only the edu_study database is touched — never a server-wide
+# setting on nn:5432, which also holds polaris, airflow and dbos_console.
+migrate_db() {
+  ssh "$HOST" "cd '${REMOTE_DIR}/backend' && '$VENV/bin/python' -m admin migrate" \
+    || { log "migration FAILED -- auto-invoking rollback of the tree"; do_rollback "${SNAP_DIR:-}"; fail "migration failed; tree rolled back (the database was dumped before the attempt)"; }
 }
 
 # ---------------------------------------------------------------------------
@@ -552,11 +603,15 @@ main() {
   snapshot
   transfer
   verify_sha
+  migrate_db
   content_gate
   (( do_install )) && install_unit
   restart_service
   stability_gate
   health_gate
+  # ⚑ Phase 06a: the pre-restart content gate talks to the OLD process. Run it again against the
+  #   NEW one, so the served document and the (authenticated) library are proven for what now runs.
+  content_gate
   log "DEPLOY OK — ${SERVICE} on :${PORT}"
 }
 

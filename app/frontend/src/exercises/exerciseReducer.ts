@@ -56,7 +56,8 @@ export function exerciseStoreKey(moduleId: string, blockId: string): string {
 export type ExerciseMode = 'write' | 'choose';
 
 export interface ExerciseVerdict {
-  verdict: 'correct' | 'incorrect';
+  /** Written answers are marked by the model: `partial` and `unmarked` are real verdicts too. */
+  verdict: 'correct' | 'partial' | 'incorrect' | 'unmarked';
   feedback: string;
 }
 

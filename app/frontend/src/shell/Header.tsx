@@ -13,6 +13,7 @@
 //   because `menuOpen` has to be forced true on the wide viewport or the row renders
 //   collapsed after a resize.
 import { useEffect } from 'react';
+import { signOut } from '../data/writes';
 import type { NavTab } from './AppShell';
 
 export interface HeaderProps {
@@ -44,6 +45,18 @@ const NAV_BASE_CLASS =
 const NAV_ACTIVE_CLASS =
   'min-h-[44px] px-3 md:px-0 text-left md:text-center rounded-lg md:rounded-none pb-0 md:pb-1 border-b-2 border-brand-500 text-white transition-colors hover:text-white';
 
+// ⚑ 23-09-26 (user): "there is an upload button on the top bar of the UI, which open the filesystem
+//   upload interface. Replace that with the logout button since we already have the correct import
+//   button on the home page." LOG OUT sits where the upload icon sat (the far right, after the
+//   hamburger) and is the SAME entry as the tabs: NAV_BASE_CLASS verbatim, plus the three typography
+//   classes the tabs INHERIT from #primary-nav (`text-sm font-semibold tracking-wider`) — it lives
+//   outside that <nav>, so it has to carry them itself. gates/gate-r-style.mjs compares its computed
+//   style against #nav-account's, property by property.
+// ⛔ It is NOT inside #primary-nav: below md that nav is a dropdown, and sign-out would then be two
+//    taps away and hidden. Here it is visible at every width, like the upload icon was.
+const NAV_LOGOUT_CLASS =
+  'min-h-[44px] px-3 md:px-0 text-left md:text-center rounded-lg md:rounded-none pb-0 md:pb-1 border-b-2 border-transparent text-gray-400 transition-colors hover:text-white text-sm font-semibold tracking-wider';
+
 /** The legacy's breakpoint, verbatim (app.js `MENU_WIDE`). */
 const MENU_WIDE = '(min-width: 768px)';
 
@@ -71,12 +84,15 @@ export function isWideMenu(): boolean {
 
 /** The five nav tabs, in the legacy's document order. `null` == HOME, which is brand-home's
  *  target: app.js maps #nav-tutorial to showLandingDashboard + updateNavUI('tutorial'). */
-const NAV_TABS: ReadonlyArray<{ id: string; label: string; tab: NavTab | null }> = [
-  { id: 'nav-tutorial', label: 'HOME', tab: null },
+const NAV_TABS: ReadonlyArray<{ id: string; label: string; tab: NavTab }> = [
+  { id: 'nav-tutorial', label: 'HOME', tab: 'home' },
   { id: 'nav-learn', label: 'LEARN', tab: 'learn' },
   { id: 'nav-quiz', label: 'PRACTICE', tab: 'quiz' },
   { id: 'nav-generated-quiz', label: 'GENERATE QUIZ', tab: 'generated' },
   { id: 'nav-settings', label: 'SETTINGS', tab: 'settings' },
+  // ⚑ Phase 06a (ruling R25): "The top bar would get new entry called Account". Same button, same
+  //   classes as its neighbours; :8767 has no such entry, which is a named parity delta.
+  { id: 'nav-account', label: 'ACCOUNT', tab: 'account' },
 ];
 
 export function Header(props: HeaderProps) {
@@ -169,7 +185,10 @@ export function Header(props: HeaderProps) {
         {NAV_TABS.map(({ id, label, tab }) => {
           // HOME is active whenever no other tab is — it is the landing state, and the
           // legacy's updateNavUI('tutorial') is what showLandingDashboard calls.
-          const active = tab === null ? false : activeTab === tab;
+          // ⚑ Phase 04 parity: HOME is underlined on the landing page, as updateNavUI('tutorial')
+          //   does (app.js:322). It used to be `false` always, so the home page showed LEARN
+          //   underlined — measured in the before/after shots.
+          const active = activeTab === tab;
           return (
             <button
               key={id}
@@ -182,7 +201,7 @@ export function Header(props: HeaderProps) {
                     the false case has to be present and say "false". */
               aria-current={active ? 'true' : 'false'}
               onClick={() => {
-                if (tab === null) onBrandHome();
+                if (tab === 'home') onBrandHome();
                 else onSelectTab(tab);
               }}
             >
@@ -193,12 +212,13 @@ export function Header(props: HeaderProps) {
       </nav>
 
       {/*
-        The legacy's right-hand cluster (index.html). ⚠ It holds #menu-btn ONLY here: the
-        `#custom-data-upload` input and its <label> were deliberately placed in
-        library/LibraryScreen.tsx by slice A1 — recorded there as a declared placement
-        deviation, since `label[for="custom-data-upload"] svg` is UNSCOPED and resolves
-        either way while also satisfying `#services-section … label` with one element.
-        Do not "restore" them here; that would create a SECOND matching element.
+        The right-hand cluster: #menu-btn, then LOG OUT.
+        ⚑ 23-09-26 (user ruling): the #custom-data-upload file input and its upload <label> are GONE
+          from the top bar — the home page's Import link is the one way in. The frozen selector
+          contract still lists `label[for="custom-data-upload"] svg` and `[for="custom-data-upload"]`;
+          gate-r-contract.mjs declares both as ruled removals (with reverse teeth: if either ever
+          resolves again, that gate goes red), and gate-r-style.mjs asserts no top-bar control
+          reaches an <input type="file">.
       */}
       <div className="flex items-center gap-4">
         <button
@@ -213,6 +233,14 @@ export function Header(props: HeaderProps) {
           <svg className="w-6 h-6 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
           </svg>
+        </button>
+        <button
+          id="nav-logout"
+          type="button"
+          className={NAV_LOGOUT_CLASS}
+          onClick={() => void signOut()}
+        >
+          LOG OUT
         </button>
       </div>
     </header>

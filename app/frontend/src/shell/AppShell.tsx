@@ -18,24 +18,40 @@
 //    component is a side effect on <body>, so it belongs in ONE effect here, not
 //    scattered across the screens that want it.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useModules } from '../data/queries';
+import { AccountScreen } from '../account/AccountScreen';
+import { useBookContext } from '../state/BookProvider';
+import {
+  bookPath,
+  cursorForRoute,
+  fileForSlug,
+  legacyHashCursor,
+  lessonPath,
+  parseRoute,
+  sameRoute,
+  unitWordFor,
+} from '../routing/paths';
+import type { Route } from '../routing/paths';
 import type { TheoryCursor } from '../data/types';
 import { BookProvider } from '../state/BookProvider';
 import { LibraryProvider } from '../state/LibraryProvider';
 import { ProgressProvider } from '../state/ProgressProvider';
-import { QuizProvider } from '../state/QuizProvider';
+import { QuizProvider, useQuiz } from '../state/QuizProvider';
 import { ReaderCursorProvider, useReaderCursor } from '../state/ReaderCursorProvider';
 import { Header, isWideMenu } from './Header';
 import { Screen } from './Screen';
-import { LibraryScreen } from '../library/LibraryScreen';
+import { HomeKpis, LibrarySection, WelcomeCard } from '../library/LibraryScreen';
 import { ReaderScreen } from '../reader/ReaderScreen';
 import { QuizScreen } from '../quiz/QuizScreen';
 import { ResultScreen } from '../quiz/ResultScreen';
 import { QuizSetupScreen } from '../quiz/QuizSetupScreen';
 import { SettingsScreen } from '../settings/SettingsScreen';
 import { AskPanel } from '../ask/AskPanel';
+import { useStudyActions } from './useStudyActions';
+import type { SetupMode } from '../quiz/QuizSetupScreen';
 
-export type NavTab = 'learn' | 'quiz' | 'generated' | 'settings';
+export type NavTab = 'home' | 'learn' | 'quiz' | 'generated' | 'settings' | 'account';
 
 export type ScreenName =
   | 'loading'
@@ -44,11 +60,38 @@ export type ScreenName =
   | 'settings'
   | 'quiz'
   | 'result'
-  | 'quiz-setup';
+  | 'quiz-setup'
+  | 'account';
 
 export function AppShell() {
-  const { enterReader, select } = useReaderCursor();
-  const [screen, setScreen] = useState<ScreenName>('welcome');
+  const { enterReader, select, cursor, ready } = useReaderCursor();
+  const { state } = useQuiz();
+  const { activeBookFile, openBook, data, chapters, blocksOf } = useBookContext();
+  /*
+    ⚑ PHASE 06a — THE ADDRESS BAR (ruling R25). The first screen comes from the PATH, not a fixed
+      'welcome': /<book>/<unit>-<n>/<m>-<slug> opens the reader on that lesson, /account and
+      /settings open their pages, and an old `#chapter=&block=` link opens the reader too (the
+      writer below then rewrites it to the path). routing/paths.ts has the grammar.
+  */
+  const [initialRoute] = useState<Route>(() => parseRoute());
+  const [screen, setScreen] = useState<ScreenName>(() => {
+    if (initialRoute.kind === 'lesson') return 'tutorial';
+    if (initialRoute.kind === 'account') return 'account';
+    if (initialRoute.kind === 'settings') return 'settings';
+    return initialRoute.kind === 'library' && legacyHashCursor() ? 'tutorial' : 'welcome';
+  });
+  /** Home is `/` (the library) unless the reader arrived at, or stays on, one book's `/<book>/`. */
+  const [homeIsBook, setHomeIsBook] = useState(initialRoute.kind === 'book');
+  /** `/quiz` on a lesson path: start that lesson's assessment once the book and cursor are ready. */
+  const pendingQuiz = useRef(initialRoute.kind === 'lesson' && initialRoute.quiz);
+  /** The FIRST address-bar write of a page load is a canonicalisation, never a new history entry. */
+  const firstWrite = useRef(true);
+  const modules = useModules();
+  const knownFiles = useMemo(() => (modules.data ?? []).map((b) => b.file), [modules.data]);
+  // A slug outside the fixed map can only be resolved once /api/modules answers.
+  const [slugResolved, setSlugResolved] = useState(
+    () => !(initialRoute.kind === 'book' || initialRoute.kind === 'lesson') || Boolean(fileForSlug(initialRoute.slug)),
+  );
   /*
     ⛔⛔ D-8 — THE NAV TRAP. `#quiz-setup-screen` is `fixed inset-0 z-[60]` (the legacy's own
         class string, index.html:534) and the header is `z-50`, so while the picker is open it
@@ -68,13 +111,19 @@ export function AppShell() {
       keyboard obligation for any `aria-modal` dialog.
   */
   const [returnTo, setReturnTo] = useState<ScreenName>('welcome');
-  const openQuizSetup = () =>
+  // setupMode (app.js:3091) — PRACTICE and GENERATE QUIZ open the same picker in two modes.
+  const [setupMode, setSetupMode] = useState<SetupMode>('practice');
+  const openQuizSetup = (mode?: SetupMode) => {
+    if (mode) setSetupMode(mode);
     setScreen((current) => {
       if (current !== 'quiz-setup') setReturnTo(current);
       return 'quiz-setup';
     });
+  };
   const closeQuizSetup = () => setScreen(returnTo);
-  const [activeTab, setActiveTab] = useState<NavTab>('learn');
+  const [activeTab, setActiveTab] = useState<NavTab>(() =>
+    screen === 'tutorial' ? 'learn' : screen === 'account' ? 'account' : screen === 'settings' ? 'settings' : 'home',
+  );
   const [menuOpen, setMenuOpen] = useState(false);
 
   /*
@@ -96,7 +145,17 @@ export function AppShell() {
        render, so the effect would re-run on every render for as long as the finish
        condition held. Same rule, and the same reason, as `onSyncMenu={setMenuOpen}` below.
   */
-  const finishQuiz = useCallback(() => setScreen('result'), []);
+  /*
+    ⚑ PHASE 04 — THE GENUINE FINISH RECORDS. recordQuizResult() runs here and ONLY here
+      (app.js:1313: "The one genuine finish. showResults() is also reached by re-opening an old
+      result, which must not re-record anything."). It reads the quiz through a ref, so this
+      callback keeps a stable identity — see shell/useStudyActions.ts.
+  */
+  const recordRef = useRef<() => Promise<void>>(async () => {});
+  const finishQuiz = useCallback(() => {
+    void recordRef.current();
+    setScreen('result');
+  }, []);
 
   /* startQuiz() -> showQuizScreen() (app.js:683/643). Restart and retry-wrong both end there,
      so the result screen's two replay buttons need it. Stable identity for the same reason
@@ -121,6 +180,140 @@ export function AppShell() {
     },
     [select],
   );
+
+  // ⚑ PHASE 04 — the write-side actions. Each ends in a screen switch this shell owns.
+  const showQuizFor = useCallback((scope: 'ai' | 'other') => {
+    // showQuizScreen -> updateNavUI(navTabForScope()) (app.js:643).
+    setActiveTab(scope === 'ai' ? 'generated' : 'quiz');
+    setScreen('quiz');
+  }, []);
+  const showLoading = useCallback(() => {
+    setActiveTab('generated');
+    setScreen('loading');
+  }, []);
+  const showHome = useCallback(() => {
+    setActiveTab('home');
+    setScreen('welcome');
+  }, []);
+  const actions = useStudyActions({
+    showQuiz: showQuizFor,
+    showLoading,
+    showHome,
+    showReaderAt: backToReader,
+  });
+  recordRef.current = actions.recordQuizResult;
+
+  // ⚑ PHASE 06a — the words in a lesson URL: the book's own unit word and the lesson title.
+  const names = useMemo(
+    () => ({
+      unitWord: unitWordFor(chapters[0]?.title),
+      lessonTitle: (at: TheoryCursor) => String(blocksOf(at.chapterIndex)[at.blockIndex]?.term || ''),
+    }),
+    [chapters, blocksOf],
+  );
+
+  // An unmapped book slug: resolve it against the library once it is listed; unknown -> home.
+  useEffect(() => {
+    if (slugResolved || !modules.data) return;
+    if (initialRoute.kind === 'book' || initialRoute.kind === 'lesson') {
+      const file = fileForSlug(initialRoute.slug, knownFiles);
+      if (file) {
+        if (file !== activeBookFile) openBook(file);
+      } else {
+        pendingQuiz.current = false;
+        setHomeIsBook(false);
+        setActiveTab('home');
+        setScreen('welcome');
+      }
+    }
+    setSlugResolved(true);
+  }, [slugResolved, modules.data, knownFiles, initialRoute, activeBookFile, openBook]);
+
+  /*
+    THE ADDRESS-BAR WRITER. The path is a function of (screen, book, cursor, quiz scope):
+      reader -> the lesson path · a written-question assessment -> its lesson path + /quiz ·
+      home -> / or /<book>/ · account / settings -> their paths · everything else -> leave it.
+    pushState for a real move (so Back returns lesson by lesson); replaceState when only the
+    cosmetic words differ (a stale or wrong slug, a chapter-only link, an old #hash link) and for
+    the first write of a page load.
+    ⛔ It waits for `ready` — see routing/usePathCursor: in the commit where a book arrives the
+       cursor has not been taken from the URL yet, and writing then would push lesson 1 over a
+       deep link.
+  */
+  useEffect(() => {
+    let desired: string | null = null;
+    if (screen === 'account') desired = '/account';
+    else if (screen === 'settings') desired = '/settings';
+    else if (!slugResolved || !activeBookFile || !data || !ready) return;
+    else if (screen === 'tutorial') desired = lessonPath(activeBookFile, cursor, names);
+    else if (screen === 'welcome') desired = homeIsBook ? bookPath(activeBookFile) : '/';
+    else if ((screen === 'quiz' || screen === 'result') && state.scope === 'block' && state.scopeBlockId) {
+      const m = /^ch(\d{2})-b(\d{2})$/.exec(state.scopeBlockId);
+      if (m) desired = lessonPath(activeBookFile, { chapterIndex: Number(m[1]) - 1, blockIndex: Number(m[2]) - 1 }, names, true);
+    }
+    if (!desired) return;
+    const here = window.location.pathname;
+    const first = firstWrite.current;
+    firstWrite.current = false;
+    if (here === desired && !window.location.hash) return;
+    const replace = first || Boolean(window.location.hash) || sameRoute(parseRoute(here), parseRoute(desired));
+    window.history[replace ? 'replaceState' : 'pushState'](null, '', desired);
+  }, [screen, activeBookFile, data, ready, cursor, names, homeIsBook, slugResolved, state.scope, state.scopeBlockId]);
+
+  // Back / Forward: re-read the path and move the app to it (the writer then finds nothing to do).
+  useEffect(() => {
+    const onPop = () => {
+      const route = parseRoute();
+      if (route.kind === 'account' || route.kind === 'settings') {
+        setActiveTab(route.kind);
+        setScreen(route.kind);
+        return;
+      }
+      const file = route.kind === 'book' || route.kind === 'lesson' ? fileForSlug(route.slug, knownFiles) : null;
+      if (!file || route.kind === 'library' || route.kind === 'unknown' || route.kind === 'login') {
+        setHomeIsBook(false);
+        setActiveTab('home');
+        setScreen('welcome');
+        return;
+      }
+      if (route.kind === 'book') {
+        setHomeIsBook(true);
+        if (file !== activeBookFile) openBook(file);
+        setActiveTab('home');
+        setScreen('welcome');
+        return;
+      }
+      const at = cursorForRoute(route);
+      if (file !== activeBookFile) openBook(file);        // the cursor follows the path on load
+      else if (at) select(at);
+      pendingQuiz.current = route.quiz;
+      setActiveTab('learn');
+      setScreen('tutorial');
+    };
+    // A hand-typed old #chapter=&block= link on an open page: same rewrite as on load.
+    const onHash = () => {
+      const at = legacyHashCursor();
+      if (!at) return;
+      select(at);
+      setActiveTab('learn');
+      setScreen('tutorial');
+    };
+    window.addEventListener('popstate', onPop);
+    window.addEventListener('hashchange', onHash);
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      window.removeEventListener('hashchange', onHash);
+    };
+  }, [knownFiles, activeBookFile, openBook, select]);
+
+  // `/quiz` on a lesson path (a link, a refresh, or Forward): start that lesson's assessment once
+  // the book is in and the cursor stands on the lesson. One shot per request.
+  const { beginBlockAssessment } = actions;
+  useEffect(() => {
+    if (!pendingQuiz.current || !slugResolved || !data || !ready) return;
+    pendingQuiz.current = false;
+    beginBlockAssessment();
+  }, [slugResolved, data, ready, cursor, beginBlockAssessment]);
 
   // setReaderMode(on) — one owner for the <body> class. See the header.
   useEffect(() => {
@@ -155,7 +348,7 @@ export function AppShell() {
       <Header
         activeTab={activeTab}
         onSelectTab={(tab) => {
-          setActiveTab(tab);
+          if (tab !== 'quiz' && tab !== 'generated') setActiveTab(tab);
           // The tab -> screen map, ported from the four nav listeners (app.js:1232, 1360,
           // 3487, 3488) and updateNavUI (296-310).
           // ⚠ nav-quiz opens the PICKER, not a running quiz (openQuizTab). Sending it
@@ -163,15 +356,21 @@ export function AppShell() {
           // ⚠ nav-learn does NOT jump to nextLesson — only #read-tutorial-btn does. The
           //   two entrances behave differently in the legacy app and that is preserved.
           if (tab === 'learn') setScreen('tutorial');
-          if (tab === 'quiz' || tab === 'generated') openQuizSetup();
+          // openQuizTab(mode) (app.js:1012): the picker, in the tab's own mode. ⚠ The nav
+          //   underline moves at Start, not here — opening the picker is not navigating yet.
+          if (tab === 'quiz') openQuizSetup('practice');
+          if (tab === 'generated') openQuizSetup('generate');
           if (tab === 'settings') setScreen('settings');
+          if (tab === 'account') setScreen('account');
           // ⛔ THE NARROW-VIEWPORT menu closes on a nav choice — `if (!isWideMenu())` is the
           //    legacy's own guard (app.js:3487-3490) and dropping it is D-8. See
           //    shell/Header.tsx:isWideMenu for the measurement.
           if (!isWideMenu()) setMenuOpen(false);
         }}
         onBrandHome={() => {
-          setActiveTab('learn');
+          setHomeIsBook(false);
+          // showLandingDashboard -> updateNavUI('tutorial') (app.js:322): HOME is underlined.
+          setActiveTab('home');
           setScreen('welcome');
         }}
         menuOpen={menuOpen}
@@ -226,8 +425,23 @@ export function AppShell() {
       */}
       <div className="w-full bg-gray-900 px-4 pt-6 sm:pt-10 pb-20">
       <div className="max-w-7xl mx-auto">
-        <Screen id="loading-screen" visible={screen === 'loading'}>
-          {/* A3: #loading-model + #loading-scope. */}
+        {/* Writing an AI quiz — index.html:220-228, class strings verbatim. */}
+        <Screen
+          id="loading-screen"
+          visible={screen === 'loading'}
+          className="flex flex-col items-center justify-center text-center py-24 animate-fade-in"
+        >
+          <div className="relative w-16 h-16 mb-6 mx-auto">
+            <div className="absolute inset-0 border-4 border-gray-700 rounded-full" />
+            <div className="absolute inset-0 border-4 border-brand-600 rounded-full border-t-transparent animate-spin" />
+          </div>
+          <h2 className="text-3xl text-white font-light mb-2">
+            Writing a <span className="font-bold">fresh quiz</span>
+          </h2>
+          <p id="loading-scope" className="text-brand-600 uppercase tracking-widest text-sm font-semibold">
+            {actions.loading.scope || 'AI is reading random book sections · up to a minute'}
+          </p>
+          <p id="loading-model" className="mt-2 text-gray-500 text-xs">{actions.loading.model}</p>
         </Screen>
 
         {/*
@@ -242,15 +456,32 @@ export function AppShell() {
             the jump went nowhere (writeCursorHash uses replaceState, which emits no
             `hashchange`, so the second instance never heard about it).
         */}
-        <Screen id="welcome-screen" visible>
-          <LibraryScreen
+        {/*
+          ⛔ `visible` is HARD-CODED TRUE — #welcome-screen carries no hidden-view in ANY state
+             of the legacy app; the CONTAINER (#landing-dashboard) hides, never the screen (B15).
+          ⚑ Phase 04 parity: #welcome-screen IS the card (index.html:231), and #home-kpis +
+            #services-section are its SIBLINGS — not children, as slice A1 had them.
+          ⛔ enterReader() FIRST, then the screen switch — THAT ORDER IS B15.
+        */}
+        <Screen
+          id="welcome-screen"
+          visible
+          className="animate-fade-in bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8"
+        >
+          <WelcomeCard
             onOpenReader={() => {
               enterReader();
               setActiveTab('learn');
               setScreen('tutorial');
             }}
+            onPractice={() => openQuizSetup('practice')}
+            onGenerate={() => openQuizSetup('generate')}
+            aiReady={actions.aiReady}
+            providerReady={actions.providerReady}
           />
         </Screen>
+        <HomeKpis />
+        <LibrarySection />
       </div>
       </div>
       </div>
@@ -279,11 +510,16 @@ export function AppShell() {
           visible={screen === 'tutorial'}
           className="w-full flex-1 min-h-0 flex flex-col lg:flex-row gap-2"
         >
-          <ReaderScreen isVisible={screen === 'tutorial'} />
+          <ReaderScreen isVisible={screen === 'tutorial'} actions={actions} />
+        </Screen>
+
+        {/* ⚑ Phase 06a — the Account page (ruling R25). Same frame as Settings. */}
+        <Screen id="account-screen" visible={screen === 'account'} className="w-full max-w-5xl mx-auto space-y-6">
+          <AccountScreen open={screen === 'account'} />
         </Screen>
 
         <Screen id="settings-screen" visible={screen === 'settings'} className="w-full max-w-5xl mx-auto space-y-6">
-          <SettingsScreen />
+          <SettingsScreen open={screen === 'settings'} />
         </Screen>
 
         {/*
@@ -301,7 +537,7 @@ export function AppShell() {
           <QuizScreen
             isVisible={screen === 'quiz'}
             onFinish={finishQuiz}
-            onNewQuiz={openQuizSetup}
+            onNewQuiz={() => openQuizSetup(state.scope === 'ai' ? 'generate' : 'practice')}
           />
         </Screen>
 
@@ -312,7 +548,9 @@ export function AppShell() {
         >
           <ResultScreen
             onBackToReader={backToReader}
-            onNewQuiz={openQuizSetup}
+            onNewQuiz={() => openQuizSetup(state.scope === 'ai' ? 'generate' : 'practice')}
+            onGenerateAnother={actions.generateAnother}
+            saveNote={actions.saveNote}
             /* startQuiz()'s showQuizScreen() — see ResultScreenProps.onResumeQuiz. */
             onResumeQuiz={resumeQuiz}
           />
@@ -323,7 +561,13 @@ export function AppShell() {
 
       {/* An overlay at z-[60], a sibling of both containers — index.html:534. */}
       <Screen id="quiz-setup-screen" visible={screen === 'quiz-setup'} className="fixed inset-0 z-[60] overflow-y-auto">
-        <QuizSetupScreen onStart={() => setScreen('quiz')} onCancel={closeQuizSetup} />
+        <QuizSetupScreen
+          mode={setupMode}
+          open={screen === 'quiz-setup'}
+          onStart={() => showQuizFor('other')}
+          onCancel={closeQuizSetup}
+          actions={actions}
+        />
       </Screen>
 
       {/*

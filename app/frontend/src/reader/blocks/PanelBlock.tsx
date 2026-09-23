@@ -85,16 +85,26 @@ export function PanelBlock({ block, theme }: PanelBlockProps) {
       {bullets && (
         <ul className="mt-3 space-y-3">
           {bullets.map((entry, index) => (
-            // A3: the legacy cloned tmpl-tutorial-list-item. The <span> wrapper is part
-            // of that template's shape — keep it when A3 ports the markup.
-            <li key={index}>
-              <span>
-                <RichTextViewer content={entry} />
-              </span>
-            </li>
+            <TutorialListItem key={index} content={String(entry)} />
           ))}
         </ul>
       )}
     </section>
+  );
+}
+
+/**
+ * tmpl-tutorial-list-item (index.html:463-468), element for element: a flex row, a brand dot,
+ * and a `leading-relaxed` span holding the rich text. ⚑ Phase 04 parity: the port rendered a
+ * bare <li><span> and the browser's own disc bullets appeared instead of the brand dot.
+ */
+export function TutorialListItem({ content }: { content: string }) {
+  return (
+    <li className="flex items-start gap-4">
+      <div className="w-1.5 h-1.5 rounded-full bg-brand-600 mt-2.5 shrink-0" />
+      <span className="leading-relaxed">
+        <RichTextViewer content={content} />
+      </span>
+    </li>
   );
 }

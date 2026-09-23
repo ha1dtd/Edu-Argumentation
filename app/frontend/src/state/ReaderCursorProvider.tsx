@@ -7,7 +7,8 @@
 //   (#read-tutorial-btn jumps to nextLesson() before the reader is shown). A value two
 //   sibling screens share is what a context is for.
 //
-// ⛔ IT WRAPS routing/useHashCursor — it does not replace it. Hash parsing, the hashchange
+// ⚑ Phase 06a: it now wraps routing/usePathCursor (the hash cursor is retired, ruling R25).
+// (history) IT WRAPPED routing/useHashCursor — it did not replace it. Hash parsing, the hashchange
 //    listener, clamping and the load-time hash read all stay in slice A3's file, which was
 //    NOT edited by A2.
 //
@@ -31,7 +32,7 @@
 // state/theoryNav.ts.
 import { createContext, useCallback, useContext, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import { useHashCursor } from '../routing/useHashCursor';
+import { usePathCursor } from '../routing/usePathCursor';
 import type { TheoryCursor } from '../data/types';
 import { useBookContext } from './BookProvider';
 import { useProgressContext } from './ProgressProvider';
@@ -47,20 +48,24 @@ interface ReaderCursorValue {
   next: TheoryCursor | null;
   /** The first incomplete block; a finished book returns its last with done:true. */
   resume: NextLesson | null;
-  /** #read-tutorial-btn's whole behaviour. ⛔ This is B15's overwrite — see below. */
+  /** #read-tutorial-btn's whole behaviour: jump to the first unfinished lesson. */
   enterReader: () => void;
+  /** The cursor has been set from the URL for the loaded book (routing/usePathCursor). */
+  ready: boolean;
 }
 
 const ReaderCursorContext = createContext<ReaderCursorValue | null>(null);
 
 export function ReaderCursorProvider({ children }: { children: ReactNode }) {
-  const { chapters, blocksOf, data } = useBookContext();
+  const { chapters, blocksOf, data, activeBookFile } = useBookContext();
   const { isBlockComplete } = useProgressContext();
   const blockCountOf = useCallback((index: number) => blocksOf(index).length, [blocksOf]);
   // ⚠ `data` is passed so A3's load-time hash read is live rather than inert. Their own
   //   note asks slice A2 for a book identity token for the same-chapter-count book switch;
   //   BookProvider.moduleId is it, and it is exposed — wiring it is A3's call.
-  const { cursor, select } = useHashCursor(chapters.length, blockCountOf, data);
+  // ⚑ Phase 06a: the cursor comes from the PATH (/<book>/<unit>-<n>/<m>-<slug>), or from an old
+  //   `#chapter=&block=` link, when the book loads. The shell writes the address bar.
+  const { cursor, select, ready } = usePathCursor(chapters.length, blockCountOf, data, activeBookFile);
 
   const value = useMemo<ReaderCursorValue>(() => {
     const resume = nextLesson(chapters.length, blockCountOf, isBlockComplete);
@@ -71,7 +76,11 @@ export function ReaderCursorProvider({ children }: { children: ReactNode }) {
       next: nextTheory(cursor, chapters.length, blockCountOf),
       resume,
       /**
-       * ⛔⛔ THIS IS B15, REPRODUCED ON PURPOSE. DO NOT "FIX" IT.
+       * ⚑ Phase 06a: B15 is RETIRED with the hash (ruling R25). A deep link now opens the reader
+       *   ON its lesson directly (routing/usePathCursor), so this click no longer overwrites a
+       *   deep link — it is only "Continue reading": the first unfinished lesson. History below.
+       *
+       * (was) ⛔⛔ THIS IS B15, REPRODUCED ON PURPOSE.
        *
        * app.js:1238-1242 — #read-tutorial-btn calls nextLesson() and selectTheory()s it.
        * selectTheory writes the hash, so LEARN STAMPS OVER whatever deep link the user
@@ -83,8 +92,9 @@ export function ReaderCursorProvider({ children }: { children: ReactNode }) {
       enterReader: () => {
         if (resume) select({ chapterIndex: resume.chapterIndex, blockIndex: resume.blockIndex });
       },
+      ready,
     };
-  }, [cursor, select, chapters.length, blockCountOf, isBlockComplete]);
+  }, [cursor, select, ready, chapters.length, blockCountOf, isBlockComplete]);
 
   return <ReaderCursorContext.Provider value={value}>{children}</ReaderCursorContext.Provider>;
 }

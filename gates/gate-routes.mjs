@@ -24,7 +24,12 @@
  *   EXTRACTOR FAILED and prints NO diff. 5 + 10 = 15 is a measured fact about a file
  *   that is frozen and will never change again:
  *     - 5 GET   : the `route == "/api/..."` branches of do_GET (L1091-1116)
- *     - 10 POST : the 7-entry allowlist tuple (L1272-1273) + the 3 RUN_ROUTES (L43)
+ *     - 7 POST  : the 7-entry allowlist tuple in do_POST
+ *   ⚑ RULING R24 (23-09-26): the 3 RUN_ROUTES (/api/run, /api/run/stop,
+ *     /api/run/reset-kernel) were REMOVED from the legacy server with the code runner.
+ *     The contract was 5 GET + 10 POST = 15; it is now 5 GET + 7 POST = 12, and the
+ *     name-list sha below was re-pinned for exactly that one reason. The port must NOT
+ *     carry the run routes either (R24 binds :8792 too).
  *
  *   ⚠ The three routinely dropped in a rewrite are /api/run/stop, /api/run/reset-kernel
  *   and /api/general. A port that moves "the 12" silently loses them.
@@ -51,7 +56,7 @@ const LEGACY = join(REPO_ROOT, 'aws-quiz-app', 'edu_server.py');
 const FASTAPI_APP = join(REPO_ROOT, 'app', 'backend', 'main.py');
 
 const EXPECTED_GET = 5;
-const EXPECTED_POST = 10;
+const EXPECTED_POST = 7;   // was 10 until ruling R24 removed the 3 run routes
 
 // ---------------------------------------------------------------------------
 // E0e / Phase-02 FAIL F-4 — THE NAME LIST, NOT ONLY THE COUNTS.
@@ -66,7 +71,8 @@ const EXPECTED_POST = 10;
 // newline-joined with a trailing newline. The legacy server is FROZEN and will never change
 // again, so this constant can only move if the PARSE broke or someone edited a frozen file —
 // both of which are the failure this pin exists to surface.
-const EXPECTED_LIST_SHA = 'bdd9eef35ff1d3a8b6f327513b22333fd4a348f8f40a08596636703ac7bcfdbc';
+// Re-pinned 23-09-26 for ruling R24 ONLY: the old list (sha bdd9eef3…) minus the 3 /api/run* routes.
+const EXPECTED_LIST_SHA = '7e399903a382eb99ed517d4e487ee8bf2b6cbf21538e9fe38b60fda0584ac142';
 
 // Routes the new app is allowed to have that the legacy app never had.
 const ALLOWED_EXTRA = new Set(['GET /api/health']);
@@ -91,20 +97,18 @@ function extractLegacy(src) {
   if (!doGet) die('EXTRACTOR FAILED: could not locate do_GET in the legacy server');
   const gets = [...doGet[0].matchAll(/route == "(\/api\/[^"]+)"/g)].map((m) => m[1]);
 
-  // POST: the allowlist tuple in do_POST, plus RUN_ROUTES spliced onto it with `+`.
+  // POST: the allowlist tuple in do_POST. (Until R24 the 3 RUN_ROUTES were spliced onto it
+  // with `+`; a leftover `+ RUN_ROUTES` now fails the parse on purpose.)
   const doPost = /def do_POST\(self\)[\s\S]*?(?=\n    def |\ndef |$)/.exec(src);
   if (!doPost) die('EXTRACTOR FAILED: could not locate do_POST in the legacy server');
-  const guard = /route not in \(([\s\S]*?)\)\s*\+\s*RUN_ROUTES:/.exec(doPost[0]);
+  const guard = /route not in \(([\s\S]*?)\):/.exec(doPost[0]);
   if (!guard) die('EXTRACTOR FAILED: could not locate the do_POST allowlist tuple');
   const allow = [...guard[1].matchAll(/"(\/api\/[^"]+)"/g)].map((m) => m[1]);
-
-  const runDecl = /RUN_ROUTES\s*=\s*\(([^)]*)\)/.exec(src);
-  if (!runDecl) die('EXTRACTOR FAILED: could not locate the RUN_ROUTES declaration');
-  const runs = [...runDecl[1].matchAll(/"(\/api\/[^"]+)"/g)].map((m) => m[1]);
+  if (/RUN_ROUTES/.test(src)) die('EXTRACTOR FAILED: RUN_ROUTES is back in the legacy server (ruling R24 removed it)');
 
   return {
     get: [...new Set(gets)].sort(),
-    post: [...new Set([...allow, ...runs])].sort(),
+    post: [...new Set(allow)].sort(),
   };
 }
 

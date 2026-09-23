@@ -1741,164 +1741,23 @@ function appendTheoryContent(parent, block, theme) {
     parent.appendChild(panel);
 }
 
-// --- Interactive code cells (17-09-26) ----------------------------------------
-// A lesson may interleave several `code_cells` blocks with its text and figures.
-// They share ONE kernel per lesson on the runner, and "Run cell N" first runs
-// every earlier cell of the lesson whose current source has not run yet --
-// across all of the lesson's code blocks, in page order. Edited source, output
-// and status live in memory only, keyed by module + lesson + cell, so leaving
-// a lesson and coming back keeps them. Nothing is saved on the server.
-const RUNNER_SESSION_KEY = 'edu-runner-session';
-const codeCellState = new Map();   // `${moduleId}|${lesson}|${cellId}` -> state
-const codeCellViews = new Map();   // same key -> DOM handles of the rendered cell
-const lessonRuns = new Map();      // `${moduleId}|${lesson}` -> running cell id
-let runnerSessionId = '';
-
-function runnerSession() {
-    if (runnerSessionId) return runnerSessionId;
-    try { runnerSessionId = localStorage.getItem(RUNNER_SESSION_KEY) || ''; } catch (error) { /* private mode */ }
-    if (!/^[A-Za-z0-9_-]{8,64}$/.test(runnerSessionId)) {
-        const bytes = new Uint8Array(16);
-        crypto.getRandomValues(bytes);
-        runnerSessionId = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
-        try { localStorage.setItem(RUNNER_SESSION_KEY, runnerSessionId); } catch (error) { /* in-memory only */ }
-    }
-    return runnerSessionId;
-}
-
+// --- Code cells: static listings with a Copy button (ruling R24, 23-09-26) -----
+// The in-app code runner (Edit / Reset / Run, a kernel per lesson on .68:8790) was
+// REMOVED by user ruling R24: in-app cells are snippets that do not run standalone,
+// and practice moved to a local terminal fed by each lesson's "Full script" block.
+// Rulings R7 (every block runnable) and R13 (runner weight limit) are superseded.
+// The `code_cells` DATA in module.json is untouched -- including `runnable` and
+// `runnableReason`, which this renderer now deliberately ignores. Only rendering
+// changed: each cell is read-only code with a Copy button, in reading order.
 function lessonCodeCells(lesson) {
-    // Scans the WHOLE CHAPTER, not just the page on screen. A long walkthrough is
-    // split into several lessons (Rule 12: one lesson = one idea), but its cells
-    // still share one kernel because every code_cells block keeps the PARENT
-    // `lesson` id. Without this, `ch01-b08d`'s predict cell would run in a page
-    // that never executed `ch01-b08c`'s fit, and die with `NameError: model`.
+    // Scans the WHOLE CHAPTER, not just the page on screen, so "Cell N" numbers
+    // run on across a walkthrough split into several lessons that share the
+    // PARENT `lesson` id (e.g. ch01-b08c -> ch01-b08d).
     return theoryBlocks(currentTheory.chapterIndex)
         .flatMap(item => (item && Array.isArray(item.blocks) ? item.blocks : []))
         .filter(b => b && b.type === 'code_cells' && b.lesson === lesson && Array.isArray(b.cells))
         .flatMap(b => b.cells)
         .filter(cell => cell && typeof cell.id === 'string' && typeof cell.source === 'string');
-}
-
-function cellKey(lesson, cellId) { return `${moduleId}|${lesson}|${cellId}`; }
-
-function cellState(lesson, cell) {
-    const key = cellKey(lesson, cell.id);
-    if (!codeCellState.has(key)) {
-        codeCellState.set(key, { original: cell.source, source: cell.source, outputs: [], status: '', tone: 'muted', started: 0 });
-    }
-    return codeCellState.get(key);
-}
-
-const CELL_ICONS = {
-    edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
-    done: '<path d="M20 6 9 17l-5-5"/>',
-    reset: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
-    run: '<path d="m6 4 14 8-14 8Z"/>',
-    stop: '<rect x="6" y="6" width="12" height="12" rx="1"/>'
-};
-
-function setCellButton(button, icon, label) {
-    button.innerHTML = `<svg aria-hidden="true" viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${CELL_ICONS[icon]}</svg><span>${label}</span>`;
-}
-
-function cellButton(primary) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 disabled:cursor-not-allowed disabled:opacity-40 '
-        + (primary ? 'bg-brand-600 text-white hover:bg-brand-900' : 'text-gray-300 hover:bg-gray-700 hover:text-white');
-    return button;
-}
-
-// pandas tables arrive as HTML. Rebuild them from a whitelist instead of trusting
-// markup: only table structure and text survive; every attribute, <style> and
-// anything else is dropped.
-const TABLE_TAGS = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TH', 'TD', 'DIV', 'SPAN']);
-function sanitizeTable(html) {
-    const template = document.createElement('template');
-    template.innerHTML = String(html || '');
-    const copy = (source, target) => {
-        source.childNodes.forEach(node => {
-            if (node.nodeType === Node.TEXT_NODE) { target.appendChild(document.createTextNode(node.textContent)); return; }
-            if (node.nodeType !== Node.ELEMENT_NODE || ['STYLE', 'SCRIPT'].includes(node.tagName)) return;
-            if (!TABLE_TAGS.has(node.tagName)) { copy(node, target); return; }
-            const el = document.createElement(node.tagName.toLowerCase());
-            if (node.tagName === 'TABLE') el.className = 'min-w-full border-collapse text-xs tabular-nums';
-            if (node.tagName === 'TH' || node.tagName === 'TD') el.className = 'whitespace-nowrap border-b border-gray-700 px-2 py-1 text-left' + (node.tagName === 'TH' ? ' font-semibold text-gray-200' : '');
-            copy(node, el);
-            target.appendChild(el);
-        });
-    };
-    const holder = document.createElement('div');
-    copy(template.content, holder);
-    return holder;
-}
-
-function renderCellOutputs(view, state, cellNumber) {
-    const running = state.status === 'running';
-    view.output.classList.toggle('hidden-view', !running && !state.status && !state.outputs.length);
-    view.output.setAttribute('aria-busy', running ? 'true' : 'false');
-    if (!running) {
-        view.status.textContent = state.status;
-        view.status.className = 'min-h-[1.25rem] text-xs font-semibold tabular-nums ' + (state.tone === 'bad' ? 'text-brand-400' : 'text-gray-400');
-    }
-    view.items.innerHTML = '';
-    state.outputs.forEach(item => {
-        if (item.kind === 'stream' || item.kind === 'text') {
-            const pre = document.createElement('pre');
-            pre.className = 'm-0 overflow-x-auto whitespace-pre font-mono text-sm leading-6 ' + (item.name === 'stderr' ? 'text-gray-400' : 'text-gray-100');
-            pre.textContent = item.kind === 'stream' ? item.text : item.data;
-            view.items.appendChild(pre);
-        } else if (item.kind === 'image') {
-            const img = document.createElement('img');
-            img.src = `data:image/png;base64,${item.data}`;
-            img.alt = `Cell ${cellNumber} chart`;
-            img.className = 'max-w-full h-auto rounded bg-white';
-            view.items.appendChild(img);
-        } else if (item.kind === 'html') {
-            const box = document.createElement('div');
-            box.className = 'max-w-full overflow-x-auto text-gray-200';
-            box.appendChild(sanitizeTable(item.data));
-            view.items.appendChild(box);
-        } else if (item.kind === 'error') {
-            const title = document.createElement('p');
-            title.className = 'm-0 break-words font-mono text-sm font-semibold text-brand-400';
-            title.textContent = `${item.ename}: ${item.evalue}`;
-            view.items.appendChild(title);
-            if (Array.isArray(item.traceback) && item.traceback.length) {
-                const details = document.createElement('details');
-                const summary = document.createElement('summary');
-                summary.className = 'flex min-h-[44px] cursor-pointer items-center text-xs font-semibold uppercase tracking-wider text-gray-400 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600';
-                summary.textContent = 'Traceback';
-                const pre = document.createElement('pre');
-                pre.className = 'm-0 overflow-x-auto whitespace-pre font-mono text-xs leading-5 text-gray-400';
-                pre.textContent = item.traceback.join('\n');
-                details.append(summary, pre);
-                view.items.appendChild(details);
-            }
-        }
-    });
-}
-
-// `initial` paints a card that is built but not attached yet; later async
-// updates skip cards that have left the page (the reader moved on).
-function syncCellView(lesson, cell, initial = false) {
-    const view = codeCellViews.get(cellKey(lesson, cell.id));
-    if (!view || (!initial && !view.root.isConnected)) return;
-    const state = cellState(lesson, cell);
-    const runningId = lessonRuns.get(`${moduleId}|${lesson}`);
-    const isRunning = runningId === cell.id;
-    // Ruling R13: a cell too heavy for this box ships with NO Run button at all,
-    // so `view.run` is absent. Everything else about the cell still works.
-    if (view.run) {
-        setCellButton(view.run, isRunning ? 'stop' : 'run', isRunning ? 'Stop' : 'Run');
-        view.run.setAttribute('aria-label', `${isRunning ? 'Stop' : 'Run'} cell ${view.number}`);
-        view.run.disabled = Boolean(runningId) && !isRunning;
-    }
-    view.edit.disabled = isRunning;
-    view.reset.disabled = isRunning;
-    view.edited.classList.toggle('hidden-view', state.source === state.original);
-    if (!view.editing) view.code.textContent = state.source;
-    renderCellOutputs(view, state, view.number);
 }
 
 function renderCodeCells(block) {
@@ -1909,7 +1768,6 @@ function renderCodeCells(block) {
     (Array.isArray(block.cells) ? block.cells : []).forEach(cell => {
         if (!cell || typeof cell.id !== 'string' || typeof cell.source !== 'string') return;
         const number = all.findIndex(c => c.id === cell.id) + 1;
-        const state = cellState(lesson, cell);
         const card = document.createElement('section');
         card.className = 'overflow-hidden rounded-xl border border-gray-700 bg-gray-900/60';
         card.setAttribute('aria-label', `Code cell ${number}`);
@@ -1920,222 +1778,25 @@ function renderCodeCells(block) {
         const label = document.createElement('div');
         label.className = 'flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-gray-400';
         label.textContent = `Cell ${number}`;
-        const edited = document.createElement('span');
-        edited.className = 'rounded bg-gray-700 px-1.5 py-0.5 text-[0.65rem] normal-case tracking-normal text-gray-200';
-        edited.textContent = 'edited';
-        label.appendChild(edited);
-        const actions = document.createElement('div');
-        actions.className = 'flex items-center gap-1';
-        // Ruling R13. `runnable: false` means this machine cannot run the cell --
-        // a missing library, a broken earlier cell, or too slow/too heavy for the
-        // runner's 60 s and 6 GB caps. Render NO Run button and say why, so the
-        // reader knows it is this box's limit and can run it on a stronger one.
-        // A dead Run button is worse than no button (R7 s4).
-        const runnable = cell.runnable !== false;
-        const edit = cellButton(false);
-        const reset = cellButton(false);
-        const run = runnable ? cellButton(true) : null;
-        setCellButton(edit, 'edit', 'Edit');
-        setCellButton(reset, 'reset', 'Reset');
-        edit.setAttribute('aria-label', `Edit cell ${number}`);
-        reset.setAttribute('aria-label', `Reset cell ${number}`);
-        if (run) actions.append(edit, reset, run);
-        else {
-            actions.append(edit, reset);
-            const badge = document.createElement('span');
-            badge.className = 'rounded bg-amber-900/60 px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wider text-amber-200';
-            badge.textContent = 'Run disabled';
-            actions.insertBefore(badge, edit);
-        }
-        header.append(label, actions);
+        // Every class below already exists in the built CSS (they are the old
+        // secondary cell-button classes), so no Tailwind rebuild is needed.
+        const copy = document.createElement('button');
+        copy.className = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 text-gray-300 hover:bg-gray-700 hover:text-white';
+        copy.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span data-copy-label>Copy</span>';
+        eduWireCopyButton(copy, () => cell.source);
+        copy.setAttribute('aria-label', `Copy cell ${number}`);
+        header.append(label, copy);
 
         const code = document.createElement('code');
+        code.textContent = cell.source;
         const pre = document.createElement('pre');
         pre.className = 'm-0 overflow-x-auto whitespace-pre bg-transparent p-4 font-mono text-sm leading-6 text-gray-100';
         pre.appendChild(code);
-        const editor = document.createElement('textarea');
-        editor.className = 'hidden-view block w-full resize-y whitespace-pre border-0 bg-gray-900 p-4 font-mono text-sm leading-6 text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-600';
-        editor.spellcheck = false;
-        editor.wrap = 'off';
-        editor.setAttribute('autocapitalize', 'off');
-        editor.setAttribute('autocomplete', 'off');
-        editor.setAttribute('aria-label', `Cell ${number} code`);
-        const hint = document.createElement('span');
-        hint.className = 'sr-only';
-        hint.id = `cell-hint-${lesson}-${cell.id}`;
-        hint.textContent = 'Tab inserts spaces. Escape leaves the editor.';
-        editor.setAttribute('aria-describedby', hint.id);
 
-        const output = document.createElement('div');
-        output.className = 'hidden-view space-y-3 border-t border-gray-700 px-4 py-3';
-        const status = document.createElement('p');
-        status.className = 'min-h-[1.25rem] text-xs font-semibold tabular-nums text-gray-400';
-        status.setAttribute('role', 'status');
-        status.setAttribute('aria-atomic', 'true');
-        const items = document.createElement('div');
-        items.className = 'space-y-3';
-        output.append(status, items);
-
-        card.append(header, pre, editor, hint, output);
-        if (!runnable) {
-            const warn = document.createElement('p');
-            warn.className = 'border-t border-amber-800/60 bg-amber-950/40 px-4 py-3 text-sm leading-6 text-amber-200';
-            warn.setAttribute('role', 'note');
-            warn.setAttribute('data-not-runnable', cell.id);
-            const why = typeof cell.runnableReason === 'string' && cell.runnableReason.trim()
-                ? cell.runnableReason.trim()
-                : 'this cell cannot run on the machine hosting the code runner.';
-            warn.textContent = `Run is disabled for this cell - ${why} You can still read and edit it here, and run it on a stronger machine (ml/study/geron-lab).`;
-            card.appendChild(warn);
-        }
+        card.append(header, pre);
         wrapper.appendChild(card);
-
-        const view = { root: card, number, edit, reset, run, code, pre, editor, output, status, items, edited, editing: false };
-        codeCellViews.set(cellKey(lesson, cell.id), view);
-
-        const leaveEditor = () => {
-            view.editing = false;
-            editor.classList.add('hidden-view');
-            pre.classList.remove('hidden-view');
-            setCellButton(edit, 'edit', 'Edit');
-            edit.setAttribute('aria-label', `Edit cell ${number}`);
-            syncCellView(lesson, cell);
-        };
-        edit.addEventListener('click', () => {
-            if (view.editing) { leaveEditor(); edit.focus(); return; }
-            view.editing = true;
-            editor.value = state.source;
-            editor.style.height = `${Math.max(pre.offsetHeight, 96)}px`;
-            pre.classList.add('hidden-view');
-            editor.classList.remove('hidden-view');
-            setCellButton(edit, 'done', 'Done');
-            edit.setAttribute('aria-label', `Done editing cell ${number}`);
-            editor.focus();
-        });
-        editor.addEventListener('input', () => {
-            state.source = editor.value;
-            edited.classList.toggle('hidden-view', state.source === state.original);
-        });
-        editor.addEventListener('keydown', event => {
-            if (event.key === 'Tab' && !event.shiftKey) {
-                event.preventDefault();
-                editor.setRangeText('    ', editor.selectionStart, editor.selectionEnd, 'end');
-                editor.dispatchEvent(new Event('input'));
-            } else if (event.key === 'Escape') {
-                event.preventDefault();
-                leaveEditor();
-                edit.focus();
-            }
-        });
-        reset.addEventListener('click', () => {
-            state.source = state.original;
-            state.outputs = [];
-            state.status = '';
-            state.tone = 'muted';
-            if (view.editing) editor.value = state.source;
-            syncCellView(lesson, cell);
-        });
-        if (run) run.addEventListener('click', () => {
-            if (lessonRuns.get(`${moduleId}|${lesson}`) === cell.id) stopCell(lesson, cell);
-            else runCell(lesson, cell);
-        });
-        syncCellView(lesson, cell, true);
     });
     return wrapper;
-}
-
-function syncLessonCells(lesson) {
-    lessonCodeCells(lesson).forEach(cell => syncCellView(lesson, cell));
-}
-
-async function runCell(lesson, cell) {
-    const runKey = `${moduleId}|${lesson}`;
-    if (lessonRuns.has(runKey)) return;
-    const cells = lessonCodeCells(lesson);
-    const upTo = cells.findIndex(c => c.id === cell.id);
-    if (upTo < 0) return;
-    const payloadCells = cells.slice(0, upTo + 1).map(c => ({ id: c.id, source: cellState(lesson, c).source }));
-    const state = cellState(lesson, cell);
-    state.status = 'running';
-    state.started = performance.now();
-    state.stopRequested = false;
-    state.outputs = [];
-    lessonRuns.set(runKey, cell.id);
-    syncLessonCells(lesson);
-
-    const tick = () => {
-        const view = codeCellViews.get(cellKey(lesson, cell.id));
-        if (view && view.root.isConnected && state.status === 'running') {
-            view.status.textContent = `Running… ${Math.floor((performance.now() - state.started) / 1000)} s`;
-            view.status.className = 'min-h-[1.25rem] text-xs font-semibold tabular-nums text-gray-400';
-        }
-    };
-    tick();
-    const timer = setInterval(tick, 1000);
-
-    let result = null;
-    let failure = '';
-    try {
-        const response = await fetch('/api/run', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ module: moduleId, lesson, session: runnerSession(), target: cell.id, cells: payloadCells })
-        });
-        const data = await response.json().catch(() => ({}));
-        if (response.ok) result = data;
-        else if (response.status === 502) failure = 'Runner offline';
-        else if (response.status === 429) failure = 'Too many runs';
-        else failure = data.error || `Error ${response.status}`;
-    } catch (error) {
-        failure = 'Runner offline';
-    } finally {
-        clearInterval(timer);
-        lessonRuns.delete(runKey);
-    }
-
-    const seconds = ((performance.now() - state.started) / 1000).toFixed(1);
-    if (!result) {
-        state.status = failure;
-        state.tone = 'bad';
-    } else {
-        const byCell = new Map();
-        (Array.isArray(result.outputs) ? result.outputs : []).forEach(item => {
-            if (!byCell.has(item.cell)) byCell.set(item.cell, []);
-            byCell.get(item.cell).push(item);
-        });
-        (Array.isArray(result.ran) ? result.ran : []).forEach(id => {
-            const ranCell = cells.find(c => c.id === id);
-            if (!ranCell) return;
-            const ranState = cellState(lesson, ranCell);
-            ranState.outputs = byCell.get(id) || [];
-            if (id !== result.cell) { ranState.status = 'Done'; ranState.tone = 'muted'; }
-        });
-        const endState = cellState(lesson, cells.find(c => c.id === result.cell) || cell);
-        if (result.status === 'ok') { endState.status = `Done in ${seconds} s`; endState.tone = 'muted'; }
-        else if (result.status === 'error') {
-            const stopped = state.stopRequested && endState.outputs.some(o => o.kind === 'error' && o.ename === 'KeyboardInterrupt');
-            endState.status = stopped ? 'Stopped' : 'Error';
-            endState.tone = stopped ? 'muted' : 'bad';
-        } else if (result.status === 'timeout') { endState.status = 'Timed out'; endState.tone = 'bad'; }
-        else if (result.status === 'restarted') { endState.status = 'Kernel restarted'; endState.tone = 'bad'; }
-        else if (result.status === 'busy') { endState.status = 'Busy'; endState.tone = 'bad'; }
-        if (endState !== state && state.status === 'running') { state.status = ''; }
-    }
-    syncLessonCells(lesson);
-}
-
-async function stopCell(lesson, cell) {
-    const state = cellState(lesson, cell);
-    state.stopRequested = true;
-    try {
-        await fetch('/api/run/stop', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ module: moduleId, lesson, session: runnerSession() })
-        });
-    } catch (error) {
-        // The run request itself reports what happened.
-    }
 }
 
 function renderDeeper(block) {

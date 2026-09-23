@@ -76,6 +76,18 @@ const PHASE_03_DECLARED_GAPS = {
   'selectors #library-grid input[type="text"]':
     'the library rename input is a WRITE and belongs to Phase 04 (slice A3 declared it). '
     + '⛔ Do NOT fake it with a disabled input to turn this gate green.',
+  /* ⚑ TWO ENTRIES ADDED 23-09-26 — A USER RULING, NOT A RED BEING QUIETED. The user, verbatim:
+   *   "there is an upload button on the top bar of the UI, which open the filesystem upload
+   *    interface. Replace that with the logout button since we already have the correct import
+   *    button on the home page." The top bar's #custom-data-upload <input type="file"> and its
+   *   <label for> are therefore DELETED from the product. The frozen file is sha-pinned and is NOT
+   *   re-frozen; the two entries are declared here instead, so R-C6's reverse teeth hold: if the
+   *   upload ever comes back, R-C6 prints NOW RESOLVING and goes red. gate-r-style.mjs R-S-NOFILE
+   *   asserts the positive side (no top-bar control reaches a file input). */
+  'attributeExpressions [for="custom-data-upload"]':
+    'ruled removed 23-09-26 (user): the top-bar upload is replaced by LOG OUT; Import on the home page stays.',
+  'selectors label[for="custom-data-upload"] svg':
+    'ruled removed 23-09-26 (user): the top-bar upload icon is replaced by LOG OUT.',
   /* ⚑ FOUR ENTRIES DELETED 22-09-26 — BY THIS GATE'S OWN INSTRUCTION, and it is the gate
    *   getting STRICTER, not looser. They were:
    *       selectors #options-container .option-card
@@ -167,7 +179,11 @@ const page = await ctx.newPage();
 // gate-a.mjs uses them; hashRoutes is a location.hash SHAPE, not a selector.
 const RESOLVE_FN = `(items) => items.map(({ cat, key }) => {
   try {
-    if (cat === 'hashRoutes') return /^#chapter=\\d+&block=\\d+$/.test(location.hash) ? 1 : 0;
+    // ⚑ Phase 06a (ruling R25): the reader's ROUTE moved from #chapter=N&block=N to a path,
+    //   /<book>/<unit>-N/<M>-<slug>. The frozen (sha-pinned) contract keeps its hashRoutes entry;
+    //   it resolves through its successor, the path form. A route in NEITHER shape still misses.
+    if (cat === 'hashRoutes') return (/^#chapter=\\d+&block=\\d+$/.test(location.hash)
+      || /^\\/[a-z0-9-]+\\/[a-z]+-\\d+\\/\\d+(-[a-z0-9-]*)?(\\/quiz)?$/.test(location.pathname)) ? 1 : 0;
     if (cat === 'attributes') return document.querySelectorAll('[' + key + ']').length ? 1 : 0;
     if (key === ':scope' || key.startsWith(':scope')) {
       const host = document.getElementById('tutorial-article');
@@ -302,10 +318,14 @@ await sample('ask');
 let localSha = 'UNREAD';
 let remoteSha = 'UNREAD';
 try {
-  localSha = createHash('sha256').update(execFileSync('curl', ['-s', '-m', '20', BASE + '/'])).digest('hex');
+  // ⚑ Phase 06a: `/` now needs a session (302 signed out); `/login` serves the SAME document to
+  //   anyone, so both sides are read there — the comparison stays byte-for-byte on one document.
+  //   `--no-gate-session` (lib/auth-preload.mjs) keeps this ONE call signed out: a signed-in /login
+  //   redirects home and would hash an empty body.
+  localSha = createHash('sha256').update(execFileSync('curl', ['--no-gate-session', '-s', '-m', '20', BASE + '/login'])).digest('hex');
 } catch { /* leave UNREAD */ }
 try {
-  remoteSha = createHash('sha256').update(execFileSync('curl', ['-s', '-m', '25', REMOTE + '/'])).digest('hex');
+  remoteSha = createHash('sha256').update(execFileSync('curl', ['-s', '-m', '25', REMOTE + '/login'])).digest('hex');
 } catch { /* leave UNREAD */ }
 check('R-C0 FLOOR: the LOCAL preview serves byte-identical index.html to the DEPLOYED :8792',
   localSha === remoteSha && localSha !== 'UNREAD',
@@ -346,7 +366,7 @@ check(`R-C6 the ${gapIds.length} declared Phase-03 gaps are EXACT: each is a rea
     : gapsNotInContract.length
       ? `⛔ NOT A CONTRACT ENTRY (stale list): ${gapsNotInContract.join(' | ')}`
       : `${gapIds.length} gaps, all genuinely absent: ${gapIds.join(' | ')}`
-        + ' — ⚠ 4 of the 5 are ONE defect: the quiz never populates (nothing dispatches run/reset)');
+        + ' — 1 is the Phase-04 rename input; 2 are the top-bar upload, removed by user ruling 23-09-26');
 
 await browser.close();
 

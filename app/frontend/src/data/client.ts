@@ -24,10 +24,27 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * ⚑ Phase 06a — WHERE A SIGNED-OUT READER IS SENT. The current page (path, query AND hash — a
+ * server redirect cannot carry the hash, so it rides in `next`) comes back after sign-in.
+ */
+export function loginUrl(): string {
+  const here = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  return `/login?next=${encodeURIComponent(here)}`;
+}
+
+/** A session that expired mid-read: go to the sign-in page once, instead of failing every panel. */
+export function bounceToLogin(status: number): void {
+  if (status === 401 && window.location.pathname !== '/login') window.location.assign(loginUrl());
+}
+
 /** The one primitive. No method argument, deliberately — see the header. */
 export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, { signal });
-  if (!response.ok) throw new ApiError(path, response.status);
+  if (!response.ok) {
+    if (path !== '/api/auth/me') bounceToLogin(response.status);
+    throw new ApiError(path, response.status);
+  }
   return (await response.json()) as T;
 }
 
@@ -45,4 +62,16 @@ export interface HealthPayload {
 
 export function fetchHealth(signal?: AbortSignal): Promise<HealthPayload> {
   return getJson<HealthPayload>('/api/health', signal);
+}
+
+/**
+ * loadSettings (app.js:3456) — GET /api/settings WITH the admin token header, no-store.
+ * ⛔ Still a GET: no `method` option exists on this path either. The token is the one the
+ *    reader typed into the lock card this tab (sessionStorage), never a stored credential.
+ * Returns the parsed body AND the status, because a 401 carries the message the lock card shows.
+ */
+export async function getSettingsWithToken<T>(token: string): Promise<{ ok: boolean; status: number; body: T }> {
+  const response = await fetch('/api/settings', { headers: { 'X-Edu-Admin-Token': token }, cache: 'no-store' });
+  const body = (await response.json().catch(() => ({}))) as T;
+  return { ok: response.ok, status: response.status, body };
 }

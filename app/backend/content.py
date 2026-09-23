@@ -36,7 +36,8 @@ from store import (
     MODULE_ID,
     MODULE_NAME,
     clean_title,
-    last_read_at,
+    module_key,
+    recency_by_module,
     module_id_for,
     mtime,
     read_library_meta,
@@ -110,13 +111,13 @@ def resolve_data_module(name: str | None) -> Path:
 
 
 # --------------------------------------------------------------------------- listing
-def _decorate(entry: dict[str, Any], source: Path, titles: dict[str, Any]) -> dict[str, Any]:
+def _decorate(entry: dict[str, Any], source: Path, titles: dict[str, Any], recency: dict[str, float] | None = None) -> dict[str, Any]:
     override = clean_title(titles.get(entry["file"]))
     if override:
         entry["title"] = override
         entry["renamed"] = True
     entry["addedAt"] = mtime(source)
-    entry["lastReadAt"] = last_read_at(entry["moduleId"])
+    entry["lastReadAt"] = (recency or {}).get(module_key(entry["moduleId"]), 0.0)   # per ACCOUNT (Phase 06a)
     return entry
 
 
@@ -128,7 +129,7 @@ def _shape(data: dict[str, Any]) -> tuple[dict[str, Any], list[Any]] | None:
     return tutorial, sections
 
 
-def list_packaged_books() -> list[dict[str, Any]]:
+def list_packaged_books(recency: dict[str, float] | None = None) -> list[dict[str, Any]]:
     """Books in library/<moduleId>/. ``base`` tells the page where this book's own assets
     live, so its ``src`` values stay relative to the BOOK rather than to us."""
     out: list[dict[str, Any]] = []
@@ -160,11 +161,11 @@ def list_packaged_books() -> list[dict[str, Any]]:
             "lessons": sum(len(s.get("items") or []) for s in sections if isinstance(s, dict)),
             "questions": len(data["quizData"]),
             "default": folder.name == DEFAULT_MODULE,
-        }, folder, titles))
+        }, folder, titles, recency))
     return out
 
 
-def list_data_books() -> list[dict[str, Any]]:
+def list_data_books(recency: dict[str, float] | None = None) -> list[dict[str, Any]]:
     """The legacy data/*.json shape. Still serves; it is not the packaged shape."""
     from main import WEB_ROOT
 
@@ -192,9 +193,12 @@ def list_data_books() -> list[dict[str, Any]]:
             "lessons": sum(len(s.get("items") or []) for s in sections if isinstance(s, dict)),
             "questions": len(data["quizData"]),
             "default": path.name == DEFAULT_MODULE,
-        }, path, titles))
+        }, path, titles, recency))
     return out
 
 
-def list_modules() -> list[dict[str, Any]]:
-    return list_data_books() + list_packaged_books()
+def list_modules(account_id: int | None = None) -> list[dict[str, Any]]:
+    """``account_id`` only orders the library by THAT reader's last activity; the book list itself
+    is the same for everyone. None (e.g. the rename check) leaves lastReadAt at 0."""
+    recency = recency_by_module(account_id) if account_id is not None else {}
+    return list_data_books(recency) + list_packaged_books(recency)

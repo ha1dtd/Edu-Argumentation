@@ -201,7 +201,12 @@ const modules = (await jsonAt('/api/modules')).books ?? [];
 if (!modules.length) throw new Error('gate refused: /api/modules returned no books');
 const seen = new Set();
 const books = [];
-for (const m of [...modules].sort((a, b) => a.moduleId.localeCompare(b.moduleId))) {
+// ⚑ PACKAGED BOOKS ONLY (23-09-26, Phase 04). Since P4 the library also lists the three
+//   legacy-shape books (data/*.json — SageMaker/MLOps), which live at /data/<file>, not under
+//   /book/, and carry no book figures for R6 to place. The gate crashed on the first of them
+//   (GET /book/t-domain-4-…/module.json -> 404) after 0 result lines. Filtered by the listing's own
+//   `book` marker — never by name — so a new packaged book is still swept automatically.
+for (const m of [...modules].filter((b) => b.book).sort((a, b) => a.moduleId.localeCompare(b.moduleId))) {
   if (seen.has(m.moduleId)) continue;
   seen.add(m.moduleId);
   const doc = await jsonAt(`/book/${m.moduleId}/module.json`);

@@ -4,12 +4,9 @@
 // askRecord, askRestore, askNewConversation, askBubble, askSetOpen, askSubmit, askInit,
 // ASK_STORE_KEY, ASK_MAX_TURNS, ASK_BADGE.
 //
-// ⛔ `POST /api/ask` IS A WRITE-SHAPED CALL AND IS **NOT** IN PHASE 03. The read-only gate
-//    greps the built bundle for a closed pattern set — `fetch(` with a non-GET `method:`
-//    in any of three quotings, `XMLHttpRequest`, `navigator.sendBeacon`, `api/progress`.
-//    A `method:"POST"` here fails the phase, not a lint.
-//    Phase 03 renders the panel shell and its conversation history (localStorage,
-//    `eduAskConversation`, bounded to ASK_MAX_TURNS = 40). Sending is Phase 04.
+// ⚑ PHASE 04 (23-09-26): SENDING IS WIRED, through data/writes.postJson (the one POST site).
+//   The conversation persists to localStorage `eduAskConversation`, bounded to ASK_MAX_TURNS=40,
+//   and survives closing the panel AND a reload — it is thrown away only on New.
 //
 // ⚠ The tutor answers grounded lesson -> book -> model knowledge, and each answer is
 //   LABELLED with which of the three it came from (ASK_BADGE). The badge is not
@@ -34,9 +31,72 @@
 //        observer — "rather than patching the five places that show or hide it, one of
 //        those would eventually be missed" — and a single owning prop is the same argument
 //        answered better. The BEHAVIOUR is identical; only the plumbing is React's.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useBookContext } from '../state/BookProvider';
+import { useReaderCursor } from '../state/ReaderCursorProvider';
+import { useProviderReadiness } from '../data/queries';
+import { generationToken, postJson } from '../data/writes';
+import { RichTextViewer } from '../reader/RichTextViewer';
 
+const ASK_STORE_KEY = 'eduAskConversation';
 const ASK_MAX_TURNS = 40;
+
+/** ASK_BADGE (app.js:3562) — WHERE the answer came from is not decoration. */
+const ASK_BADGE: Record<string, [string, string]> = {
+  lesson: ['This lesson', 'bg-green-500/15 text-green-300 border-green-500/30'],
+  book: ['From the book', 'bg-blue-500/15 text-blue-300 border-blue-500/30'],
+  general: ['Outside the book', 'bg-amber-500/15 text-amber-300 border-amber-500/30'],
+};
+
+interface Turn {
+  role: 'user' | 'assistant';
+  text: string;
+  source?: string;
+  page?: number | null;
+  /** Transient UI states, never saved. */
+  pending?: string;
+  failed?: string;
+}
+
+function readTurns(): Turn[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ASK_STORE_KEY) || 'null');
+    const turns = saved && Array.isArray(saved.turns) ? saved.turns : [];
+    return turns.filter((t: Turn) => t && (t.role === 'user' || t.role === 'assistant'));
+  } catch {
+    return [];
+  }
+}
+
+/** formatText's markup (app.js:1404), kept in the stored turn exactly as the legacy stores it. */
+function viewerHtml(text: string): string {
+  return `<rich-text-viewer content="${encodeURIComponent(text)}"></rich-text-viewer>`;
+}
+
+function saveTurns(turns: Turn[]): void {
+  try {
+    const clean = turns
+      .filter((t) => !t.pending && !t.failed)
+      .slice(-ASK_MAX_TURNS)
+      .map((t) =>
+        t.role === 'assistant'
+          ? { role: t.role, text: t.text, html: viewerHtml(t.text), source: t.source, page: t.page }
+          : { role: t.role, text: t.text },
+      );
+    localStorage.setItem(ASK_STORE_KEY, JSON.stringify({ turns: clean }));
+  } catch {
+    /* private window or full storage: the panel still works for this session */
+  }
+}
+
+function Badge({ source, page }: { source?: string; page?: number | null }) {
+  const [label, classes] = ASK_BADGE[source || 'general'] || ASK_BADGE.general;
+  return (
+    <span className={`inline-block mb-2 rounded border px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wider ${classes}`}>
+      {page ? `${label} · p.${page}` : label}
+    </span>
+  );
+}
 
 export interface AskPanelProps {
   /** True only while the reader is the visible screen. See the ⚑ block above. */
@@ -45,12 +105,87 @@ export interface AskPanelProps {
 
 export function AskPanel({ reading }: AskPanelProps) {
   const [open, setOpen] = useState(false);
+  const [turns, setTurns] = useState<Turn[]>(readTurns);
+  const [busy, setBusy] = useState(false);
+  const [question, setQuestion] = useState('');
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const logRef = useRef<HTMLDivElement | null>(null);
+  const { activeBookFile, chapters, blocksOf } = useBookContext();
+  const { cursor } = useReaderCursor();
+  const provider = useProviderReadiness();
 
-  // askSetOpen(false) on the way OUT of the reader (app.js:3715). Without this the panel
-  // stays open behind a hidden FAB and reappears — still open — on the next visit.
+  // askSetOpen(false) on the way OUT of the reader (app.js:3715).
   useEffect(() => {
     if (!reading) setOpen(false);
   }, [reading]);
+
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open]);
+
+  // Keep the log scrolled to the newest bubble (askBubble / the finally in askSubmit).
+  useEffect(() => {
+    const log = logRef.current;
+    if (log) log.scrollTop = log.scrollHeight;
+  }, [turns, open]);
+
+  // askLessonLabel (app.js:3568): which lesson the next answer is grounded in.
+  const chapter = chapters[cursor.chapterIndex];
+  const block = blocksOf(cursor.chapterIndex)[cursor.blockIndex];
+  const context = chapter ? [chapter.title, (block && block.term) || ''].filter(Boolean).join(' · ') : '';
+
+  /** askSubmit (app.js:3659). */
+  const submit = async () => {
+    if (busy) return;
+    const asked = question.trim();
+    if (!asked) return;
+    const token = generationToken(provider.tokenRequired);
+    if (token === null) return;
+    setBusy(true);
+    setQuestion('');
+    if (inputRef.current) inputRef.current.style.height = 'auto';
+    // The model's context: the saved conversation's last 6 turns (askHistory.slice(-6)).
+    const history = turns
+      .filter((t) => !t.pending && !t.failed)
+      .map((t) => ({ role: t.role, content: String(t.text || '') }))
+      .slice(-6);
+    const withUser: Turn[] = [...turns, { role: 'user', text: asked }];
+    saveTurns(withUser);
+    setTurns([...withUser, { role: 'assistant', text: '', pending: 'Reading the lesson…' }]);
+    const replace = (turn: Turn) => setTurns([...withUser, turn]);
+    const send = () =>
+      postJson(
+        '/api/ask',
+        { module: activeBookFile, chapter: cursor.chapterIndex + 1, block: cursor.blockIndex + 1, question: asked, history },
+        { 'X-Edu-Quiz-Token': token || '' },
+      );
+    try {
+      let response: Response;
+      try {
+        response = await send();
+      } catch {
+        // The link to this box spikes; try once more before reporting a failure.
+        replace({ role: 'assistant', text: '', pending: 'Connection dropped, retrying…' });
+        await new Promise((done) => setTimeout(done, 1500));
+        response = await send();
+      }
+      const data = (await response.json().catch(() => ({}))) as { answer?: string; source?: string; page?: number | null; error?: string };
+      if (!response.ok) throw new Error(data.error || `Error ${response.status}`);
+      const answer: Turn = { role: 'assistant', text: data.answer || '', source: data.source, page: data.page };
+      const next = [...withUser, answer].slice(-ASK_MAX_TURNS);
+      setTurns(next);
+      saveTurns(next);
+    } catch (error) {
+      const err = error as Error;
+      replace({
+        role: 'assistant',
+        text: '',
+        failed: `Could not reach the tutor — ${err.name || 'Error'}: ${err.message || 'unknown'} (online=${navigator.onLine}, from ${location.origin})`,
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <>
@@ -63,33 +198,12 @@ export function AskPanel({ reading }: AskPanelProps) {
         className={`${reading ? '' : 'hidden-view '}fixed bottom-6 right-6 z-40 h-14 w-14 rounded-full bg-brand-600 text-white shadow-xl flex items-center justify-center transition-transform hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white`}
         onClick={() => setOpen((on) => !on)}
       >
-        {/* The legacy's own speech-bubble glyph (index.html:568-570), path data verbatim. */}
-        <svg
-          className="w-6 h-6"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={2}
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M8 10h8M8 14h5M21 12a8 8 0 0 1-8 8H7l-4 3v-6.5A8 8 0 1 1 21 12z"
-          />
+        <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8M8 14h5M21 12a8 8 0 0 1-8 8H7l-4 3v-6.5A8 8 0 1 1 21 12z" />
         </svg>
       </button>
 
-      {/*
-        ⛔ THE SIZE CLASSES ARE THE PANEL. `w-[44rem] max-w-[calc(100vw-3rem)] h-[80vh]
-           max-h-[calc(100vh-8rem)]` plus the `flex flex-col` column are what make this a
-           conversation window instead of the 48px strip that was measured. The three
-           children then split it: header `shrink-0`, log `flex-1 overflow-y-auto`, form
-           `shrink-0`. Drop the column and the log stops being the part that scrolls.
-        ⚠ `<aside>` here vs the legacy's `<section>`: kept from the existing port. Both are
-          contract tags and the contract selector is the id, not the tag.
-      */}
-      <aside
+      <section
         id="ask-panel"
         aria-label="Ask about this lesson"
         className={`${open ? '' : 'hidden-view '}fixed bottom-24 right-6 z-40 flex flex-col w-[44rem] max-w-[calc(100vw-3rem)] h-[80vh] max-h-[calc(100vh-8rem)] rounded-2xl border border-gray-700 bg-gray-800 shadow-2xl`}
@@ -98,9 +212,7 @@ export function AskPanel({ reading }: AskPanelProps) {
         <header className="flex items-start justify-between gap-3 px-4 py-3 border-b border-gray-700 shrink-0">
           <div className="min-w-0">
             <p className="text-white font-semibold text-sm">Ask about this lesson</p>
-            <p id="ask-context" className="text-xs text-gray-400 truncate">
-              {/* A4: askLessonLabel() — which lesson the answer is grounded in. */}
-            </p>
+            <p id="ask-context" className="text-xs text-gray-400 truncate">{context}</p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
             <button
@@ -108,6 +220,17 @@ export function AskPanel({ reading }: AskPanelProps) {
               type="button"
               title="Start a new conversation and delete this one"
               className="min-h-[36px] px-3 rounded-lg border border-gray-600 text-gray-300 text-xs font-semibold uppercase tracking-wider hover:text-white hover:bg-gray-700 transition-colors"
+              onClick={() => {
+                // askNewConversation (app.js:3619) — the ONLY place a conversation is cleared.
+                setTurns([]);
+                try {
+                  localStorage.removeItem(ASK_STORE_KEY);
+                } catch {
+                  /* nothing to clear */
+                }
+                setQuestion('');
+                inputRef.current?.focus();
+              }}
             >
               New
             </button>
@@ -118,65 +241,88 @@ export function AskPanel({ reading }: AskPanelProps) {
               className="min-h-[44px] min-w-[44px] -mr-2 -mt-1 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
               onClick={() => setOpen(false)}
             >
-              <svg
-                className="w-5 h-5 mx-auto"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                viewBox="0 0 24 24"
-              >
+              <svg className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
           </div>
         </header>
 
-        {/* `[overflow-wrap:anywhere]` is the legacy's: a pasted URL must not widen the panel. */}
-        <div id="ask-log" className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-sm [overflow-wrap:anywhere]">
-          {/* A4: askRestore() renders the stored turns as askBubble()s. */}
+        <div id="ask-log" ref={logRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-sm [overflow-wrap:anywhere]">
+          {turns.map((turn, index) =>
+            turn.role === 'user' ? (
+              <div key={index} className="flex justify-end">
+                {/* textContent: the question is learner input and is never parsed as markup. */}
+                <div className="max-w-[85%] rounded-xl bg-brand-600 text-white px-3 py-2">
+                  <div>{turn.text}</div>
+                </div>
+              </div>
+            ) : (
+              <div key={index}>
+                <div className="rounded-xl bg-gray-900/60 border border-gray-700 px-3 py-2 text-gray-200">
+                  {turn.pending ? (
+                    <div className="text-gray-500">{turn.pending}</div>
+                  ) : turn.failed ? (
+                    <span className="text-red-300">{turn.failed}</span>
+                  ) : (
+                    <>
+                      <Badge source={turn.source} page={turn.page} />
+                      <div>
+                        <RichTextViewer content={turn.text} />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            ),
+          )}
         </div>
 
-        {/* ⛔ No onSubmit handler in Phase 03 — submitting is a POST. See the header. */}
-        <form id="ask-form" className="shrink-0 border-t border-gray-700 p-3 flex items-end gap-2">
+        <form
+          id="ask-form"
+          className="shrink-0 border-t border-gray-700 p-3 flex items-end gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
           <label className="sr-only" htmlFor="ask-input">
             Your question
           </label>
-          {/*
-            ⛔⛔ THIS STAYS `<input type="text">`, AND THE REASON IS A MEASUREMENT, NOT A
-                PREFERENCE. The legacy element is a `<textarea rows="1">` that grows to a
-                128px cap as the reader types (askInit's input listener). Porting the tag
-                was tried in this slice and REVERTED: it turned R-C1 RED —
-                  `UNEXPECTED MISSES: attributeExpressions [type="text"]`
-                — because `#ask-input` is the ONLY element in the whole React app that
-                satisfies the frozen contract's `[type="text"]` entry.
-            ⚑ RECORDED AS A LATENT VACUITY, because that is what it really is. The legacy
-              owner of `[type="text"]` is **`#set-model`** (index.html:399), the settings
-              model field. This port renders `#set-model` as a read-only `<p>` — correct for
-              a phase that must be incapable of writing — so the contract entry has been
-              propped up by an unrelated element the whole time. Whoever makes settings
-              editable in Phase 04 restores the real owner, and only THEN can this become
-              the textarea the legacy has. ⛔ Do not "fix" it by widening the contract.
-            ⚠ maxLength/placeholder are the legacy's own; `resize-none`/`max-h-32` are kept
-              so the swap back to a textarea is a one-line change later.
-          */}
-          <input
+          {/* ⚑ Phase 04: a <textarea rows=1> that grows to 128px, as the legacy's is. The Phase-03
+              <input type="text"> stand-in existed only because it was propping up the contract's
+              `[type="text"]` entry — whose real owner, #set-model, is now restored in Settings. */}
+          <textarea
             id="ask-input"
-            type="text"
+            ref={inputRef}
+            rows={1}
             maxLength={600}
             placeholder="What don't you get?"
             className="flex-1 resize-none rounded-lg bg-gray-900 border border-gray-600 px-3 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-brand-600 max-h-32"
+            value={question}
+            onChange={(event) => {
+              setQuestion(event.target.value);
+              const field = event.currentTarget;
+              field.style.height = 'auto';
+              field.style.height = `${Math.min(field.scrollHeight, 128)}px`;
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
           />
           <button
             id="ask-send"
             type="submit"
-            disabled
-            title="Asking is not available in this phase yet."
+            disabled={busy}
             className="min-h-[44px] px-4 rounded-lg bg-brand-600 text-white text-sm font-semibold hover:bg-brand-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             Ask
           </button>
         </form>
-      </aside>
+      </section>
     </>
   );
 }

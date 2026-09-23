@@ -25,13 +25,21 @@ import { createContext, useContext, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { DEFAULT_BOOK, bookLocationFor, moduleIdFor } from '../data/bookPaths';
 import { useBook } from '../data/queries';
-import type { Chapter, QuizQuestion, TheoryBlock, TutorialData } from '../data/types';
+import { fileForSlug, parseRoute } from '../routing/paths';
+import type { Chapter, ModulePayload, QuizQuestion, TheoryBlock, TutorialData } from '../data/types';
 
 interface BookContextValue {
   /** null = no book open; the library shows its empty state. */
   activeBookFile: string | null;
   openBook: (file: string) => void;
   closeBook: () => void;
+  /**
+   * loadModuleData(parsed, 'Uploaded module', null) — the header's "Load Course JSON" (app.js:
+   * 1384). The book is held IN MEMORY only: activeBookFile stays null, so it has no server
+   * file and AI generation is off for it, exactly as the legacy's aiReady() rule says.
+   * Throws the legacy's own schema error on a file that is not a module.
+   */
+  loadUploaded: (payload: ModulePayload) => void;
   moduleId: string;
   assetBase: string;
   /** The TUTORIAL half of the payload. `data.title` is the book title. */
@@ -114,6 +122,13 @@ export function blocksOfChapter(chapter: Chapter | undefined): TheoryBlock[] {
  *      TanStack Query owns; out of scope for this fix.
  */
 function initialBookFile(): string {
+  // ⚑ Phase 06a: a book PATH (/<book-slug>/...) decides first. Only the fixed slug map is known
+  //   this early; a slug outside it is resolved by the shell once /api/modules has answered.
+  const route = parseRoute();
+  if (route.kind === 'book' || route.kind === 'lesson') {
+    const fromPath = fileForSlug(route.slug);
+    if (fromPath) return fromPath;
+  }
   let saved: string | null = null;
   try {
     saved = window.localStorage.getItem('eduActiveBook');
@@ -132,22 +147,46 @@ export function BookProvider({ children }: { children: ReactNode }) {
   //    reports on.
   const [activeBookFile, setActiveBookFile] = useState<string | null>(initialBookFile);
   const location = activeBookFile ? bookLocationFor(activeBookFile) : null;
-  const { data: payload, isLoading } = useBook(location?.url ?? null);
+  const { data: fetched, isLoading } = useBook(location?.url ?? null);
+  const [uploaded, setUploaded] = useState<ModulePayload | null>(null);
+  const payload = uploaded ?? fetched;
 
   const value = useMemo<BookContextValue>(() => {
     const tutorial = (payload?.tutorialData ?? null) as TutorialData | null;
-    const moduleId = payload || activeBookFile ? moduleIdFor(payload ?? null, activeBookFile) : DEFAULT_BOOK;
+    // ⚠ moduleIdFor needs the PAYLOAD (the legacy computes it in loadModuleData, i.e. after the
+    //   book arrived). While it is still loading, a packaged book's file name IS its id; anything
+    //   else waits on the default rather than inventing an `f-` id from a file that is not a book yet.
+    const moduleId = payload
+      ? moduleIdFor(payload, activeBookFile)
+      : activeBookFile && /^[a-z0-9][a-z0-9-]{1,63}$/.test(activeBookFile)
+        ? activeBookFile
+        : DEFAULT_BOOK;
     const chapters = Array.isArray(tutorial?.sections) ? (tutorial.sections as Chapter[]) : [];
     return {
       activeBookFile,
-      openBook: setActiveBookFile,
-      closeBook: () => setActiveBookFile(null),
+      openBook: (file: string) => {
+        setUploaded(null);
+        setActiveBookFile(file);
+      },
+      closeBook: () => {
+        setUploaded(null);
+        setActiveBookFile(null);
+      },
+      loadUploaded: (parsed: ModulePayload) => {
+        const tutorialData = (parsed as { tutorialData?: unknown }).tutorialData;
+        if (!tutorialData || typeof tutorialData !== 'object' || !Array.isArray((parsed as { quizData?: unknown }).quizData)) {
+          throw new Error("Invalid JSON schema. Must contain 'tutorialData' object and 'quizData' array.");
+        }
+        const title = (tutorialData as { title?: string }).title;
+        setUploaded({ ...parsed, tutorialData: { ...(tutorialData as object), title: title || 'Uploaded module' } } as ModulePayload);
+        setActiveBookFile(null);
+      },
       moduleId,
       // A packaged book's assets are relative to the BOOK; a legacy book's are relative
       // to the page, which is why base is deliberately '' there (app.js:68).
       assetBase: location?.base ?? '',
       data: tutorial,
-      isLoading,
+      isLoading: uploaded ? false : isLoading,
       chapters,
       blocksOf: (chapterIndex: number) => blocksOfChapter(chapters[chapterIndex]),
       quizBank: Array.isArray(payload?.quizData) ? (payload.quizData as QuizQuestion[]) : [],
@@ -165,7 +204,7 @@ export function BookProvider({ children }: { children: ReactNode }) {
         return [];
       },
     };
-  }, [activeBookFile, payload, isLoading, location?.base]);
+  }, [activeBookFile, payload, uploaded, isLoading, location?.base]);
 
   return <BookContext.Provider value={value}>{children}</BookContext.Provider>;
 }

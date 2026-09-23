@@ -67,6 +67,9 @@ export interface CodeCell {
   language?: string;
   /** R7: position within the CHAPTER's cell sequence (1-based), not within the block. */
   ordinal?: number;
+  /** Ruling R13 — SUPERSEDED by R24 (nothing runs). Kept in the type because the DATA keeps it. */
+  runnable?: boolean;
+  runnableReason?: string;
 }
 
 /** One theory block == one lesson == one screenful in the reader. */
@@ -91,6 +94,8 @@ export interface Chapter {
   items?: (TheoryBlock | string)[];
   pageStart?: number;
   pageEnd?: number;
+  /** "20 theory blocks · pages 70-155" — written by the importer; chapterPages() reads it. */
+  note?: string;
   [key: string]: unknown;
 }
 

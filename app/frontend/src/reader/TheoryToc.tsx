@@ -26,93 +26,128 @@
 //   already showed (user, 21-09-26).
 import { useBookContext } from '../state/BookProvider';
 import { useProgressContext } from '../state/ProgressProvider';
-import type { TheoryCursor } from '../data/types';
+import type { Chapter, TheoryCursor } from '../data/types';
 
 export interface TheoryTocProps {
   cursor: TheoryCursor;
   onSelect: (next: TheoryCursor) => void;
+  /** setTocOpen (app.js:263): the panel is hidden by class when closed, at every width. */
+  open: boolean;
+  onClose: () => void;
 }
 
-export function TheoryToc({ cursor, onSelect }: TheoryTocProps) {
+/** chapterPages (app.js:2170): "20 theory blocks · pages 70-155" -> "pages 70-155". */
+function chapterPages(chapter: Chapter | undefined): string {
+  const match = /pages?\s+[0-9]+\s*[-\u2013\u2014]\s*[0-9]+|pages?\s+[0-9]+/i.exec(String((chapter && chapter.note) || ''));
+  return match ? match[0].toLowerCase() : '';
+}
+
+/*
+  ⚑ PHASE 04 PARITY (23-09-26): every class string below is renderTheoryToc's (app.js:2175-2257)
+    and index.html:319-331's, verbatim. Before this, the summary, the meter, the count line and
+    every block button carried NO class — the before-shots show centred, unstyled rows with no
+    progress bars and no highlight on the lesson being read — and the page range was read from
+    pageStart/pageEnd, which the modules do not carry, so "· pages 21-69" never rendered.
+  ⛔ THE PANEL IS STILL ITS OWN SCROLL CONTAINER: `flex flex-col min-h-0 lg:h-full` on the panel
+     (so it does not grow), `flex-1 overflow-y-auto` on the nav (the thing that scrolls). D-1.
+*/
+export function TheoryToc({ cursor, onSelect, open, onClose }: TheoryTocProps) {
   const { chapters, blocksOf } = useBookContext();
   const { chapterProgress, isBlockComplete, overall } = useProgressContext();
   const summary = overall();
   const totalBlocks = chapters.reduce((sum, _chapter, index) => sum + blocksOf(index).length, 0);
 
   return (
-    /*
-      ⛔⛔ D-1's OTHER HALF — THE ToC MUST BE ITS OWN SCROLL CONTAINER. Class strings ported
-          22-09-26 (EVL fix 003) VERBATIM from aws-quiz-app/index.html:320 and :330.
-          Before this fix BOTH elements carried NO className. MEASURED at 1440x1000 on the
-          deployed :8792:
-            #toc-panel  clientHeight 4807     (it grew to 19 chapters of content)
-            #toc-nav    scrollHeight 1960 === clientHeight 1960   (never a scroll container)
-          So the contents list was 4807px tall inside a 1000px window that clips, i.e. the ToC
-          scrolled away with — and past — the reading pane. That is exactly the read → scroll →
-          lose your place loop ruling R6 exists to stop, and it is why F5 asks the user to
-          confirm no scroll-away.
-      ⛔ THE SPLIT IS LOAD-BEARING: the PANEL is `flex flex-col min-h-0 lg:h-full` (bounded,
-         does not grow) and the NAV inside it is `flex-1 overflow-y-auto` (the thing that
-         actually scrolls). Put overflow on the panel instead and the summary line scrolls
-         away with the list.
-      ⚠ `fixed lg:static` is the legacy's mobile drawer: below `lg` the panel is an overlay
-        (paired with #toc-backdrop, already ported), at `lg`+ it is an in-flow column.
-      ⚠ It stays a <div>, not the legacy's <aside>: `#toc-panel` is pinned by ID only in
-        gates/selector-contract.frozen.json, and `aside` is not in the contract's tag list, so
-        changing the tag buys nothing and risks a shape the contract does not describe.
-    */
     <div
       id="toc-panel"
-      className="fixed lg:static inset-y-0 left-0 z-50 w-80 max-w-[85vw] lg:w-72 xl:w-80 lg:max-w-none shrink-0 flex flex-col min-h-0 bg-gray-800 border border-gray-700 rounded-xl lg:h-full"
+      className={`fixed lg:static inset-y-0 left-0 z-50 w-80 max-w-[85vw] lg:w-72 xl:w-80 lg:max-w-none shrink-0 flex flex-col min-h-0 bg-gray-800 border border-gray-700 rounded-xl lg:h-full${open ? '' : ' hidden-view'}`}
       aria-label="Table of contents"
     >
-      {/* The legacy's panel head: `shrink-0`, so it never competes with the scrolling nav. */}
-      <div className="px-5 py-4 border-b border-gray-700 shrink-0">
-        <p className="text-white font-semibold text-sm uppercase tracking-widest">Contents</p>
-        <p id="toc-summary" className="text-xs text-gray-400 mt-1">
-          {`${chapters.length} chapters · ${totalBlocks} blocks · ${summary.done}/${summary.total} done (${summary.percent}%)`}
-        </p>
+      <div className="px-5 py-4 border-b border-gray-700 flex items-start justify-between gap-3 shrink-0">
+        <div>
+          <p className="text-white font-semibold text-sm uppercase tracking-widest">Contents</p>
+          <p id="toc-summary" className="text-xs text-gray-400 mt-1">
+            {`${chapters.length} chapters · ${totalBlocks} blocks · ${summary.done}/${summary.total} done (${summary.percent}%)`}
+          </p>
+        </div>
+        <button
+          id="toc-close-btn"
+          type="button"
+          onClick={onClose}
+          className="min-h-[44px] min-w-[44px] -mr-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors active:scale-95"
+          aria-label="Hide contents"
+        >
+          <svg className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
       </div>
       <nav id="toc-nav" className="p-2 flex-1 overflow-y-auto">
         {chapters.map((chapter, chapterIndex) => {
           const blocks = blocksOf(chapterIndex);
           const done = chapterProgress(chapterIndex);
-          const pages =
-            chapter.pageStart && chapter.pageEnd ? ` · pages ${chapter.pageStart}-${chapter.pageEnd}` : '';
+          const pages = chapterPages(chapter);
           return (
-            <details key={chapterIndex} open={chapterIndex === cursor.chapterIndex} className="rounded-lg">
-              <summary>
+            // ⚠ The key carries the CURSOR: renderTheoryToc rebuilds the whole nav on every
+            //   selection, so every chapter a reader toggled open snaps back to "only the current
+            //   chapter open". A cursor-keyed remount reproduces that; a stable key would keep
+            //   the toggles, which is a different behaviour.
+            <details
+              key={`${chapterIndex}@${cursor.chapterIndex}.${cursor.blockIndex}`}
+              open={chapterIndex === cursor.chapterIndex}
+              className="rounded-lg"
+            >
+              <summary className="cursor-pointer select-none rounded-lg px-3 py-3 text-sm font-semibold text-gray-200 hover:bg-gray-700 transition-colors">
                 {/* `#toc-nav summary div` — a pinned selector. Keep the wrapper. */}
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="min-w-0">{chapter.title}</span>
-                  <span className="shrink-0 text-xs font-bold tabular-nums">{`${done.percent}%`}</span>
+                  <span
+                    className={`shrink-0 text-xs font-bold tabular-nums ${
+                      done.percent === 100 ? 'text-green-400' : done.percent > 0 ? 'text-brand-400' : 'text-gray-500'
+                    }`}
+                  >{`${done.percent}%`}</span>
                 </div>
                 <div
+                  className="mt-2 h-1 w-full rounded-full bg-gray-700 overflow-hidden"
                   role="progressbar"
                   aria-valuenow={done.percent}
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-label={`${chapter.title} progress`}
                 >
-                  <div style={{ width: `${done.percent}%` }} />
+                  <div
+                    className={`h-full rounded-full transition-all ${done.percent === 100 ? 'bg-green-500' : 'bg-brand-600'}`}
+                    style={{ width: `${done.percent}%` }}
+                  />
                 </div>
-                <div>{`${done.done} of ${done.total} blocks${pages}`}</div>
+                <div className="mt-1 text-[0.7rem] font-normal text-gray-500 tabular-nums">
+                  {`${done.done} of ${done.total} blocks${pages ? ` · ${pages}` : ''}`}
+                </div>
               </summary>
               <ol className="mb-2 px-2 space-y-1">
                 {blocks.map((block, blockIndex) => {
-                  const isCurrent =
-                    chapterIndex === cursor.chapterIndex && blockIndex === cursor.blockIndex;
+                  const isCurrent = chapterIndex === cursor.chapterIndex && blockIndex === cursor.blockIndex;
                   const complete = isBlockComplete(chapterIndex, blockIndex);
+                  // The legacy builds the class from two literals and then SWAPS text-gray-400
+                  // for text-green-400 on a completed block (classList.add/remove) — reproduced
+                  // as the resulting literal strings, never an interpolated colour.
+                  const base = 'w-full text-left rounded-md px-3 py-2 text-sm leading-5 min-h-[44px] transition-colors ';
+                  const cls = isCurrent
+                    ? `${base}bg-brand-600/15 text-white font-semibold border-l-2 border-brand-600${complete ? ' text-green-400' : ''}`
+                    : complete
+                      ? `${base}hover:bg-gray-700 hover:text-white border-l-2 border-transparent text-green-400`
+                      : `${base}text-gray-400 hover:bg-gray-700 hover:text-white border-l-2 border-transparent`;
                   return (
                     <li key={blockIndex}>
                       <button
                         type="button"
+                        className={cls}
                         // ⛔ String or undefined. NEVER a boolean. See the header.
                         aria-current={isCurrent ? 'true' : undefined}
                         title={complete ? 'Completed — 100% on this block’s assessment' : undefined}
                         onClick={() => onSelect({ chapterIndex, blockIndex })}
                       >
-                        {`${complete ? '✓ ' : ''}${blockIndex + 1}. ${block.term ?? 'Theory block'}`}
+                        {`${complete ? '✓ ' : ''}${blockIndex + 1}. ${block.term || 'Theory block'}`}
                       </button>
                     </li>
                   );
@@ -122,8 +157,6 @@ export function TheoryToc({ cursor, onSelect }: TheoryTocProps) {
           );
         })}
       </nav>
-      {/* A3 OWNS the narrow-viewport behaviour: #toc-toggle-btn, #toc-close-btn,
-          #toc-backdrop, and closing the panel on selection below the lg breakpoint. */}
     </div>
   );
 }

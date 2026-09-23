@@ -52,17 +52,16 @@ legacy app calls `ProviderConfig.from_environment()` from inside individual hand
 is why changing the source of a setting means finding every reader. Phase 4 swaps env →
 SQLite; it must not have to hunt.
 
-### 5. No credentials. At all. In this phase.
+### 5. No credential in the ENVIRONMENT — read from the file, echoed nowhere. (Phase 04)
 
-The `foxai-edu-study` unit pins exactly **seven** `EDU_*` **path** variables and carries
-**no `EnvironmentFile=`** line. `:8792` is **unauthenticated** and ufw rule #1
-blanket-allows the whole LAN `192.168.100.0/24`, so anything reaching a response body is
-readable by every host on that LAN.
-
-`:8767`'s environment holds **nine** `EDU_*` variables — that is where the number 9 in
-earlier drafts came from — but only **seven are paths**. The other two are
-`EDU_QUIZ_API_KEY` (the 9router key) and `EDU_RUNNER_KEY` (the `.68:8790` runner key), both
-**live secrets** arriving via `EnvironmentFile=`. Echoing nine would publish both.
+⚑ Superseded 23-09-26. Phases 02-03 held no credential at all. Phase 04 ports the AI routes and
+the runner proxy, which need them — so they are read from `EDU_ENV_PATH` (the same `provider.env`
+`:8767` uses) **on each request**, by `settings.py` alone (decision D-P4-2). What did NOT change:
+the unit still pins exactly seven `EDU_*` **path** variables and has **no `EnvironmentFile=`**,
+so `/proc/<pid>/environ` holds no key (R-SEP3/R-SEP4), and `/api/health` echoes the seven paths
+only. `:8792` is **unauthenticated** and ufw rule #1 blanket-allows `192.168.100.0/24`, so no
+value read from that file may reach a response body — `/api/settings` returns `*_set` booleans
+(gate `W-SECRET`, fault-proved).
 
 ---
 
@@ -93,3 +92,39 @@ Measured on `nn` 2026-09-21 against `~/edu-importer-venv`:
 upper cap, so leaving it unpinned resolves to whatever is current and the reference this
 program claims to have measured stops being the one it runs. That matters from Phase 3
 onward, where the API surface is the entire job.
+
+## Phase 06a — accounts, sign-in, PostgreSQL (ruling R25, 23-09-26)
+
+- **Everything needs a session** except `/login`, `/api/health`, `/api/auth/login`, the Vite
+  `/assets/<file>` bundles and `/favicon.svg`. Signed out: API/data -> `401` JSON, pages -> `302 /login?next=…`.
+- **Store:** PostgreSQL `edu_study` on `nn:5432`, role `edu_study` (CONNECTION LIMIT 10, owns only that DB).
+  Credentials: `nn:~/.config/foxai/edu-study-db.env` (mode 600), **read by the backend itself** — the unit
+  has no `EnvironmentFile=` (R-SEP3/R-SEP4 stay green). Tables: `accounts`, `sessions` (token SHA-256 only),
+  `progress`, `attempts`, `wrong_answers`, `schema_migrations`. Migrations: `migrations/NNN_*.sql`, idempotent.
+- **:8792 no longer writes `progress.json`.** `:8767` still does until the cutover.
+- **Admin CLI** (on nn, passwords on STDIN only, never an argument):
+  ```bash
+  cd /srv/foxai/edu-study/backend && PY=/home/ubuntu/edu-study-venv/bin/python
+  $PY -m admin migrate                      # pg_dump to ~/foxai-snapshots first, then apply
+  printf '%s\n' "$PW" | $PY -m admin create-user --username X --display-name "Y"
+  $PY -m admin list-users
+  $PY -m admin import-progress              # progress.json -> the owner; idempotent, re-run at cutover
+  printf '%s\n' "$PW" | $PY -m admin set-password --username X
+  $PY -m admin set-claude-access --username X --on   # or --off: which 9router combos X's AI calls use
+  $PY -m admin delete-user --username X --yes        # a NON-owner account and all its rows
+  ```
+- **Gates** use a separate database, `edu_study_gate` (own role), through an SSH tunnel; see
+  `gates/run-gates-react.sh` and `gates/lib/auth-preload.mjs`.
+
+## Model routing per account (23-09-26, user ruling)
+
+The combo each AI call sends is chosen from the signed-in account's `claude_access` flag (migration
+002, default OFF; owner toggles it on the Account page or with `set-claude-access`) and the job:
+
+| Job | claude_access ON | OFF |
+|---|---|---|
+| tutor (`/api/ask`) | `EDU_MODEL_TUTOR_CLAUDE` | `EDU_MODEL_TUTOR_NORMAL` |
+| quiz, fresh quiz, grading | `EDU_MODEL_ARG_CLAUDE` | `EDU_MODEL_ARG_NORMAL` |
+
+Keys live in `provider.env` (read per call). A missing key falls back to `EDU_TUTOR_MODEL` (tutor,
+Claude only), then `EDU_QUIZ_MODEL`. Code: `settings.model_for`, `main._routed`. Gate: `gates/gate-r-route.mjs`.

@@ -28,6 +28,7 @@ import { useBookContext } from '../state/BookProvider';
 import { useProgressContext } from '../state/ProgressProvider';
 import { nextTheory } from '../state/theoryNav';
 import type { TheoryCursor } from '../data/types';
+import type { SaveNote } from '../shell/useStudyActions';
 
 export interface ResultScreenProps {
   /**
@@ -49,6 +50,10 @@ export interface ResultScreenProps {
    *     did not. A screen does not show its siblings — so the switch is a prop.
    */
   onResumeQuiz: () => void;
+  /** #generate-new-btn — the listener at app.js:1326 (same pick / same block / fresh). */
+  onGenerateAnother: () => void;
+  /** What the completion write reported (shell/useStudyActions). */
+  saveNote: SaveNote;
 }
 
 /*
@@ -96,10 +101,10 @@ function blockFromId(
   return { chapterIndex, blockIndex };
 }
 
-export function ResultScreen({ onBackToReader, onNewQuiz, onResumeQuiz }: ResultScreenProps) {
+export function ResultScreen({ onBackToReader, onNewQuiz, onResumeQuiz, onGenerateAnother, saveNote }: ResultScreenProps) {
   const { state, dispatch, scored, total } = useQuiz();
   const { chapters, blocksOf } = useBookContext();
-  const { completed } = useProgressContext();
+  const { completed, chapterProgress } = useProgressContext();
   const percent = total === 0 ? 0 : Math.round((scored / total) * 100);
 
   const blockCountOf = (index: number) => blocksOf(index).length;
@@ -155,21 +160,25 @@ export function ResultScreen({ onBackToReader, onNewQuiz, onResumeQuiz }: Result
       </div>
 
       <div id="result-message" className="text-lg text-gray-300 mb-12 leading-relaxed">
+        {/* ⚑ Phase 04 parity (gate R-PAR-RESULT): the legacy's span is `... text-3xl text-white` and
+            showResults() ADDS the colour class on top (app.js:721-741), so BOTH classes are on the
+            element and the stylesheet's order decides — measured: the heading renders WHITE on
+            :8767. The port had dropped text-white and rendered it in colour. Both classes kept. */}
         {total === 0 ? (
-          <span className="font-light block mb-4 text-3xl text-gray-400">No Assessment Available.</span>
+          <span className="font-light block mb-4 text-3xl text-white text-gray-400">No Assessment Available.</span>
         ) : percent >= 80 ? (
           <>
-            <span className="font-light block mb-4 text-3xl text-emerald-400">Outstanding Performance!</span>
+            <span className="font-light block mb-4 text-3xl text-white text-emerald-400">Outstanding Performance!</span>
             {' You have demonstrated expert-level mastery of the material.'}
           </>
         ) : percent >= 60 ? (
           <>
-            <span className="font-light block mb-4 text-3xl text-brand-400">Solid Effort.</span>
+            <span className="font-light block mb-4 text-3xl text-white text-brand-400">Solid Effort.</span>
             {' You understand the fundamentals well, but reviewing key concepts will push you further.'}
           </>
         ) : (
           <>
-            <span className="font-light block mb-4 text-3xl text-brand-500">Keep Reviewing.</span>
+            <span className="font-light block mb-4 text-3xl text-white text-brand-500">Keep Reviewing.</span>
             {' Review the tutorial material deeply before retaking the assessment.'}
           </>
         )}
@@ -180,10 +189,17 @@ export function ResultScreen({ onBackToReader, onNewQuiz, onResumeQuiz }: Result
           ⛔ IT IS GATED ON `!completed[blockId]`: once the block is done, repeating the quiz
              must not nag. `completed` is an OBJECT keyed by block id (store.py:93), tested
              with Boolean() — never `=== true`.
-          ⚠ NOT PORTED, on purpose: the progressSaveFailed queued-progress warning. It fires
-            only when a WRITE failed, and Phase 03 never writes. It lands with Phase 04's
-            recordQuizResult, not before — a warning about a save that cannot happen is noise.
+          ⚑ PHASE 04: the queued-save warning (app.js:745) and announceCompletion (app.js:1097)
+            are both driven by the completion write's outcome (SaveNote).
+          ⚠ ONE DELIBERATE DIFFERENCE: the legacy sets `progressSaveFailed` after an ASYNC POST
+            that showResults() does not wait for, so its warning surfaced on the NEXT result
+            screen, about the wrong quiz. Here it shows on the result it belongs to.
         */}
+        {saveNote.failed ? (
+          <span className="block mt-6 text-sm text-amber-300">
+            Your score could not be saved — the connection dropped. It is queued and will be saved next time this page loads.
+          </span>
+        ) : null}
         {blockId && total > 0 && scored < total && !completed[blockId] ? (
           <span className="block mt-6 text-sm text-gray-400">
             {missed
@@ -191,6 +207,7 @@ export function ResultScreen({ onBackToReader, onNewQuiz, onResumeQuiz }: Result
               : `Not complete yet — a block needs 100% (you got ${scored}/${total}). Retake to finish it.`}
           </span>
         ) : null}
+        {saveNote.completedBlock ? <CompletionNote blockId={saveNote.completedBlock} chapterTitles={chapters.map((c) => c.title)} chapterProgress={chapterProgress} /> : null}
       </div>
 
       {/*
@@ -263,6 +280,7 @@ export function ResultScreen({ onBackToReader, onNewQuiz, onResumeQuiz }: Result
           id="generate-new-btn"
           type="button"
           {...resultBtn(!origin && state.scope === 'ai' && !missed, 3, state.scope !== 'ai')}
+          onClick={onGenerateAnother}
         >
           {origin ? 'Another AI quiz on this block' : 'Generate Another Quiz'}
         </button>
@@ -280,5 +298,27 @@ export function ResultScreen({ onBackToReader, onNewQuiz, onResumeQuiz }: Result
         </button>
       </div>
     </>
+  );
+}
+
+/** announceCompletion (app.js:1097) — "✓ Block complete — <chapter> is now N% (d of t)." */
+function CompletionNote({
+  blockId,
+  chapterTitles,
+  chapterProgress,
+}: {
+  blockId: string;
+  chapterTitles: string[];
+  chapterProgress: (chapterIndex: number) => { done: number; total: number; percent: number };
+}) {
+  const match = /^ch(\d{2})-b(\d{2})$/.exec(blockId);
+  if (!match) return null;
+  const chapterIndex = Number(match[1]) - 1;
+  const p = chapterProgress(chapterIndex);
+  const name = chapterTitles[chapterIndex] || `Chapter ${chapterIndex + 1}`;
+  return (
+    <span className="block mt-6 text-base font-semibold text-green-400">
+      {`✓ Block complete — ${name} is now ${p.percent}% (${p.done} of ${p.total}).`}
+    </span>
   );
 }

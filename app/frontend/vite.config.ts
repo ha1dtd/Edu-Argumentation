@@ -1,5 +1,8 @@
+import { copyFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import type { Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
 // ⛔ A3c — THE ONE PATH THAT REACHES OUT OF THIS ROOT, AND WHY.
@@ -26,8 +29,42 @@ const EDU_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 // /assets/<moduleId>/<file>. They stay separate because the backend registers the
 // guarded routes BEFORE the SPA static mount and Starlette matches in registration
 // order — see app/md/explain.md.
+/**
+ * ⚑ PHASE 04 PARITY — ship the legacy's OWN book files and favicon into dist/.
+ *
+ * :8767 lists FIVE books; :8792 listed TWO, because the three legacy-shape books live in
+ * aws-quiz-app/data/ and were never shipped here. They are copied from that ONE source at build
+ * time (never duplicated into this tree), with EXACTLY deploy.sh's rule: `*.json` at the top of
+ * data/, minus the `test_` fixtures (served but never listed) and minus the retired
+ * geron_hands_on_ml_ch01_ch09.json (deploy.sh:54 excludes it; listing it adds a duplicate Géron).
+ * The favicon is index.html:7's.
+ */
+const LEGACY_EXCLUDED = new Set(['geron_hands_on_ml_ch01_ch09.json']);
+function legacyBooks(): Plugin {
+  // ⚠ The RESOLVED outDir, never a hard-coded ./dist — a `--outDir` build (the fault-proof
+  //   variants) otherwise shipped without the three books and read as a different library.
+  let outDir = '';
+  return {
+    name: 'edu-legacy-books',
+    apply: 'build',
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      const source = join(EDU_ROOT, 'aws-quiz-app');
+      const outData = join(outDir, 'data');
+      mkdirSync(outData, { recursive: true });
+      for (const name of readdirSync(join(source, 'data'))) {
+        if (!name.endsWith('.json') || name.startsWith('test_') || LEGACY_EXCLUDED.has(name)) continue;
+        copyFileSync(join(source, 'data', name), join(outData, name));
+      }
+      copyFileSync(join(source, 'favicon.svg'), join(outDir, 'favicon.svg'));
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), legacyBooks()],
   base: '/',
   server: {
     // See EDU_ROOT above. Dev-server read scope only; it does not widen the build.

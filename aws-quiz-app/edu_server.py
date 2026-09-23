@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import dataclasses
 import json
 import math
 import os
@@ -37,11 +38,6 @@ PROVIDER_TIMEOUT_SECONDS = 120
 RATE_LIMIT_REQUESTS = 20
 RATE_LIMIT_SECONDS = 3_600
 REQUEST_HISTORY: dict[str, deque[float]] = defaultdict(deque)
-
-# Code runner proxy (17-09-26). Lesson code cells run in Jupyter kernels on dn2;
-# the page only ever talks to this server. Runs have their own rate bucket so
-# they never use up the AI quiz generation quota, and they need no provider.
-RUN_ROUTES = ("/api/run", "/api/run/stop", "/api/run/reset-kernel")
 
 # --- Ask the book: a tutor grounded in the lesson, then the book -------------
 # The learner reads here instead of beside the paper book, so "I don't get this"
@@ -156,16 +152,6 @@ could should would may might will just not no nor so such about into over under 
 any both each few more most other some only own same too very s t don now me my mine your yours
 explain explains simply simple mean means meaning tell show shows understand difference between work works
 working use used using need needs want get got make makes made thing things way ways lot really actually""".split())
-
-RUN_UPSTREAM = {"/api/run": "/run", "/api/run/stop": "/interrupt", "/api/run/reset-kernel": "/restart"}
-RUN_MAX_REQUEST_BYTES = 256 * 1024
-RUN_TIMEOUT_SECONDS = 90
-RUN_RATE_LIMIT_REQUESTS = 120
-RUN_RATE_LIMIT_SECONDS = 60
-RUN_HISTORY: dict[str, deque[float]] = defaultdict(deque)
-RUN_MODULES = {"geron-homl3"}
-RUN_SESSION = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
-RUN_CELL_ID = re.compile(r"^[a-z0-9_-]{1,32}$")
 
 # The provider env file and the general-settings file BOTH live outside
 # /srv/foxai/edu-argumentation. That tree is deployed with `rsync --delete`, so
@@ -349,16 +335,36 @@ def write_env_file(values: dict[str, str]) -> None:
         "# Written by the in-app Settings page. Mode 600. Never commit this file.",
     ]
     lines.extend(f"{field}={values.get(field, '')}" for field in ENV_FIELDS)
-    admin = os.getenv("EDU_ADMIN_TOKEN", "")
-    if admin:
-        lines.append(f"EDU_ADMIN_TOKEN={admin}")
-    # The code runner's lines share this file. Settings rewrites the whole file,
-    # so without this a Save would silently disconnect the runner.
-    for field in ("EDU_RUNNER_URL", "EDU_RUNNER_KEY"):
-        value = os.getenv(field, "")
-        if value:
-            lines.append(f"{field}={value}")
+    # EVERY other non-empty key already in the FILE is carried through, in file order:
+    # EDU_ADMIN_TOKEN, the runner's two lines (ruling R24 stopped the runner, it did
+    # not delete its key) and the model-routing keys (EDU_TUTOR_MODEL, EDU_MODEL_*,
+    # 23-09-26). Until 23-09-26 only admin + runner were carried, so a Save would
+    # silently have deleted any other key. The admin/runner values still fall back
+    # to the process environment, as before, when the file does not hold them.
+    carried = {key: value for key, value in read_env_file_keys().items()
+               if key not in ENV_FIELDS and value.strip()}
+    for field in ("EDU_ADMIN_TOKEN", "EDU_RUNNER_URL", "EDU_RUNNER_KEY"):
+        if field not in carried and os.getenv(field, ""):
+            carried[field] = os.getenv(field, "")
+    lines.extend(f"{key}={value.strip()}" for key, value in carried.items())
     write_atomic(ENV_PATH, "\n".join(lines) + "\n")
+
+
+def read_env_file_keys() -> dict[str, str]:
+    """KEY=VALUE lines of provider.env as written by write_env_file (and read by
+    systemd's EnvironmentFile=). Absent/unreadable file => {}."""
+    values: dict[str, str] = {}
+    try:
+        text = ENV_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return values
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
 
 
 def current_env_values() -> dict[str, str]:
@@ -650,8 +656,19 @@ def response_content(raw: bytes, content_type: str) -> str:
                 parts.append(chunk["choices"][0].get("delta", {}).get("content") or "")
             except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                 continue
-        return "".join(parts)
-    return json.loads(text)["choices"][0]["message"]["content"]
+        return drop_think("".join(parts))
+    return drop_think(json.loads(text)["choices"][0]["message"]["content"] or "")
+
+
+# Measured 23-09-26: Claude via 9router's `cc/` provider opens plain-text replies
+# with an empty reasoning tag ("<think></think>SOURCE: lesson ..."), which pushed
+# the SOURCE line off the start and mislabelled every tutor answer "general".
+# Strip a LEADING tag block only, never one mid-text.
+_LEADING_THINK = re.compile(r"^\s*<think>.*?</think>\s*", re.DOTALL)
+
+
+def drop_think(text: str) -> str:
+    return _LEADING_THINK.sub("", text, count=1)
 
 
 def parse_quiz_json(content: str) -> Any:
@@ -1546,81 +1563,14 @@ class EduHandler(SimpleHTTPRequestHandler):
             return
         self.send_json(HTTPStatus.OK, {**mark_block_complete(module, block, score, total, source), "marked": True})
 
-    def proxy_run(self, route: str) -> None:
-        """Validate, rate-limit and forward a code-runner call to dn2."""
-        now = time.monotonic()
-        history = RUN_HISTORY[self.client_address[0]]
-        while history and history[0] <= now - RUN_RATE_LIMIT_SECONDS:
-            history.popleft()
-        if len(history) >= RUN_RATE_LIMIT_REQUESTS:
-            self.send_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "Too many runs. Wait a minute."})
-            return
-        history.append(now)
-        try:
-            payload = read_json(self, RUN_MAX_REQUEST_BYTES)
-            body: dict[str, Any] = {
-                "module": str(payload.get("module", "")),
-                "lesson": str(payload.get("lesson", "")),
-                "session": str(payload.get("session", "")),
-            }
-            if body["module"] not in RUN_MODULES or not BLOCK_ID.match(body["lesson"]) or not RUN_SESSION.match(body["session"]):
-                raise ValueError("module, lesson or session is invalid.")
-            if route == "/api/run":
-                cells = payload.get("cells")
-                if not isinstance(cells, list) or not 1 <= len(cells) <= 50:
-                    raise ValueError("cells must be a non-empty list.")
-                body["cells"] = []
-                for cell in cells:
-                    if not isinstance(cell, dict) or not RUN_CELL_ID.match(str(cell.get("id", ""))) or not isinstance(cell.get("source"), str):
-                        raise ValueError("a cell is invalid.")
-                    body["cells"].append({"id": cell["id"], "source": cell["source"]})
-                body["target"] = str(payload.get("target", ""))
-                if body["target"] not in {cell["id"] for cell in body["cells"]}:
-                    raise ValueError("target must be one of the cells.")
-        except (ValueError, TypeError, json.JSONDecodeError) as error:
-            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-            return
-
-        base, key = os.getenv("EDU_RUNNER_URL", "").strip().rstrip("/"), os.getenv("EDU_RUNNER_KEY", "").strip()
-        if not base.startswith("http://") or not key:
-            self.send_json(HTTPStatus.BAD_GATEWAY, {"error": "Runner unavailable"})
-            return
-        request = Request(base + RUN_UPSTREAM[route], data=json.dumps(body).encode("utf-8"), method="POST",
-                          headers={"Content-Type": "application/json", "X-Edu-Runner-Key": key})
-        try:
-            with urlopen(request, timeout=RUN_TIMEOUT_SECONDS) as response:
-                result = json.loads(response.read())
-        except HTTPError as error:
-            # Runner input errors and busy/full answers pass through; auth or
-            # anything else is a broken link between the two hosts.
-            try:
-                detail = json.loads(error.read()).get("error", "")
-            except (ValueError, OSError):
-                detail = ""
-            if error.code in (400, 409, 503):
-                self.send_json(HTTPStatus(error.code), {"error": detail or "Runner refused the request."})
-            else:
-                self.send_json(HTTPStatus.BAD_GATEWAY, {"error": "Runner unavailable"})
-            return
-        except (URLError, TimeoutError, OSError, ValueError):
-            self.send_json(HTTPStatus.BAD_GATEWAY, {"error": "Runner unavailable"})
-            return
-        if route != "/api/run":
-            result = {"ok": True}
-        self.send_json(HTTPStatus.OK, result)
-
     def do_POST(self) -> None:
         route = self.path.split("?", 1)[0]
         if route not in ("/api/quiz", "/api/quiz/fresh", "/api/ask", "/api/exercise/grade",
-                         "/api/settings", "/api/progress", "/api/book/rename") + RUN_ROUTES:
+                         "/api/settings", "/api/progress", "/api/book/rename"):
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "Unknown API route."})
             return
         if not self.same_origin():
             self.send_json(HTTPStatus.FORBIDDEN, {"error": "Cross-origin requests are not allowed."})
-            return
-
-        if route in RUN_ROUTES:
-            self.proxy_run(route)
             return
 
         if route == "/api/progress":
@@ -1708,6 +1658,12 @@ class EduHandler(SimpleHTTPRequestHandler):
             if images:
                 for _ in range(ASK_VISION_COST - 1):
                     asked.append(moment)
+            # 23-09-26 (user ruling): the tutor has its OWN 9router combo. EDU_TUTOR_MODEL
+            # (provider.env, loaded at startup) when set, else EDU_QUIZ_MODEL as before.
+            # Quiz generation, fresh quiz and grading keep EDU_QUIZ_MODEL.
+            tutor_model = os.getenv("EDU_TUTOR_MODEL", "").strip()
+            if tutor_model:
+                config = dataclasses.replace(config, model=tutor_model)
             try:
                 reply = ask_tutor(config, chapter_title, term, lesson, question, turns, excerpts,
                                   visuals=visuals, images=images)

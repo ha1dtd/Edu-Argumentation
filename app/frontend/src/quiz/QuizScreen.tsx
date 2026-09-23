@@ -24,7 +24,10 @@
 //   #quiz-screen · #options-container · `#options-container .option-card` (+ .option-text,
 //   .explanation-inner, .explanation-text) · #action-container ·
 //   `#action-container .action-bar-inner` · #next-btn · #quiz-new-btn · #restart-btn
-import { useEffect } from 'react';
+import { useBookContext } from '../state/BookProvider';
+import { useEffect, useMemo } from 'react';
+import { recordWrongAnswer } from '../data/writes';
+import type { QuizKind } from '../data/writes';
 import { RichTextViewer } from '../reader/RichTextViewer';
 import { OptionCard } from './OptionCard';
 import { useQuiz } from '../state/QuizProvider';
@@ -47,7 +50,18 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
   // ⚠ `total` is deliberately NOT destructured here. #score-tracker is the BARE tally
   //   (app.js:655/2930); the denominator belongs to #next-hint and #final-fraction.
   const { state, dispatch, scored } = useQuiz();
+  const book = useBookContext();
+  const bookTitle = (book.data?.title as string | undefined) ?? '';
   const question = state.active[state.currentQuestionIndex];
+  // ⚑ Phase 06a: one id per RUN (a restart or retry is a new run), so wrong answers can be grouped
+  //   later (P7). crypto.randomUUID needs a secure context and :8792 is plain HTTP — hence the fallback.
+  const attemptId = useMemo(
+    () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state.full, state.active],
+  );
+  /** bank = the book's written questions; ai = generated for one lesson; fresh = a generated mix. */
+  const quizKind: QuizKind = state.scope === 'ai' ? (state.scopeBlockId ? 'ai' : 'fresh') : 'bank';
   const count = state.active.length;
   const isLast = count > 0 && state.currentQuestionIndex === count - 1;
 
@@ -95,6 +109,18 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
       not the narrowed `active`. See state/quizReducer.ts:owningBlockId.
   */
   const finished = count === 0 || state.currentQuestionIndex >= count;
+
+  // renderQuizScope (app.js:1214) — ⚑ Phase 04 parity: the caption carries the COUNT, and a
+  // retry run says so plainly ("retrying 3 of 20"), or the caption reads "3 questions" on an
+  // assessment the reader knows has twenty. The port showed the bare label only.
+  const activeCount = state.active.length;
+  const scopeCaption = state.carriedTotal
+    ? `${state.scopeLabel || bookTitle || 'Assessment'} · retrying ${activeCount} of ${state.carriedTotal} · ${state.carriedCorrect} already correct`
+    : state.scope === 'module'
+      ? `Whole module · ${activeCount} questions`
+      : state.scope === 'block' || state.scope === 'selection'
+        ? `${state.scopeLabel} · ${activeCount} question${activeCount === 1 ? '' : 's'}`
+        : `AI-written · ${activeCount} questions`;
   useEffect(() => {
     if (isVisible && finished) onFinish();
   }, [isVisible, finished, onFinish]);
@@ -139,7 +165,7 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
             id="quiz-scope-label"
             className="mt-1 text-[0.75rem] uppercase tracking-widest text-gray-500 truncate"
           >
-            {state.scopeLabel}
+            {scopeCaption}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3 sm:gap-6">
@@ -242,9 +268,25 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
             */
             explanation={question?.explanations?.[index] ?? undefined}
             disabled={state.isAnswered}
-            onSelect={() =>
-              dispatch({ type: 'run/answer', index, correct: index === question?.correct })
-            }
+            onSelect={() => {
+              const correct = index === question?.correct;
+              // ⚑ Phase 06a (ruling R25): a WRONG first answer is recorded with the full question and
+              //   options — an AI question exists nowhere else once this screen closes. The same
+              //   `isAnswered` guard as the reducer, so a second click on a locked card records nothing.
+              if (!correct && question && !state.isAnswered) {
+                recordWrongAnswer({
+                  module: book.moduleId,
+                  block: question.source?.block || state.scopeBlockId,
+                  kind: quizKind,
+                  question: question.question,
+                  options: question.options,
+                  chosen: index,
+                  correct: question.correct,
+                  attempt: attemptId,
+                });
+              }
+              dispatch({ type: 'run/answer', index, correct });
+            }}
           >
             <RichTextViewer content={text} />
           </OptionCard>
