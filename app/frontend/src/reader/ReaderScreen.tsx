@@ -98,14 +98,62 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
     query.addEventListener('change', sync);
     return () => query.removeEventListener('change', sync);
   }, []);
+
+  // ⚑ 23-09-26 (user): `[` toggles the contents sidebar from anywhere on the Learn page, and Esc
+  //   closes it at EVERY width (it used to close the phone drawer only). Chosen by the user over a
+  //   sticky bar. Rules, each asserted by gates/gate-r-style.mjs (R-S-TOC-KEYS):
+  //   · LEARN ONLY: the listener exists only while this screen is visible (the screen stays mounted
+  //     under .hidden-view on every other page, so `isVisible` is the scope, not mounting).
+  //   · Never while typing: ignored when ANY node on the event's composedPath() is an input,
+  //     textarea, select or contenteditable — composedPath, not event.target, because
+  //     <rich-text-viewer> renders in a shadow root and a retargeted target would hide the field.
+  //     Also ignored with Ctrl/Alt/Meta held, on key-repeat, and when already handled.
+  //   · Focus: opened by the keyboard -> focus moves INTO the panel (the current lesson, else the
+  //     close button); closed by the keyboard -> focus returns to #toc-toggle-btn, with
+  //     preventScroll so the lesson's scroll position is not disturbed (the button lives inside the
+  //     scrolling <article>).
+  const focusAfterToggle = useRef<'panel' | 'toggle' | null>(null);
   useEffect(() => {
-    if (!tocOpen) return;
+    const intent = focusAfterToggle.current;
+    if (!intent) return;
+    focusAfterToggle.current = null;
+    if (intent === 'panel' && tocOpen) {
+      const target =
+        document.querySelector<HTMLElement>('#toc-nav button[aria-current="true"]') ??
+        document.getElementById('toc-close-btn');
+      target?.focus({ preventScroll: false });
+    } else if (intent === 'toggle' && !tocOpen) {
+      document.getElementById('toc-toggle-btn')?.focus({ preventScroll: true });
+    }
+  }, [tocOpen]);
+  useEffect(() => {
+    if (!isVisible) return;
+    const typing = (event: KeyboardEvent) =>
+      event.composedPath().some((node) => {
+        if (!(node instanceof HTMLElement)) return false;
+        const tag = node.tagName;
+        return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || node.isContentEditable;
+      });
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !isWideViewport()) setTocOpen(false);
+      if (event.defaultPrevented || event.ctrlKey || event.altKey || event.metaKey) return;
+      if (event.key === '[') {
+        if (event.repeat || typing(event)) return;
+        event.preventDefault();
+        setTocOpen((open) => {
+          focusAfterToggle.current = open ? 'toggle' : 'panel';
+          return !open;
+        });
+      } else if (event.key === 'Escape') {
+        if (typing(event)) return;
+        setTocOpen((open) => {
+          if (open) focusAfterToggle.current = 'toggle';
+          return false;
+        });
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [tocOpen]);
+  }, [isVisible]);
 
   const chapter = chapters[cursor.chapterIndex];
   const blocks = blocksOf(cursor.chapterIndex);
@@ -180,23 +228,6 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
         className="min-w-0 flex-1 min-h-0 overflow-y-auto flex flex-col bg-gray-800 border border-gray-700 rounded-xl"
       >
         <div className="flex-1 w-full p-6 sm:p-8 lg:p-10">
-          <div className="flex items-center gap-3 mb-4">
-            <button
-              id="toc-toggle-btn"
-              type="button"
-              onClick={() => setTocOpen((open) => !open)}
-              className="min-h-[44px] min-w-[44px] rounded-lg border border-gray-600 text-gray-300 hover:text-white hover:border-brand-600 transition-colors active:scale-95 flex items-center justify-center shrink-0"
-              aria-controls="toc-panel"
-              aria-expanded={tocOpen ? 'true' : 'false'}
-              aria-label="Contents"
-              title="Contents"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
-              </svg>
-            </button>
-          </div>
-
           {/*
             ⚑ PHASE 04 PARITY: these two do NOT exist in the legacy markup (index.html:333-341)
               — renderTheoryBlock writes to them through `if (dom.x)` guards that find nothing.
@@ -208,10 +239,33 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
             {blocks.length ? `Block ${cursor.blockIndex + 1} of ${blocks.length}${done ? ' · ✓ completed' : ''}` : ''}
           </p>
 
-          {/* ⛔ <h2>, not <h1> — index.html:342. */}
-          <h2 id="tutorial-main-title" className="text-[1.875rem] sm:text-4xl text-white font-light mb-8">
-            {block?.term ?? `Theory block ${cursor.blockIndex + 1}`}
-          </h2>
+          {/*
+            ⚑ 23-09-26 (user): the ☰ toggle sits on the SAME ROW as the lesson title — button left,
+              title right, vertically centred — instead of on a row of its own above it. The title
+              is `min-w-0 break-words` so a long title wraps inside the row on a phone instead of
+              pushing the row wider than the pane. Margin below moved from the h2 to the row.
+          */}
+          <div className="flex items-center gap-3 sm:gap-4 mb-8">
+            <button
+              id="toc-toggle-btn"
+              type="button"
+              onClick={() => setTocOpen((open) => !open)}
+              className="min-h-[44px] min-w-[44px] rounded-lg border border-gray-600 text-gray-300 hover:text-white hover:border-brand-600 transition-colors active:scale-95 flex items-center justify-center shrink-0"
+              aria-controls="toc-panel"
+              aria-expanded={tocOpen ? 'true' : 'false'}
+              aria-label="Contents"
+              aria-keyshortcuts="["
+              title="Toggle sidebar ( [ )"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            {/* ⛔ <h2>, not <h1> — index.html:342. */}
+            <h2 id="tutorial-main-title" className="min-w-0 flex-1 break-words text-[1.875rem] sm:text-4xl text-white font-light">
+              {block?.term ?? `Theory block ${cursor.blockIndex + 1}`}
+            </h2>
+          </div>
 
           {/* ⛔ `prose` IS LOAD-BEARING — see app.css `#tutorial-content.prose`. */}
           <div id="tutorial-content" className="text-gray-300 prose prose-invert max-w-none">

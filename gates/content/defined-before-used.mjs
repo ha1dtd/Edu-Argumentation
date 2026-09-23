@@ -30,6 +30,9 @@
 //
 // Usage:  node defined-before-used.mjs <module.json> [--registry file] [--first-use]
 //              [--quiz-strict] [--lessons A-B]
+//         --chapter N  = --registry chNN-term-registry.json beside this file (per-chapter gate).
+//         A registry may list `known: ["ch02-term-registry.json"]`: those terms count as already
+//         taught (every chapter may assume ch02's words); a box may recap one as "(from ch02)".
 //         --lessons limits every check to lessons A-B (1-based): S1-S4 and T3 on those lessons,
 //         T1/T2 on terms whose defining lesson is in A-B, Q1 on their questions. Used to prove a
 //         partial write; the full-chapter run (no --lessons) is the real verdict.
@@ -48,6 +51,7 @@ let range = null;
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === '--registry') regFile = args[++i];
+  else if (a === '--chapter') regFile = path.join(HERE, `ch${String(args[++i]).padStart(2, '0')}-term-registry.json`);
   else if (a === '--first-use') firstUse = true;
   else if (a === '--quiz-strict') quizStrict = true;
   else if (a === '--lessons') {
@@ -69,6 +73,13 @@ try { doc = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { usage(`cann
 try { reg = JSON.parse(fs.readFileSync(regFile, 'utf8')); } catch (e) { usage(`cannot read registry ${regFile}: ${e.message}`); }
 
 const CH = reg.chapter;
+const known = new Map(); // term name -> chapter tag, for terms taught in another chapter's registry
+for (const kf of reg.known || []) {
+  const kp = path.isAbsolute(kf) ? kf : [path.join(path.dirname(regFile), kf), path.join(HERE, kf)].find((p) => fs.existsSync(p)) || kf;
+  const kr = JSON.parse(fs.readFileSync(kp, 'utf8'));
+  const tag = `ch${String(kr.chapter).padStart(2, '0')}`;
+  for (const t of kr.terms) for (const nm of [t.term, ...(t.aliases || [])]) if (!known.has(nm.toLowerCase())) known.set(nm.toLowerCase(), tag);
+}
 const sec = doc?.tutorialData?.sections?.[CH - 1];
 if (!sec || !Array.isArray(sec.items)) usage(`no chapter ${CH} in ${file}`);
 const lessons = sec.items;
@@ -127,7 +138,7 @@ const inRange = (n) => !range || (n >= range[0] && n <= range[1]);
 // New-words boxes, parsed.
 function parseBox(b) {
   const out = [];
-  const re = /^\s*[-*]\s+\*\*(.+?)\*\*\s*(\(from (b\d{2})\))?\s*[—-]/gm;
+  const re = /^\s*[-*]\s+\*\*(.+?)\*\*\s*(\(from (b\d{2}|ch\d{2})\))?\s*[—-]/gm;
   let m;
   while ((m = re.exec(String(b.content || '')))) out.push({ name: m[1].trim().toLowerCase(), from: m[3] || null });
   return out;
@@ -173,7 +184,8 @@ boxes.forEach((box, i) => {
   if (!box || !inRange(i + 1)) return;
   for (const e of box) {
     const t = byName.get(e.name);
-    if (!t) { fails.push(`T3 ${bid(i + 1)} New-words entry "${e.name}" is not in the registry`); continue; }
+    if (!t && e.from && known.get(e.name) === e.from) continue; // recap of another chapter's word
+    if (!t) { fails.push(`T3 ${bid(i + 1)} New-words entry "${e.name}" is not in the registry${known.has(e.name) ? ` (it is a ${known.get(e.name)} word: recap it as "(from ${known.get(e.name)})")` : ''}`); continue; }
     if (e.from) { if (e.from !== bid(t.lesson)) fails.push(`T3 ${bid(i + 1)} recap "${e.name}" says (from ${e.from}) but it is defined in ${bid(t.lesson)}`); }
     else if (t.lesson !== i + 1) fails.push(`T3 ${bid(i + 1)} defines "${e.name}" but the registry puts its definition in ${bid(t.lesson)}`);
   }

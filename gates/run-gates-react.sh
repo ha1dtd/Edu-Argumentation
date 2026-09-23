@@ -335,8 +335,13 @@ done
 #      session every other suite uses. It signs in through the form as gate-reader instead.
 #   ⛔ BEFORE gate-r-auth: that suite ends by rate-limiting 127.0.0.1's sign-ins for 5 minutes.
 #   ⛔ Its row in gate-r-self.mjs's RS-COUNT table moves WITH this line, always.
-R_NO_PRELOAD=1 run_suite gate-r-style.mjs rstyle "${R_STYLE_COUNT:-14}"; RTOTAL=$(( RTOTAL + ${COUNT[rstyle]} ))
+R_NO_PRELOAD=1 run_suite gate-r-style.mjs rstyle "${R_STYLE_COUNT:-19}"; RTOTAL=$(( RTOTAL + ${COUNT[rstyle]} ))
 R_NO_PRELOAD=1 run_suite gate-r-auth.mjs rauth "${R_AUTH_COUNT:-22}"; RTOTAL=$(( RTOTAL + ${COUNT[rauth]} ))
+# ⚑ 23-09-26 — PUBLIC ACCESS via nginx (https://160.30.252.66/): forwarded-header trust. Loopback
+#   peer = the proxy (headers honoured); peer 127.0.0.2/.3 = anyone else (headers ignored). Uses
+#   random TEST-NET-3 client IPs, so gate-r-auth's 127.0.0.1 lock-out above does not affect it.
+#   ⛔ Its row in gate-r-self.mjs's RS-COUNT table moves WITH this line, always.
+R_NO_PRELOAD=1 run_suite gate-r-proxy.mjs rproxy "${R_PROXY_COUNT:-6}"; RTOTAL=$(( RTOTAL + ${COUNT[rproxy]} ))
 
 # ⚑ PHASE 04 — the two write suites. Each gets a FRESH write harness: the four rate buckets are
 #   per-PROCESS, so the UI suite's AI calls would otherwise eat the slots gate-r-write counts.
@@ -372,7 +377,8 @@ if [ -f "$GATES_DIR/gate-r-self.mjs" ]; then
   # 17 -> 18 on 23-09-26 (Phase 06a): the gate-r-auth.mjs row.
   # 18 -> 19 on 23-09-26 (model routing per account): the gate-r-route.mjs row.
   # 19 -> 20 on 23-09-26 (style parity): the gate-r-style.mjs row.
-  run_suite gate-r-self.mjs rself "${R_SELF_COUNT:-20}"; RTOTAL=$(( RTOTAL + ${COUNT[rself]} ))
+  # 20 -> 21 on 23-09-26 (public access via nginx): the gate-r-proxy.mjs row.
+  run_suite gate-r-self.mjs rself "${R_SELF_COUNT:-21}"; RTOTAL=$(( RTOTAL + ${COUNT[rself]} ))
 fi
 
 echo

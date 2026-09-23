@@ -44,6 +44,7 @@ that is Phases 3-4, and gates/gate-routes.mjs burns the list down.
 from __future__ import annotations
 
 import dataclasses
+import ipaddress
 import json
 import re
 import secrets
@@ -133,12 +134,53 @@ def _wants_json(request: Request) -> bool:
     return path.startswith(DATA_PREFIXES) or (path.startswith("/assets/") and path.count("/") > 2)
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
+# ⚑ 23-09-26 — PUBLIC ACCESS through nginx at https://160.30.252.66/ (report
+#   public-ip-access_REPORT_23-09-26.md). nginx on the SAME host proxies to 127.0.0.1:8792 and sets
+#   X-Real-IP / X-Forwarded-For / X-Forwarded-Proto. Those headers are believed ONLY when the TCP peer
+#   is loopback — any other peer (the LAN/VPN door on 0.0.0.0:8792) sends them and is ignored.
+#   Robust to uvicorn's own --proxy-headers (on by default, trusting 127.0.0.1): when uvicorn has
+#   already rewritten the peer to the forwarded address, the peer is no longer loopback and is used
+#   as-is; when it has not, the headers are read here. Either way an untrusted peer cannot spoof.
+TRUSTED_PROXIES = frozenset({"127.0.0.1", "::1"})
+
+
+def _valid_ip(value: str) -> str:
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except ValueError:
+        return ""
+
+
+def client_ip(headers: Any, peer: str) -> str:
+    """The client IP used for rate limiting and login throttling."""
+    if peer in TRUSTED_PROXIES:
+        real = _valid_ip(headers.get("X-Real-IP", ""))
+        if not real:
+            hops = [h for h in headers.get("X-Forwarded-For", "").split(",") if h.strip()]
+            real = _valid_ip(hops[-1]) if hops else ""
+        if real:
+            return real
+    return peer
+
+
+def _via_https(request_scheme: str, headers: Any, peer: str) -> bool:
+    """True when the browser spoke HTTPS: uvicorn already set the scheme from a trusted proxy, or
+    the loopback proxy says so. X-Forwarded-Proto from any other peer is ignored."""
+    if request_scheme == "https":
+        return True
+    return peer in TRUSTED_PROXIES and headers.get("X-Forwarded-Proto", "").strip().lower() == "https"
+
+
+def _request_https(request: Request) -> bool:
+    return _via_https(request.url.scheme, request.headers, request.client.host if request.client else "")
+
+
+def _set_session_cookie(response: Response, token: str, secure: bool = False) -> None:
     """HttpOnly (no script can read it), SameSite=Lax (not sent on a cross-site POST), Path=/.
-    ⚠ NOT Secure, on purpose: :8792 is plain HTTP on the VPN/LAN, and a Secure cookie would simply
-      never be sent back. Recorded in the Phase 06a report as a known limit of plain HTTP."""
+    Secure ONLY when the request reached us over HTTPS through the trusted local proxy: the plain
+    HTTP VPN/LAN door on :8792 would otherwise never get the cookie back."""
     response.set_cookie(auth.COOKIE_NAME, token, max_age=auth.SESSION_DAYS * 86_400, path="/",
-                        httponly=True, samesite="lax", secure=False)
+                        httponly=True, samesite="lax", secure=secure)
 
 
 def _clear_session_cookie(response: Response) -> None:
@@ -170,7 +212,7 @@ async def require_session(request: Request, call_next):
     request.state.session_token = token
     response = await call_next(request)
     if refreshed and token:
-        _set_session_cookie(response, token)       # sliding 30-day expiry
+        _set_session_cookie(response, token, _request_https(request))   # sliding 30-day expiry
     return response
 
 
@@ -326,6 +368,7 @@ class Posted:
     #   password change.
     account: Any = None
     token: str | None = None
+    https: bool = False
 
     def read_json(self, limit: int = MAX_REQUEST_BYTES) -> dict[str, Any]:
         """edu_server.py:read_json — Content-Length decides, exactly as the legacy does."""
@@ -344,8 +387,10 @@ async def posted(request: Request) -> Posted:
         body += chunk
         if len(body) >= _BODY_CEILING:
             break                      # oversize: read_json refuses it on Content-Length anyway
-    return Posted(request.headers, request.client.host if request.client else "", body,
-                  getattr(request.state, "account", None), getattr(request.state, "session_token", None))
+    peer = request.client.host if request.client else ""
+    return Posted(request.headers, client_ip(request.headers, peer), body,
+                  getattr(request.state, "account", None), getattr(request.state, "session_token", None),
+                  _via_https(request.url.scheme, request.headers, peer))
 
 
 def _same_origin(req: Posted) -> bool:
@@ -763,7 +808,7 @@ def api_login(req: Posted = Depends(posted)) -> Response:
     except (ValueError, TypeError, json.JSONDecodeError):
         return _json(HTTPStatus.BAD_REQUEST, {"error": auth.GENERIC_LOGIN_ERROR})
     response = _json(HTTPStatus.OK, {"account": account.public()})
-    _set_session_cookie(response, token)
+    _set_session_cookie(response, token, req.https)
     return response
 
 

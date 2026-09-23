@@ -95,12 +95,16 @@ for (const [tag, file, want] of [
   // ⚑ Phase 06a (23-09-26, ruling R25): sign-in, owner-only admin, per-account progress, wrong
   //   answers, path routing. Moves WITH run-gates-react.sh's R_NO_PRELOAD=1 run_suite line.
   ['gate-r-auth.mjs', 'rauth.txt', 22],
+  // 23-09-26 — forwarded-header trust for the nginx public door. Moves WITH run-gates-react.sh's rproxy line.
+  ['gate-r-proxy.mjs', 'rproxy.txt', 6],
   // ⚑ 23-09-26 (user ruling): 9router combo per account and per job, incl. the legacy :8767 tutor.
   //   Moves WITH run-gates-react.sh's gate-r-route.mjs run_suite line.
   ['gate-r-route.mjs', 'rroute.txt', 10],
   // ⚑ 23-09-26 (user): style parity of the Account + sign-in pages and the top bar's LOG OUT against
   //   the home page, by getComputedStyle. Moves WITH run-gates-react.sh's R_NO_PRELOAD=1 rstyle line.
-  ['gate-r-style.mjs', 'rstyle.txt', 14],
+  //   14 -> 19 on 23-09-26: LOG OUT became an icon (R-S-NAV-LOGOUT reworked) + R-S-NAV-ORDER,
+  //   R-S-HEADER-ALIGN, R-S-NOSHIFT, R-S-TOC-ROW, R-S-TOC-KEYS added.
+  ['gate-r-style.mjs', 'rstyle.txt', 19],
 ]) {
   const n = countLines(file);
   check(`RS-COUNT ${tag} emits exactly ${want} result lines`, n === want,

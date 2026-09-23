@@ -13,12 +13,14 @@
  *   Account primary button   vs  #read-tutorial-btn ("Continue reading")
  *   #login-submit            vs  #read-tutorial-btn
  *   Account secondary button vs  #start-btn ("Practice", the home page's outline button)
- *   #nav-logout (LOG OUT)    vs  #nav-account (its top-bar neighbour)
+ *   #nav-logout (icon)       vs  #nav-account — resting + hover COLOUR only (R-S-NAV-LOGOUT, R-S-HOVER)
  *   Account / sign-in h1     vs  #welcome-title;   Account h2  vs  #library-heading
  *   Account / sign-in copy   vs  #current-meta;    inputs + labels vs the Settings page's
  *   Account / sign-in card   vs  #welcome-screen;  hover colour of the red button and the nav entry
  * Any property difference = FAIL. Plus: every font family, font size and text/fill/border colour on
- * the two new screens must already occur on the home + Settings screens (R-S-VOCAB); no top-bar
+ * the two new screens must already occur on the home + Settings screens (R-S-VOCAB); the top bar reads
+ * HOME, LEARN, PRACTICE, GENERATE QUIZ, SETTINGS, ACCOUNT, then the log-out icon, in the DOM AND left to
+ * right on screen (R-S-NAV-ORDER); no top-bar
  * control may open a file chooser (R-S-NOFILE); LOG OUT exists, has a name, is keyboard reachable
  * and really signs out — /api/progress answers 401 with the old cookie (R-S-LOGOUT).
  *
@@ -34,6 +36,18 @@
  *    the sign-in page is measured signed out, the way a person sees it.
  *    ⚠ It must run BEFORE gate-r-auth.mjs: that suite ends by rate-limiting 127.0.0.1's sign-ins for
  *      5 minutes. (Only FAILED attempts count; this gate makes none.)
+ *
+ * LAYOUT (23-09-26, user), measured in a SECOND browser that draws real scrollbars (Playwright's
+ * headless default is --hide-scrollbars, which would make R-S-NOSHIFT vacuous):
+ *   R-S-HEADER-ALIGN  logo, title text, every nav LABEL and the header icons share one centre line
+ *                     (<= 1px) at 1440px and 390px;
+ *   R-S-NOSHIFT       header left/right edges and the logo's x are identical on every top-bar page
+ *                     (anti-vacuity: the gutter is > 0 and Home overflows while Learn does not);
+ *   R-S-TOC-ROW       the Learn ☰ toggle sits on the title's row, left of it, centres <= 1px,
+ *                     44x44, and the title wraps inside the pane at 390px;
+ *   R-S-TOC-KEYS      `[` opens / `[` closes / Esc closes, focus into the panel and back to ☰,
+ *                     lesson scroll preserved, ignored inside an input, a shadow-root input,
+ *                     with Ctrl held, and on a page that is not Learn.
  *
  * Optional: R_STYLE_SHOTS=<dir> saves full-page screenshots of sign-in, home, Account and the top
  * bar in both schemes (used for the 23-09-26 handoff). No effect on the verdict.
@@ -116,7 +130,9 @@ const PAIRS = {
   'R-S-PRIMARY-ACCOUNT': [['Account "Change password"', 'account', '#account-password-form button[type="submit"]', 'home', '#read-tutorial-btn', CONTROL_PROPS]],
   'R-S-PRIMARY-LOGIN': [['sign-in submit', 'login', '#login-submit', 'home', '#read-tutorial-btn', CONTROL_PROPS]],
   'R-S-SECONDARY-ACCOUNT': [['Account "Sign out"', 'account', '#account-signout-btn', 'home', '#start-btn', CONTROL_PROPS]],
-  'R-S-NAV-LOGOUT': [['top bar LOG OUT', 'home', '#nav-logout', 'home', '#nav-account', CONTROL_PROPS]],
+  // ⚑ 23-09-26, later (user): LOG OUT is an ICON-ONLY button now, so its text styles (font, size,
+  //   padding, height) are no longer compared with #nav-account's. R-S-NAV-LOGOUT below asserts what
+  //   an icon button owes instead: accessible name, >= 44x44, and the neighbour's colour.
   'R-S-TITLE': [
     ['Account h1', 'account', '#account-title', 'home', '#welcome-title', TEXT_PROPS],
     ['sign-in h1', 'login', '#login-title', 'home', '#welcome-title', TEXT_PROPS],
@@ -148,12 +164,21 @@ const HOVER = [
   ['LOG OUT :hover', 'home', '#nav-logout', 'home', '#nav-account', ['color', 'background-color']],
 ];
 
+// The top bar, in order (user, 23-09-26). Labels are the entries' EXISTING text — the user's "AI Quiz"
+// is the entry labelled GENERATE QUIZ (#nav-generated-quiz); no entry was renamed or invented.
+const NAV_ORDER = [
+  ['nav-tutorial', 'HOME'], ['nav-learn', 'LEARN'], ['nav-quiz', 'PRACTICE'], ['nav-generated-quiz', 'GENERATE QUIZ'],
+  ['nav-settings', 'SETTINGS'], ['nav-account', 'ACCOUNT'], ['nav-logout', ''],
+];
+
 const browser = await chromium.launch({ executablePath: process.env.GATE_CHROME || chromium.executablePath() });
 const measured = {};      // scheme -> screen -> sel -> props
 const hovered = {};       // scheme -> screen -> sel -> props
 const vocab = {};         // scheme -> { fresh, ref }
 const logout = {};        // scheme -> facts
 const nofile = {};        // scheme -> facts
+const icon = {};          // scheme -> log-out icon facts
+const order = {};         // scheme -> top-bar order facts
 
 const allSelsFor = (screen) => {
   const s = new Set();
@@ -219,6 +244,38 @@ for (const scheme of ['light', 'dark']) {
   const homeVocab = await vocabOf(page, 'header, #landing-dashboard, #welcome-screen, #home-kpis, #services-section');
   await shot(page, scheme, 'home');
   await shot(page, scheme, 'topbar', { x: 0, y: 0, width: 1440, height: 90 });
+
+  // ---- R-S-NAV-LOGOUT (icon facts) + R-S-NAV-ORDER, read on the resting home screen ----
+  {
+    await parkMouse(page);
+    const named = await page.locator('header').getByRole('button', { name: 'Log out', exact: true }).count();
+    icon[scheme] = {
+      named,
+      ...(await page.evaluate(() => {
+        const b = document.getElementById('nav-logout');
+        const n = document.getElementById('nav-account');
+        if (!b || !n) return { found: false };
+        const r = b.getBoundingClientRect();
+        return {
+          found: true, w: +r.width.toFixed(1), h: +r.height.toFixed(1),
+          ariaLabel: b.getAttribute('aria-label'), title: b.getAttribute('title'),
+          text: b.textContent.trim(), svg: b.querySelectorAll('svg[aria-hidden="true"]').length,
+          color: getComputedStyle(b).color, neighbour: getComputedStyle(n).color,
+        };
+      })),
+    };
+    order[scheme] = await page.evaluate(() => {
+      const header = document.querySelector('header');
+      const els = [...header.querySelectorAll('#primary-nav button, #nav-logout')];
+      return els.map((e) => ({ id: e.id, label: e.textContent.trim(), x: +e.getBoundingClientRect().left.toFixed(1) }));
+    });
+    order[scheme].lastRight = await page.evaluate(() => {
+      const r = [...document.querySelectorAll('header button')].filter((e) => e.getClientRects().length)
+        .map((e) => [e.id, e.getBoundingClientRect().right]);
+      r.sort((a, b) => b[1] - a[1]);
+      return r[0]?.[0] || '';
+    });
+  }
 
   // ---- R-S-NOFILE: nothing in the top bar reaches a file chooser ----
   {
@@ -326,6 +383,122 @@ for (const scheme of ['light', 'dark']) {
 }
 await browser.close();
 
+/* ═══════════════════════ LAYOUT: header line, no shift, ☰ row, `[` key ═══════════════════════ */
+const layout = { align: {}, shift: {}, row: {}, keys: {} };
+{
+  const lb = await chromium.launch({ executablePath: process.env.GATE_CHROME || chromium.executablePath(), ignoreDefaultArgs: ['--hide-scrollbars'] });
+  const ctx = await lb.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: 'dark' });
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
+  await page.fill('#login-username', READER);
+  await page.fill('#login-password', READER_PW);
+  await page.press('#login-password', 'Enter');
+  await page.waitForFunction(() => location.pathname !== '/login', null, { timeout: 15000 });
+  await page.waitForLoadState('networkidle');
+  await settle(page, 1200);
+  if (await page.evaluate((m) => document.querySelector(`#library-grid [data-book="${m}"]`)?.getAttribute('aria-current') !== 'true', MODULE)) {
+    await page.locator(`#library-grid [data-book="${MODULE}"]`).click(); await settle(page, 1500);
+  }
+  const go = async (id) => { await page.evaluate((i) => document.getElementById(i)?.click(), id); await settle(page, 1300); };
+  const headerLine = () => page.evaluate(() => {
+    const mid = (r) => r.top + r.height / 2;
+    const text = (el) => { const rg = document.createRange(); rg.selectNodeContents(el); const r = rg.getBoundingClientRect(); return r.height ? mid(r) : null; };
+    const shown = (e) => e && e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+    const c = { logo: mid(document.querySelector('#brand-home svg').getBoundingClientRect()), title: text(document.querySelector('#brand-home h1')) };
+    const nav = document.getElementById('primary-nav');
+    // Nav LABELS count only where the nav is an inline row (md+); below md it is a closed dropdown.
+    if (getComputedStyle(nav).position === 'static') for (const b of nav.querySelectorAll('button')) if (shown(b)) c[b.id] = text(b);
+    for (const id of ['menu-btn', 'nav-logout']) { const e = document.querySelector(`#${id} svg`); if (shown(e)) c[id] = mid(e.getBoundingClientRect()); }
+    return c;
+  });
+  const edges = () => page.evaluate(() => {
+    const h = document.querySelector('header').getBoundingClientRect();
+    const se = document.scrollingElement;
+    return { left: h.left, right: h.right, logoX: document.querySelector('#brand-home svg').getBoundingClientRect().left,
+      gutter: window.innerWidth - document.documentElement.clientWidth, overflows: se.scrollHeight > se.clientHeight };
+  });
+
+  // ---- R-S-HEADER-ALIGN, desktop then phone ----
+  await go('nav-tutorial');
+  layout.align[1440] = await headerLine();
+  // ---- R-S-NOSHIFT: every top-bar page, desktop, real scrollbars ----
+  for (const [name, id] of [['home', 'nav-tutorial'], ['learn', 'nav-learn'], ['practice', 'nav-quiz'], ['ai-quiz', 'nav-generated-quiz'],
+    ['settings', 'nav-settings'], ['account', 'nav-account'], ['home-again', 'nav-tutorial']]) {
+    await go(id);
+    if (name === 'practice' || name === 'ai-quiz') { layout.shift[name] = await edges(); await page.keyboard.press('Escape'); await settle(page, 500); continue; }
+    layout.shift[name] = await edges();
+  }
+  if (SHOTS) { await go('nav-tutorial'); await parkMouse(page); await page.screenshot({ path: path.join(SHOTS, 'layout-header-1440.png'), clip: { x: 0, y: 0, width: 1440, height: 90 } }); }
+
+  // ---- R-S-TOC-ROW + R-S-TOC-KEYS at both widths ----
+  const rowFacts = () => page.evaluate(() => {
+    const b = document.getElementById('toc-toggle-btn'); const t = document.getElementById('tutorial-main-title');
+    const art = document.getElementById('tutorial-article');
+    const br = b.getBoundingClientRect(); const tr = t.getBoundingClientRect(); const pane = art.firstElementChild.getBoundingClientRect();
+    const lh = parseFloat(getComputedStyle(t).lineHeight);
+    return { btn: { l: br.left, r: br.right, w: br.width, h: br.height, mid: br.top + br.height / 2 },
+      title: { l: tr.left, r: tr.right, mid: tr.top + tr.height / 2, lines: Math.round(tr.height / lh), text: t.textContent.trim().slice(0, 50) },
+      paneRight: pane.right - parseFloat(getComputedStyle(art.firstElementChild).paddingRight),
+      titleOverflow: t.scrollWidth > t.clientWidth + 1, articleOverflowX: art.scrollWidth > art.clientWidth + 1,
+      ariaLabel: b.getAttribute('aria-label'), title_attr: b.getAttribute('title'), keys: b.getAttribute('aria-keyshortcuts') };
+  });
+  const tocState = () => page.evaluate(() => {
+    const art = document.getElementById('tutorial-article');
+    const a = document.activeElement;
+    return { open: document.getElementById('toc-toggle-btn').getAttribute('aria-expanded') === 'true',
+      panelShown: document.getElementById('toc-panel').getClientRects().length > 0,
+      scrollTop: art.scrollTop, focus: a?.id || a?.tagName || '', focusInPanel: Boolean(a && document.getElementById('toc-panel').contains(a)) };
+  });
+  for (const [vw, vh] of [[1440, 1000], [390, 844]]) {
+    await page.setViewportSize({ width: vw, height: vh });
+    await page.goto(`${BASE}/#chapter=2&block=7`, { waitUntil: 'networkidle' });
+    await settle(page, 900);
+    if (vw === 390) layout.align[390] = await headerLine();
+    await go('nav-learn');
+    // The phone opens with the drawer closed, the desktop with the column open — both are the app's own defaults.
+    layout.row[vw] = await rowFacts();
+    if (SHOTS) { await parkMouse(page); await page.screenshot({ path: path.join(SHOTS, `layout-learn-${vw}.png`) }); }
+    // Scroll the LESSON (the <article>, not the window) to 40% of its range; anti-vacuity: it must scroll.
+    const range = await page.evaluate(() => { const a = document.getElementById('tutorial-article'); a.scrollTop = Math.round((a.scrollHeight - a.clientHeight) * 0.4); return a.scrollHeight - a.clientHeight; });
+    await settle(page, 300);
+    const k = layout.keys[vw] = { range, steps: [] };
+    const step = async (label) => { k.steps.push({ label, ...(await tocState()) }); };
+    await step('start');
+    await page.evaluate(() => document.activeElement?.blur?.());
+    await page.keyboard.press('['); await settle(page, 350); await step('[1');
+    await page.keyboard.press('['); await settle(page, 350); await step('[2');
+    await page.keyboard.press('['); await settle(page, 350); await step('[3');
+    await page.keyboard.press('Escape'); await settle(page, 350); await step('esc');
+    // Ignored with a modifier held.
+    await page.keyboard.press('Control+['); await settle(page, 300); await step('ctrl[');
+    // Ignored while typing in a plain input and in an input inside a SHADOW ROOT (composedPath).
+    await page.evaluate(() => {
+      const host = document.createElement('div'); host.id = '__gate_kb';
+      host.style.cssText = 'position:fixed;left:10px;bottom:10px;z-index:99999';
+      host.innerHTML = '<input id="__gate_kb_plain" aria-label="probe">';
+      const sh = document.createElement('div'); sh.id = '__gate_kb_shadow'; host.appendChild(sh);
+      sh.attachShadow({ mode: 'open' }).innerHTML = '<input id="inner" aria-label="probe shadow">';
+      document.body.appendChild(host);
+    });
+    await page.focus('#__gate_kb_plain'); await page.keyboard.press('['); await settle(page, 300); await step('input[');
+    await page.evaluate(() => document.getElementById('__gate_kb_shadow').shadowRoot.getElementById('inner').focus());
+    await page.keyboard.press('['); await settle(page, 300); await step('shadow[');
+    k.typed = await page.evaluate(() => [document.getElementById('__gate_kb_plain').value, document.getElementById('__gate_kb_shadow').shadowRoot.getElementById('inner').value]);
+    await page.evaluate(() => document.getElementById('__gate_kb')?.remove());
+    // Scope: on Settings (not Learn) `[` in its real input types a bracket and toggles nothing.
+    await go('nav-settings');
+    const before = await page.evaluate(() => document.getElementById('toc-toggle-btn').getAttribute('aria-expanded'));
+    await page.focus('#set-api-url'); await page.keyboard.press('End'); await page.keyboard.press('[');
+    await page.evaluate(() => document.activeElement?.blur?.()); await page.keyboard.press('['); await settle(page, 300);
+    k.settings = { before, after: await page.evaluate(() => document.getElementById('toc-toggle-btn').getAttribute('aria-expanded')),
+      bracketTyped: await page.evaluate(() => document.getElementById('set-api-url').value.endsWith('[')) };
+    // Undo the probe keystroke in the field itself (nothing is saved without the Save button).
+    await page.focus('#set-api-url'); await page.keyboard.press('End'); await page.keyboard.press('Backspace');
+  }
+  await ctx.close();
+  await lb.close();
+}
+
 /* ═══════════════════════ verdicts ═══════════════════════ */
 const table = [];
 for (const [id, rows] of Object.entries(PAIRS)) {
@@ -372,6 +545,27 @@ for (const [id, rows] of Object.entries(PAIRS)) {
 }
 {
   const ok = ['light', 'dark'].every((s) => {
+    const i = icon[s];
+    return i.found && i.named === 1 && i.ariaLabel === 'Log out' && i.title === 'Log out' && i.text === ''
+      && i.svg === 1 && i.w >= 44 && i.h >= 44 && i.color === i.neighbour;
+  });
+  check('R-S-NAV-LOGOUT', ok, `log-out is an icon-only button named "Log out" (aria-label + title), >= 44x44, resting colour == #nav-account's: ${JSON.stringify(icon)}`);
+}
+{
+  const want = NAV_ORDER.map(([id, label]) => `${id}:${label}`).join(' > ');
+  const bad = [];
+  for (const s of ['light', 'dark']) {
+    const o = order[s];
+    const got = o.map((e) => `${e.id}:${e.label}`).join(' > ');
+    if (got !== want) bad.push(`[${s}] DOM order ${got}`);
+    const xs = o.map((e) => e.x);
+    if (!xs.every((x, k) => k === 0 || x > xs[k - 1])) bad.push(`[${s}] not left-to-right on screen: ${JSON.stringify(xs)}`);
+    if (o.lastRight !== 'nav-logout') bad.push(`[${s}] rightmost header control is #${o.lastRight}, not #nav-logout`);
+  }
+  check('R-S-NAV-ORDER', bad.length === 0, bad.length ? `MISMATCH ${bad.join(' | ')} — want ${want}` : `top bar is exactly ${want}, left to right at 1440px, log-out rightmost (both schemes)`);
+}
+{
+  const ok = ['light', 'dark'].every((s) => {
     const f = nofile[s];
     return f.headerFound && f.inHeader === 0 && f.labelsInHeaderToFile === 0 && f.headerControlsToFile === 0
       && f.detectorWorks && f.clicked >= 7 && f.choosers === 0;
@@ -386,6 +580,79 @@ for (const [id, rows] of Object.entries(PAIRS)) {
       && (l.reachedBy !== 'keyboard' || (l.tabs > 1 && l.before === 'nav-account'));
   });
   check('R-S-LOGOUT', ok, `LOG OUT visible, named, keyboard-reachable from the top of a fresh page (tab order: straight after ACCOUNT), lands on /login, old session -> /api/progress 401: ${JSON.stringify(logout)}`);
+}
+
+{
+  const bad = [];
+  for (const vw of [1440, 390]) {
+    const c = layout.align[vw] || {};
+    const vals = Object.values(c);
+    if (vals.some((v) => v == null) || vals.length < (vw === 1440 ? 9 : 4)) bad.push(`[${vw}] missing/too few items ${JSON.stringify(c)}`);
+    const spread = Math.max(...vals) - Math.min(...vals);
+    if (!(spread <= 1)) bad.push(`[${vw}] centre spread ${spread.toFixed(2)}px ${JSON.stringify(c)}`);
+  }
+  check('R-S-HEADER-ALIGN', bad.length === 0, bad.length ? bad.join(' | ')
+    : `logo, title, nav labels and header icons share one centre line (<= 1px) at 1440 (${Object.keys(layout.align[1440]).length} items) and 390 (${Object.keys(layout.align[390]).length} items): ${JSON.stringify(layout.align)}`);
+}
+{
+  const s = layout.shift;
+  const ref = s.home;
+  const bad = Object.entries(s).filter(([, v]) => v.left !== ref.left || v.right !== ref.right || v.logoX !== ref.logoX)
+    .map(([k, v]) => `${k}: left ${v.left} right ${v.right} logoX ${v.logoX} (home ${ref.left}/${ref.right}/${ref.logoX})`);
+  const vacuous = !(ref.gutter > 0) || !s.home.overflows || s.learn.overflows;
+  check('R-S-NOSHIFT', bad.length === 0 && !vacuous,
+    `${bad.length ? 'SHIFT ' + bad.join(' | ') : 'header edges + logo x identical on ' + Object.keys(s).join(', ')}`
+    + ` (anti-vacuity: scrollbar gutter ${ref.gutter}px, Home overflows=${s.home.overflows}, Learn overflows=${s.learn.overflows}${vacuous ? ' <-- VACUOUS' : ''})`);
+}
+{
+  const bad = [];
+  for (const vw of [1440, 390]) {
+    const r = layout.row[vw];
+    if (!r) { bad.push(`[${vw}] not measured`); continue; }
+    if (!(r.btn.r <= r.title.l)) bad.push(`[${vw}] button not left of title (btn.r ${r.btn.r} title.l ${r.title.l})`);
+    if (!(Math.abs(r.btn.mid - r.title.mid) <= 1)) bad.push(`[${vw}] not on one row: centres ${r.btn.mid} vs ${r.title.mid}`);
+    if (!(r.btn.w >= 44 && r.btn.h >= 44)) bad.push(`[${vw}] button ${r.btn.w}x${r.btn.h}`);
+    if (r.title.r > r.paneRight + 1 || r.titleOverflow || r.articleOverflowX) bad.push(`[${vw}] title overflows the pane (title.r ${r.title.r} pane ${r.paneRight})`);
+    if (r.ariaLabel !== 'Contents' || r.title_attr !== 'Toggle sidebar ( [ )' || r.keys !== '[') bad.push(`[${vw}] attrs ${r.ariaLabel}/${r.title_attr}/${r.keys}`);
+  }
+  if (!(layout.row[390]?.title.lines > 1)) bad.push(`[390] title did not wrap (lines ${layout.row[390]?.title.lines}) — pick a longer fixture title`);
+  check('R-S-TOC-ROW', bad.length === 0, bad.length ? bad.join(' | ')
+    : `☰ left of the title on one row (centres <= 1px), 44x44, title wraps inside the pane at 390 (${layout.row[390].title.lines} lines): ${JSON.stringify(layout.row)}`);
+}
+{
+  const bad = [];
+  for (const vw of [1440, 390]) {
+    const k = layout.keys[vw];
+    if (!k) { bad.push(`[${vw}] not measured`); continue; }
+    const st = Object.fromEntries(k.steps.map((x) => [x.label, x]));
+    const s0 = st.start;
+    if (!(k.range > 200)) bad.push(`[${vw}] lesson cannot scroll (range ${k.range}) — vacuous`);
+    // [1 flips, [2 flips back, [3 flips again; Esc always ends CLOSED.
+    const flip = (a, b) => a.open !== b.open && a.panelShown !== b.panelShown && b.open === b.panelShown;
+    if (!flip(s0, st['[1'])) bad.push(`[${vw}] [ did not toggle from ${s0.open}`);
+    if (!flip(st['[1'], st['[2'])) bad.push(`[${vw}] second [ did not toggle back`);
+    if (!flip(st['[2'], st['[3'])) bad.push(`[${vw}] third [ did not toggle`);
+    if (st.esc.open || st.esc.panelShown) bad.push(`[${vw}] Esc did not close`);
+    for (const x of ['[1', '[2', '[3']) {
+      const e = st[x];
+      if (e.open && !e.focusInPanel) bad.push(`[${vw}] ${x} opened but focus is on ${e.focus}, not in the panel`);
+      if (!e.open && e.focus !== 'toc-toggle-btn') bad.push(`[${vw}] ${x} closed but focus is on ${e.focus}, not ☰`);
+    }
+    if (st.esc.focus !== 'toc-toggle-btn') bad.push(`[${vw}] Esc closed but focus is on ${st.esc.focus}`);
+    // Scroll: a phone drawer overlays the pane, so scrollTop must never move; on desktop the column
+    // changes the pane's width, so the ROUND TRIP ([1 -> [2) must land back within 2px.
+    const tops = k.steps.filter((x) => ['start', '[1', '[2', '[3', 'esc'].includes(x.label)).map((x) => x.scrollTop);
+    if (vw === 390 && new Set(tops).size !== 1) bad.push(`[390] scroll moved ${JSON.stringify(tops)}`);
+    if (Math.abs(s0.scrollTop - st['[2'].scrollTop) > 2 || s0.scrollTop < 100) bad.push(`[${vw}] scroll not preserved over a [ [ round trip: ${JSON.stringify(tops)}`);
+    const esc = st.esc;
+    if (st['ctrl['].open !== esc.open) bad.push(`[${vw}] Ctrl+[ toggled`);
+    if (st['input['].open !== esc.open) bad.push(`[${vw}] [ inside an input toggled`);
+    if (st['shadow['].open !== esc.open) bad.push(`[${vw}] [ inside a SHADOW-ROOT input toggled (composedPath not honoured)`);
+    if (k.typed[0] !== '[' || k.typed[1] !== '[') bad.push(`[${vw}] the bracket was swallowed instead of typed: ${JSON.stringify(k.typed)}`);
+    if (k.settings.before !== k.settings.after || !k.settings.bracketTyped) bad.push(`[${vw}] on Settings: ${JSON.stringify(k.settings)}`);
+  }
+  check('R-S-TOC-KEYS', bad.length === 0, bad.length ? bad.join(' | ')
+    : `[ opens/[ closes/Esc closes at 1440 and 390, focus into the panel and back to ☰, lesson scroll kept (${JSON.stringify(Object.fromEntries([1440, 390].map((v) => [v, layout.keys[v].steps.map((x) => `${x.label}:${x.open ? 'open' : 'shut'}@${x.scrollTop}`).join(' ')])))}), ignored with Ctrl, in an input, in a shadow-root input and on Settings`);
 }
 
 // The parity table, for the report (not a result line).

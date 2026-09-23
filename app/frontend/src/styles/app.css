@@ -98,6 +98,14 @@ body.reader-mode #root { height: 100%; min-height: 0; }
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-track { background: #1f2937; }
 ::-webkit-scrollbar-thumb { background: #ef5b5b; border-radius: 4px; }
+/* ⚑ 23-09-26 (user): "the page moves a bit" when going to Learn or Account. Measured: the window
+   scrollbar (8px) exists on Home/Settings/Account and NOT on Learn (body.reader-mode is a 100dvh,
+   overflow-hidden shell), and on any page short enough not to scroll. The fixed header is sized to
+   the viewport MINUS the scrollbar, so its right edge — and every centred column — jumped 8px
+   whenever the scrollbar came or went. Reserving the gutter on the root keeps the layout width
+   constant on every page. Overlay scrollbars (phones, macOS default) reserve nothing, so this is
+   a no-op there. gate-r-style R-S-NOSHIFT measures header edges + logo x across the top-bar pages. */
+html { scrollbar-gutter: stable; }
 
 /* --- Screen hiding ---------------------------------------------------------
    ⛔ The single most load-bearing rule in the app. Screens stay MOUNTED and hide

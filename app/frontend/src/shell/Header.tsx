@@ -37,25 +37,36 @@ export interface HeaderProps {
 //    real Tailwind build keeps only classes whose full name appears literally in a scanned
 //    file, so an assembled name (`border-${x}`) emits nothing and the tab silently loses
 //    its colour. Never interpolate a class name in this file.
+// ⚑ 23-09-26 (user): "vertically centre the logo, the title text and every nav element on one line".
+//   The ONE deliberate change to the legacy string is `md:relative md:top-[3px]`. At md+ each
+//   tab carries `pb-1` + a 2px bottom border (room for the active underline) and NO top padding,
+//   so its LABEL sat 3px above the header's centre line (measured: logo/title centre 42px, label
+//   39px). A 3px relative offset moves the label onto the line WITHOUT changing layout: a margin
+//   did the same but grew the header 84 -> 90px (measured), and padding-top is one of the
+//   properties gate-r-parity compares with :8767. gate-r-style R-S-HEADER-ALIGN measures it (<= 1px).
 const NAV_BASE_CLASS =
-  'min-h-[44px] px-3 md:px-0 text-left md:text-center rounded-lg md:rounded-none pb-0 md:pb-1 border-b-2 border-transparent text-gray-400 transition-colors hover:text-white';
+  'min-h-[44px] px-3 md:px-0 md:relative md:top-[3px] text-left md:text-center rounded-lg md:rounded-none pb-0 md:pb-1 border-b-2 border-transparent text-gray-400 transition-colors hover:text-white';
 
 // updateNavUI's active override: the legacy REMOVES border-transparent + text-gray-400 and
 // ADDS border-brand-500 + text-white. Same two swaps, expressed as a whole string.
 const NAV_ACTIVE_CLASS =
-  'min-h-[44px] px-3 md:px-0 text-left md:text-center rounded-lg md:rounded-none pb-0 md:pb-1 border-b-2 border-brand-500 text-white transition-colors hover:text-white';
+  'min-h-[44px] px-3 md:px-0 md:relative md:top-[3px] text-left md:text-center rounded-lg md:rounded-none pb-0 md:pb-1 border-b-2 border-brand-500 text-white transition-colors hover:text-white';
 
 // ⚑ 23-09-26 (user): "there is an upload button on the top bar of the UI, which open the filesystem
 //   upload interface. Replace that with the logout button since we already have the correct import
 //   button on the home page." LOG OUT sits where the upload icon sat (the far right, after the
-//   hamburger) and is the SAME entry as the tabs: NAV_BASE_CLASS verbatim, plus the three typography
-//   classes the tabs INHERIT from #primary-nav (`text-sm font-semibold tracking-wider`) — it lives
-//   outside that <nav>, so it has to carry them itself. gates/gate-r-style.mjs compares its computed
-//   style against #nav-account's, property by property.
+//   hamburger).
+// ⚑ 23-09-26, later (user): LOG OUT is now a SINGLE ICON-ONLY button — the standard sign-out glyph
+//   (an arrow leaving a box, Lucide's `LogOut`, inlined: lucide-react is not a dependency). Its
+//   stroke/size match #menu-btn's hamburger (w-6 h-6, strokeWidth 2, round caps). The accessible name
+//   is `aria-label="Log out"` + `title`; the glyph is aria-hidden. Colour, hover and focus are the
+//   tabs' own: text-gray-400 -> hover:text-white, transition-colors, the browser's default focus ring
+//   (the tabs carry no focus class either). 44x44 hit target (min-h + min-w).
+//   gates/gate-r-style.mjs asserts name, size, resting + hover colour vs #nav-account, and nav order.
 // ⛔ It is NOT inside #primary-nav: below md that nav is a dropdown, and sign-out would then be two
 //    taps away and hidden. Here it is visible at every width, like the upload icon was.
 const NAV_LOGOUT_CLASS =
-  'min-h-[44px] px-3 md:px-0 text-left md:text-center rounded-lg md:rounded-none pb-0 md:pb-1 border-b-2 border-transparent text-gray-400 transition-colors hover:text-white text-sm font-semibold tracking-wider';
+  'inline-flex items-center justify-center min-h-[44px] min-w-[44px] rounded-lg text-gray-400 transition-colors hover:text-white';
 
 /** The legacy's breakpoint, verbatim (app.js `MENU_WIDE`). */
 const MENU_WIDE = '(min-width: 768px)';
@@ -212,7 +223,7 @@ export function Header(props: HeaderProps) {
       </nav>
 
       {/*
-        The right-hand cluster: #menu-btn, then LOG OUT.
+        The right-hand cluster: #menu-btn, then the LOG OUT icon (always the far-right entry).
         ⚑ 23-09-26 (user ruling): the #custom-data-upload file input and its upload <label> are GONE
           from the top bar — the home page's Import link is the one way in. The frozen selector
           contract still lists `label[for="custom-data-upload"] svg` and `[for="custom-data-upload"]`;
@@ -239,8 +250,15 @@ export function Header(props: HeaderProps) {
           type="button"
           className={NAV_LOGOUT_CLASS}
           onClick={() => void signOut()}
+          aria-label="Log out"
+          title="Log out"
         >
-          LOG OUT
+          {/* Lucide `LogOut` (ISC), inlined: a door/box on the left, an arrow leaving it to the right. */}
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m16 17 5-5-5-5" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12H9" />
+          </svg>
         </button>
       </div>
     </header>
