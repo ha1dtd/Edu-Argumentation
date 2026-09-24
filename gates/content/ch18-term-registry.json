@@ -240,7 +240,7 @@
    ],
    "exclude": [],
    "definition": "for one parameter: how much and in which direction a result changes when the parameter is nudged.",
-   "lesson": 1
+   "lesson": 2
   },
   {
    "term": "OpenAI Gym",
@@ -471,7 +471,7 @@
    ],
    "exclude": [],
    "definition": "the basic policy-gradient algorithm: play episodes, then make each action more (or less) likely according to its advantage.",
-   "lesson": 1
+   "lesson": 5
   },
   {
    "term": "GradientTape",
@@ -501,6 +501,16 @@
    "exclude": [],
    "definition": "Adam is a popular optimizer that adapts each weight's step size; Nadam is a small improvement of it.",
    "lesson": 4
+  },
+  {
+   "term": "binary cross-entropy",
+   "match": [
+    "binary_crossentropy",
+    "\\bbinary cross-?entropy\\b"
+   ],
+   "exclude": [],
+   "definition": "the usual loss for a yes/no prediction; used here to compute the gradient that makes the chosen action more likely.",
+   "lesson": 6
   },
   {
    "term": "sample inefficient",
@@ -578,7 +588,7 @@
    ],
    "exclude": [],
    "definition": "T(s, a, s′): the chance that action a in state s lands in state s′.",
-   "lesson": 1
+   "lesson": 7
   },
   {
    "term": "Bellman equation",
@@ -654,7 +664,7 @@
    ],
    "exclude": [],
    "definition": "updating a value estimate after every single step, towards (reward + discounted value of the next state).",
-   "lesson": 1
+   "lesson": 7
   },
   {
    "term": "learning rate",
@@ -683,7 +693,7 @@
    ],
    "exclude": [],
    "definition": "updating one estimate using another estimate.",
-   "lesson": 3
+   "lesson": 8
   },
   {
    "term": "Q-learning",
@@ -692,7 +702,7 @@
    ],
    "exclude": [],
    "definition": "learning Q-values from experience alone, by TD updates, without knowing the transition probabilities.",
-   "lesson": 1
+   "lesson": 7
   },
   {
    "term": "off-policy",
@@ -700,9 +710,11 @@
     "\\boff-policy\\b",
     "\\bon-policy\\b"
    ],
-   "exclude": [],
+   "exclude": [
+    "Soft Actor-Critic: Off-Policy Maximum Entropy[^”]*"
+   ],
    "definition": "off-policy = learns about one policy (the best) while acting with another (e.g. random); on-policy = learns about the policy it is acting with.",
-   "lesson": 4
+   "lesson": 9
   },
   {
    "term": "ε-greedy policy",
@@ -857,9 +869,11 @@
     "\\bactor\\b",
     "\\bcritic\\b"
    ],
-   "exclude": [],
+   "exclude": [
+    "Soft Actor-Critic: Off-Policy Maximum Entropy[^”]*"
+   ],
    "definition": "two networks: the actor (a policy) chooses actions, the critic estimates how good they are, so the actor improves after every step.",
-   "lesson": 4
+   "lesson": 5
   },
   {
    "term": "A2C, A3C, PPO, SAC",
@@ -940,6 +954,248 @@
    "exclude": [],
    "definition": "replaying the stored experiences with the largest TD error more often.",
    "lesson": 8
+  },
+  {
+   "term": "trajectory",
+   "match": [
+    "\\btrajector(y|ies)\\b"
+   ],
+   "exclude": [],
+   "definition": "the path the robot (or agent) actually follows, step by step.",
+   "lesson": 2
+  },
+  {
+   "term": "deterministic",
+   "match": [
+    "\\bdeterministic(ally)?\\b",
+    "\\bnon-deterministic\\b"
+   ],
+   "exclude": [],
+   "definition": "with no chance involved: the same input always gives the same output (the opposite of stochastic).",
+   "lesson": 2
+  },
+  {
+   "term": "dictionary",
+   "match": [
+    "\\bdictionar(y|ies)\\b"
+   ],
+   "exclude": [],
+   "definition": "a Python lookup table of name → value pairs; step()'s info is one.",
+   "lesson": 3
+  },
+  {
+   "term": "boolean",
+   "match": [
+    "\\bbooleans?\\b"
+   ],
+   "exclude": [],
+   "definition": "a value that is either True or False.",
+   "lesson": 3
+  },
+  {
+   "term": "integer and float",
+   "match": [
+    "\\bintegers?\\b",
+    "\\bfloat(ing-point)?s?\\b"
+   ],
+   "exclude": [
+    "float32"
+   ],
+   "definition": "an integer is a whole number (0, 1, 2); a float is a number with a decimal point (0.0274).",
+   "lesson": 3
+  },
+  {
+   "term": "frame",
+   "match": [
+    "\\bframes?\\b"
+   ],
+   "exclude": [],
+   "definition": "one still picture of the screen; a video or a game is a sequence of frames.",
+   "lesson": 3
+  },
+  {
+   "term": "pixel",
+   "match": [
+    "\\bpixels?\\b"
+   ],
+   "exclude": [],
+   "definition": "one dot of an image; its colour is stored as a number (or three: red, green, blue).",
+   "lesson": 1
+  },
+  {
+   "term": "tensor",
+   "match": [
+    "\\btensors?\\b"
+   ],
+   "exclude": [],
+   "definition": "TensorFlow's name for an array of numbers with any number of dimensions (a list, a table, a table of tables…).",
+   "lesson": 6
+  },
+  {
+   "term": "bias",
+   "match": [
+    "\\bbias(es|ed)?\\b"
+   ],
+   "exclude": [
+    "\\bmaximi[sz]ation bias\\b",
+    "\\bsampling bias\\b"
+   ],
+   "definition": "two meanings here. (1) A number each neuron adds to its weighted sum, learned like a weight. (2) In b11–b12: a systematic error, an estimate that is too high (or too low) on average.",
+   "lesson": 4
+  },
+  {
+   "term": "converge",
+   "match": [
+    "\\bconverg(e|es|ed|ing|ence)\\b"
+   ],
+   "exclude": [],
+   "definition": "settle on a final value and stop changing (much) as the steps go on.",
+   "lesson": 4
+  },
+  {
+   "term": "diverge",
+   "match": [
+    "\\bdiverg(e|es|ed|ing|ence)\\b"
+   ],
+   "exclude": [],
+   "definition": "the opposite of converge: the numbers grow without limit instead of settling.",
+   "lesson": 10
+  },
+  {
+   "term": "dimension",
+   "match": [
+    "\\bdimension(s|al)?\\b",
+    "\\b\\w+-dimensional\\b"
+   ],
+   "exclude": [],
+   "definition": "how many numbers describe one thing (a four-dimensional observation is 4 numbers); in array code, one axis of the array (rows, columns).",
+   "lesson": 2
+  },
+  {
+   "term": "scalar",
+   "match": [
+    "\\bscalars?\\b"
+   ],
+   "exclude": [],
+   "definition": "a single number, not a list of numbers.",
+   "lesson": 4
+  },
+  {
+   "term": "mini-batch",
+   "match": [
+    "\\bmini-?batch(es)?\\b",
+    "\\bbatch(es)?\\b"
+   ],
+   "exclude": [
+    "\\bbatch learning\\b",
+    "batch_size"
+   ],
+   "definition": "a group of examples used together for one update: in b06, the steps of 10 episodes; in b10, 32 stored steps picked at random.",
+   "lesson": 4
+  },
+  {
+   "term": "synchronous",
+   "match": [
+    "\\b(a)?synchron(ous|ously|y)\\b"
+   ],
+   "exclude": [],
+   "definition": "synchronous = in step, everyone waits for everyone; asynchronous = each part goes ahead as soon as it is ready.",
+   "lesson": 5
+  },
+  {
+   "term": "GPU",
+   "match": [
+    "\\bGPUs?\\b"
+   ],
+   "exclude": [],
+   "definition": "the graphics-card chip; it does thousands of small calculations at once, which makes neural networks much faster.",
+   "lesson": 12
+  },
+  {
+   "term": "clip",
+   "match": [
+    "\\bclip(s|ped|ping)?\\b"
+   ],
+   "exclude": [],
+   "definition": "cut a value off at a limit, so it cannot go further than that limit.",
+   "lesson": 12
+  },
+  {
+   "term": "unbiased",
+   "match": [
+    "\\bunbiased\\b"
+   ],
+   "exclude": [],
+   "definition": "right on average: not systematically too high or too low.",
+   "lesson": 12
+  },
+  {
+   "term": "log-gradient",
+   "match": [
+    "\\blog-gradients?\\b"
+   ],
+   "exclude": [],
+   "definition": "the gradient of the logarithm of the chosen action's probability: the direction that makes that action more likely.",
+   "lesson": 6
+  },
+  {
+   "term": "mean squared error",
+   "match": [
+    "\\bmean squared error\\b",
+    "\\bMSE\\b",
+    "mean_squared_error"
+   ],
+   "exclude": [],
+   "definition": "square each error and average them; the loss b10 trains with.",
+   "lesson": 10
+  },
+  {
+   "term": "unsupervised learning",
+   "match": [
+    "\\bunsupervised\\b"
+   ],
+   "exclude": [],
+   "definition": "learning from data that has no answer column, e.g. finding groups of similar rows.",
+   "lesson": 13
+  },
+  {
+   "term": "convolutional layer",
+   "match": [
+    "\\bconvolutional\\b"
+   ],
+   "exclude": [],
+   "definition": "a layer that slides small learned filters across an image to detect patterns such as edges; the standard layer for pictures.",
+   "lesson": 13
+  },
+  {
+   "term": "image preprocessing",
+   "match": [
+    "\\bgrayscale\\b",
+    "\\bdownsampled\\b"
+   ],
+   "exclude": [],
+   "definition": "preparing game frames before the network sees them: grayscale = black-and-white, cropped = edges cut off, downsampled = fewer pixels, stacked = several frames in a row given together so motion is visible.",
+   "lesson": 13
+  },
+  {
+   "term": "research venues",
+   "match": [
+    "\\bICML\\b",
+    "\\bAAAI\\b",
+    "\\bNature\\b"
+   ],
+   "exclude": [],
+   "definition": "ICML and AAAI are major AI research conferences and Nature is a leading science journal; papers they publish have been checked by other researchers.",
+   "lesson": 4
+  },
+  {
+   "term": "radian",
+   "match": [
+    "\\bradians?\\b"
+   ],
+   "exclude": [],
+   "definition": "a unit for angles: 1 radian ≈ 57.3°, so 0.036 radians ≈ 2°.",
+   "lesson": 3
   }
  ]
 }

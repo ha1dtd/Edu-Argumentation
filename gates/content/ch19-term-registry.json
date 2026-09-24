@@ -508,7 +508,7 @@
    ],
    "exclude": [],
    "definition": "Google's rented computing service (GCP): machines, storage and managed services, paid by use.",
-   "lesson": 1
+   "lesson": 2
   },
   {
    "term": "Vertex AI",
@@ -518,7 +518,7 @@
    ],
    "exclude": [],
    "definition": "Google Cloud's managed machine-learning service: it trains, stores and serves models for you.",
-   "lesson": 1
+   "lesson": 2
   },
   {
    "term": "project (GCP)",
@@ -1311,8 +1311,8 @@
     "\\bDense\\b"
    ],
    "exclude": [],
-   "definition": "a layer where every input feeds every neuron.",
-   "lesson": 15
+   "definition": "a layer where every input feeds every neuron; Keras calls it a Dense layer.",
+   "lesson": 1
   },
   {
    "term": "convolutional",
@@ -1380,7 +1380,7 @@
    ],
    "exclude": [],
    "definition": "how big a step training takes each time it changes the weights.",
-   "lesson": 16
+   "lesson": 1
   },
   {
    "term": "AllReduce",
@@ -1545,12 +1545,208 @@
   {
    "term": "IP address",
    "match": [
-    "\\bIP address(es)?\\b",
-    "\\bTCP\\b"
+    "\\bIP address(es)?\\b"
    ],
    "exclude": [],
    "definition": "the number that identifies a machine on a network.",
    "lesson": 18
+  },
+  {
+   "term": "TCP",
+   "match": [
+    "\\bTCP\\b"
+   ],
+   "exclude": [],
+   "definition": "the standard way two computers on a network keep a connection open; a TCP port number picks which program on the machine answers.",
+   "lesson": 4
+  },
+  {
+   "term": "shape",
+   "match": [
+    "\\bshapes?\\b"
+   ],
+   "exclude": [],
+   "definition": "the size of each dimension of an array, e.g. (3, 28, 28) = 3 images of 28 × 28 pixels; -1 in a shape means \"any number\".",
+   "lesson": 1
+  },
+  {
+   "term": "ReLU",
+   "match": [
+    "\\brelu\\b"
+   ],
+   "exclude": [],
+   "definition": "an activation that keeps a positive sum as it is and turns a negative one into 0.",
+   "lesson": 1
+  },
+  {
+   "term": "softmax",
+   "match": [
+    "\\bsoftmax\\b"
+   ],
+   "exclude": [],
+   "definition": "an output activation that turns the last layer's numbers into probabilities, one per class, adding up to 1.",
+   "lesson": 1
+  },
+  {
+   "term": "loss",
+   "match": [
+    "\\bloss(es)?\\b"
+   ],
+   "exclude": [
+    "accuracy loss",
+    "loss of accuracy"
+   ],
+   "definition": "the one number saying how wrong the model's answers are; training changes the weights to make it smaller.",
+   "lesson": 1
+  },
+  {
+   "term": "optimizer",
+   "match": [
+    "\\boptimi[sz]ers?\\b"
+   ],
+   "exclude": [],
+   "definition": "the method that changes the weights after each batch to lower the loss, e.g. SGD.",
+   "lesson": 1
+  },
+  {
+   "term": "SGD",
+   "match": [
+    "\\bSGD\\b"
+   ],
+   "exclude": [],
+   "definition": "the basic optimizer: after each small batch, it moves every weight a small step in the direction that lowers the loss.",
+   "lesson": 1
+  },
+  {
+   "term": "accuracy",
+   "match": [
+    "\\baccuracy\\b"
+   ],
+   "exclude": [],
+   "definition": "the share of examples the model gets right.",
+   "lesson": 1
+  },
+  {
+   "term": "argmax",
+   "match": [
+    "\\bargmax\\b"
+   ],
+   "exclude": [],
+   "definition": "the position of the largest value in a list; for our ten probabilities, the predicted digit.",
+   "lesson": 3
+  },
+  {
+   "term": "principal",
+   "match": [
+    "\\bprincipals?\\b"
+   ],
+   "exclude": [],
+   "definition": "an identity that can be given permissions: a person's account or a service account.",
+   "lesson": 6
+  },
+  {
+   "term": "IAM",
+   "match": [
+    "\\bIAM\\b"
+   ],
+   "exclude": [],
+   "definition": "Identity and Access Management: Google Cloud's list of which principal may do what; an IAM binding gives one principal one role.",
+   "lesson": 6
+  },
+  {
+   "term": "blob",
+   "match": [
+    "\\bblobs?\\b"
+   ],
+   "exclude": [],
+   "definition": "Cloud Storage's word for one stored file (its bytes plus its name) inside a bucket.",
+   "lesson": 7
+  },
+  {
+   "term": "pooling",
+   "match": [
+    "\\bpooling\\b"
+   ],
+   "exclude": [],
+   "definition": "a step in image networks that shrinks an image by keeping one value (the largest, or the average) per small block of pixels.",
+   "lesson": 11
+  },
+  {
+   "term": "MiB and GiB",
+   "match": [
+    "\\bMiB\\b",
+    "\\bGiB\\b"
+   ],
+   "exclude": [],
+   "definition": "mebibyte and gibibyte: 1 MiB = 1,024 × 1,024 bytes (about a million), 1 GiB = 1,024 MiB (about a billion bytes). TensorFlow's memory_limit is in MiB.",
+   "lesson": 12
+  },
+  {
+   "term": "horizontal and vertical split",
+   "match": [
+    "\\bhorizontal(ly)?\\b",
+    "\\bvertical(ly)?\\b"
+   ],
+   "exclude": [
+    "horizontal-scaling"
+   ],
+   "definition": "two ways to cut a network across devices: horizontal = whole layers on different devices; vertical = each layer cut in two, one half per device.",
+   "lesson": 15
+  },
+  {
+   "term": "TPUStrategy",
+   "match": [
+    "\\bTPUStrategy\\b",
+    "\\bTPUs\\b"
+   ],
+   "exclude": [],
+   "definition": "the distribution strategy for TPUs (Tensor Processing Units: Google's own chips for neural-network arithmetic, rented on Google Cloud or Colab).",
+   "lesson": 17
+  },
+  {
+   "term": "logits",
+   "match": [
+    "\\blogits?\\b"
+   ],
+   "exclude": [],
+   "definition": "a model's raw output scores, before softmax turns them into probabilities.",
+   "lesson": 18
+  },
+  {
+   "term": "Adam",
+   "match": [
+    "\\bAdam\\b"
+   ],
+   "exclude": [],
+   "definition": "a popular optimizer that gives every weight its own step size, adapted from that weight's recent gradients.",
+   "lesson": 18
+  },
+  {
+   "term": "staging bucket",
+   "match": [
+    "\\bstaging bucket"
+   ],
+   "exclude": [],
+   "definition": "a bucket folder where Vertex AI copies your training script before running it, and where it writes the outputs by default.",
+   "lesson": 19
+  },
+  {
+   "term": "preemptible",
+   "match": [
+    "\\bpreempt\\w*"
+   ],
+   "exclude": [],
+   "definition": "said of cheap rented cloud machines that the cloud may take back at any moment; a job on one is \"preempted\" when that happens.",
+   "lesson": 19
+  },
+  {
+   "term": "dropout",
+   "match": [
+    "\\bdropout\\b"
+   ],
+   "exclude": [],
+   "definition": "a training-only step that switches off random neurons at each training step, so the network cannot rely on any single one; it does nothing at prediction time.",
+   "lesson": 21
   }
  ]
 }

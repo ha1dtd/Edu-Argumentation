@@ -805,6 +805,35 @@
    ],
    "definition": "of a classifier's \"yes\" answers, the share that are correct (the book's Chapter 3).",
    "lesson": 11
+  },
+  {
+   "term": "high-cardinality",
+   "match": [
+    "\\bhigh-cardinality\\b",
+    "\\bcardinality\\b"
+   ],
+   "exclude": [],
+   "definition": "a column is high-cardinality when it has many distinct values (a price column has thousands; a yes/no column has two).",
+   "lesson": 8
+  },
+  {
+   "term": "loss",
+   "match": [
+    "\\bloss\\b",
+    "\\blosses\\b"
+   ],
+   "exclude": [],
+   "definition": "the one number training tries to make small: how wrong the predictions are overall. For a regression tree here it is the squared error.",
+   "lesson": 10
+  },
+  {
+   "term": "gradient descent",
+   "match": [
+    "\\bgradient descent\\b"
+   ],
+   "exclude": [],
+   "definition": "a way to train a model: repeatedly take a small step in the direction that makes the loss smaller fastest (the book's chapter 4).",
+   "lesson": 10
   }
  ]
 }

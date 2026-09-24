@@ -169,7 +169,7 @@ await page.waitForTimeout(3000);
 const genScope = await text('#quiz-scope-label');
 const genTab = await page.evaluate(() => document.getElementById('nav-generated-quiz')?.getAttribute('aria-current'));
 check('UI-GENERATE the GENERATE QUIZ tab opens the picker in generate mode, counts AI questions, and starts an AI run',
-  setupTitle === 'Generate quiz' && /AI questions$/.test(setupCount) && /^AI-written · 20 questions$/.test(genScope) && genTab === 'true',
+  setupTitle === 'AI-Quiz' && /AI questions$/.test(setupCount) && /^AI-written · 20 questions$/.test(genScope) && genTab === 'true',
   `title="${setupTitle}" count="${setupCount}" scope="${genScope}" navActive=${genTab}`);
 
 /* ---- UI-ASK: the tutor answers, with its source badge, and the conversation survives a reload ---- */

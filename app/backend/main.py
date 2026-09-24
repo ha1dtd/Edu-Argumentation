@@ -187,9 +187,38 @@ def _clear_session_cookie(response: Response) -> None:
     response.delete_cookie(auth.COOKIE_NAME, path="/", httponly=True, samesite="lax")
 
 
+# ⚑ 24-09-26 (user report: "i press the lab button, and it open the platform page"). The reader's
+#   Lab button is a relative /lab/<book>/<lesson>. Through the public nginx (443) /lab/ is routed to
+#   Lab and never reaches this app. On the VPN door http://<host>:8767 it DID reach this app, which
+#   served its own SPA. So a /lab request that arrives here without the trusted proxy's HTTPS is sent
+#   to Lab's own door on the same host, port 8798 — before sign-in, because Lab checks the session
+#   itself (the host-scoped edu_session cookie travels to :8798; cookies ignore ports). The same
+#   bounce finishes the sign-in round trip: Lab's direct door sends an anonymous page to
+#   /login?next=/lab/..., and after sign-in the browser lands here and is bounced back to Lab.
+LAB_PORT = 8798
+_LAB_HOST = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
+
+
+def _lab_redirect(request: Request) -> Response | None:
+    path = request.url.path
+    if path != "/lab" and not path.startswith("/lab/"):
+        return None
+    if request.method not in ("GET", "HEAD") or _request_https(request):
+        return None
+    host = request.headers.get("host", "").rsplit(":", 1)[0]
+    if not _LAB_HOST.match(host):
+        return None
+    rest = path[len("/lab"):].lstrip("/")
+    target = f"http://{host}:{LAB_PORT}/lab/{rest}" + (f"?{request.url.query}" if request.url.query else "")
+    return RedirectResponse(target, status_code=302, headers={"Cache-Control": "no-store"})
+
+
 @app.middleware("http")
 async def require_session(request: Request, call_next):
     path = request.url.path
+    bounced = _lab_redirect(request)
+    if bounced is not None:
+        return bounced
     if _is_public(path):
         return await call_next(request)
     token = request.cookies.get(auth.COOKIE_NAME)

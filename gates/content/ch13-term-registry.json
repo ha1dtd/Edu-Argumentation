@@ -1002,6 +1002,42 @@
    "exclude": [],
    "definition": "tfds.load() setting that returns each item as an (input, label) pair instead of a dictionary.",
    "lesson": 20
+  },
+  {
+   "term": "Fashion MNIST",
+   "match": [
+    "\\bfashion[ _-]mnist\\b"
+   ],
+   "exclude": [],
+   "definition": "an image set of 70,000 small grey photos of clothes, 28 x 28 pixels, in 10 classes such as T-shirt, trouser and ankle boot (60,000 for training, 10,000 for testing).",
+   "lesson": 21
+  },
+  {
+   "term": "TensorBoard",
+   "match": [
+    "\\btensorboard\\b"
+   ],
+   "exclude": [],
+   "definition": "TensorFlow's web page of training charts (loss and accuracy per epoch) that can also show profiling data: where each training step spends its time.",
+   "lesson": 21
+  },
+  {
+   "term": "IMDb review dataset",
+   "match": [
+    "\\bIMDb\\b"
+   ],
+   "exclude": [],
+   "definition": "the Large Movie Review Dataset: 50,000 film reviews from the Internet Movie Database (IMDb), each labelled positive or negative (25,000 to train on, 25,000 to test on).",
+   "lesson": 21
+  },
+  {
+   "term": "rescaled mean embedding",
+   "match": [
+    "\\brescaled (mean )?embedding"
+   ],
+   "exclude": [],
+   "definition": "the average of a review's word embeddings multiplied by the square root of its number of words (the book's exercise 10e; Chapter 16 explains why).",
+   "lesson": 21
   }
  ]
 }

@@ -931,6 +931,15 @@
    "lesson": 13
   },
   {
+   "term": "loss",
+   "match": [
+    "\\bloss(es)?\\b"
+   ],
+   "exclude": [],
+   "definition": "another word for the cost: the error score that training makes as small as it can; the book tends to say \"loss\" for that number while training is running.",
+   "lesson": 5
+  },
+  {
    "term": "log loss",
    "match": [
     "\\blog loss\\b"

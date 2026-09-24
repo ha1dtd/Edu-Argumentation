@@ -44,7 +44,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
-const BASE = process.env.GATE_BASE || process.env.R_REMOTE || 'http://192.168.100.66:8792';
+const BASE = process.env.GATE_BASE || process.env.R_REMOTE || 'http://192.168.100.66:8767';  // P6b 24-09-26: was :8792 (retired)
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const PANEL_SRC = process.env.GATE_PANEL_SRC || `${HERE}../app/frontend/src/reader/blocks/PanelBlock.tsx`;
 

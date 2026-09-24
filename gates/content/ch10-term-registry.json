@@ -694,11 +694,10 @@
   {
    "term": "PyTorch",
    "match": [
-    "\\bPyTorch\\b",
-    "\\bJAX\\b"
+    "\\bPyTorch\\b"
    ],
    "exclude": [],
-   "definition": "two other deep-learning libraries (from Meta and Google); not used in this book.",
+   "definition": "Meta's deep-learning library, a popular alternative to Keras and TensorFlow; not used in this book.",
    "lesson": 7
   },
   {
@@ -1217,12 +1216,10 @@
   {
    "term": "Hyperband",
    "match": [
-    "\\bHyperband\\b",
-    "\\bBayesian optimi[sz]ation\\b",
-    "\\bBayesianOptimization\\b"
+    "\\bHyperband\\b"
    ],
    "exclude": [],
-   "definition": "two smarter search strategies: Hyperband stops weak trials early; Bayesian optimization uses earlier trials to choose the next values.",
+   "definition": "a search strategy that starts many trials with only a few epochs each and keeps training only the most promising ones, so little time goes to weak settings.",
    "lesson": 18
   },
   {
@@ -1291,6 +1288,25 @@
    "exclude": [],
    "definition": "a website where you can train tiny neural networks in the browser and watch them learn.",
    "lesson": 23
+  },
+  {
+   "term": "JAX",
+   "match": [
+    "\\bJAX\\b"
+   ],
+   "exclude": [],
+   "definition": "Google's deep-learning library for fast numerical code; not used in this book.",
+   "lesson": 7
+  },
+  {
+   "term": "Bayesian optimization",
+   "match": [
+    "\\bBayesian optimi[sz]ation\\b",
+    "\\bBayesianOptimization\\b"
+   ],
+   "exclude": [],
+   "definition": "a search strategy that uses the scores of the trials so far to choose the most promising values to try next.",
+   "lesson": 18
   }
  ]
 }

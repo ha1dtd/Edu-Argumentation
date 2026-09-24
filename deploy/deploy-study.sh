@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# deploy-study.sh — the ONLY sanctioned way to deploy the edu-study app (:8792)
+# deploy-study.sh — the ONLY sanctioned way to deploy the edu-study app (:8767 since the
+# P6b cutover, 24-09-26; it was :8792 before — :8792 is retired, nothing listens there)
 #
 # Written for edu-replatform Phase 02. It is a SEPARATE script from deploy.sh
-# (which owns :8767) and deploy.sh is NEVER edited by this phase. Three reasons,
+# (which owned :8767 until the P6b cutover, 24-09-26) and deploy.sh is NEVER edited by this phase. Three reasons,
 # all binding:
 #   1. It would fight Phase 01's own gates. deploy.sh ships a gate asserting a
 #      default run installs no unit, and another asserting the script invokes no
@@ -46,7 +47,7 @@ set -euo pipefail
 HOST="${EDU_STUDY_HOST:-nn}"
 REMOTE_DIR="${EDU_STUDY_REMOTE_DIR:-/srv/foxai/edu-study}"
 SERVICE="${EDU_STUDY_SERVICE:-foxai-edu-study}"
-PORT="${EDU_STUDY_PORT:-8792}"
+PORT="${EDU_STUDY_PORT:-8767}"   # P6b 24-09-26: was 8792. The unit written below takes this port.
 HEALTH_URL="${EDU_STUDY_HEALTH_URL:-http://192.168.100.66:${PORT}/api/health}"
 VENV="${EDU_STUDY_VENV:-/home/ubuntu/edu-study-venv}"
 UNIT_PATH="/etc/systemd/system/${SERVICE}.service"

@@ -99,7 +99,7 @@ const NAV_TABS: ReadonlyArray<{ id: string; label: string; tab: NavTab }> = [
   { id: 'nav-tutorial', label: 'HOME', tab: 'home' },
   { id: 'nav-learn', label: 'LEARN', tab: 'learn' },
   { id: 'nav-quiz', label: 'PRACTICE', tab: 'quiz' },
-  { id: 'nav-generated-quiz', label: 'GENERATE QUIZ', tab: 'generated' },
+  { id: 'nav-generated-quiz', label: 'AI-QUIZ', tab: 'generated' },
   { id: 'nav-settings', label: 'SETTINGS', tab: 'settings' },
   // ⚑ Phase 06a (ruling R25): "The top bar would get new entry called Account". Same button, same
   //   classes as its neighbours; :8767 has no such entry, which is a named parity delta.

@@ -12,30 +12,48 @@
 // this gate as long as the totals match. Never cite it alone for an insert — pair it
 // with a per-chapter / adjacency check.
 //
-// Defaults are the frozen RED fixture (sha256 6712483e..., 22-09-26):
-//   text 978 · callout 600 · figure 379 · deeper 295 · card 259 · code_cells 158 · equation 90
-// Markers are checked ONLY when --markers is given: RED = 153/1/4, live after D1 = 154/0/4.
+// ⚑ RE-BASELINED 24-09-26 to the live book AFTER the whole-book rewrite + cold-read fix round
+// (source: nn library/geron-homl3/module.json, sha256 dd38fb9e97c41c0c..., 8,861,729 B).
+// Defaults are now that book:
+//   text 1608 · callout 910 · figure 379 · deeper 295 · card 494 · code_cells 158 · equation 90
+// Only text/callout/card moved (rewrite: Where-we-are + New-words on every lesson, Full-script
+// cards, cold-read splits). The triple and the other four types are UNCHANGED from the RED
+// fixture and stay pinned. Report: process/features/ml/active/geron-material-green_22-09-26/
+// content-gates-rebaseline_REPORT_24-09-26.md
+// The frozen RED fixture (sha256 6712483e..., 22-09-26) keeps its own numbers — select them
+// with --baseline red (text 978 · callout 600 · card 259, rest identical).
+// Markers are checked ONLY when --markers is given: RED = 153/1/4, live (D1 onward) = 154/0/4.
 //
 // ⚠ REBUILT 23-09-26 from the Phase-1 spec + report (the original was never pushed).
 //
 // Usage:
-//   node structural-parity.mjs <module.json> [--triple S/L/Q]
-//        [--blocks text=978,callout=600,...] [--markers R7/corr/absent]
+//   node structural-parity.mjs <module.json> [--baseline live|red] [--triple S/L/Q]
+//        [--blocks text=1608,callout=910,...] [--markers R7/corr/absent]
+// --blocks overrides apply on top of the chosen --baseline, whatever the argument order.
 // Exit: 0 GREEN · 1 RED · 2 usage / unreadable input
 import fs from 'node:fs';
 
 const TYPES = ['text', 'callout', 'figure', 'deeper', 'card', 'code_cells', 'equation'];
+// Named baselines. The triple and figure/deeper/code_cells/equation are the SAME in both —
+// the rewrite never had licence to move them.
+const BASELINES = {
+  // live book after the whole-book rewrite + cold-read fixes, sha256 dd38fb9e..., 24-09-26
+  live: { text: 1608, callout: 910, figure: 379, deeper: 295, card: 494, code_cells: 158, equation: 90 },
+  // frozen RED fixture module.RED.22-09-26.json, sha256 6712483e..., 22-09-26
+  red: { text: 978, callout: 600, figure: 379, deeper: 295, card: 259, code_cells: 158, equation: 90 },
+};
 const want = {
   triple: [19, 310, 1550],
-  blocks: { text: 978, callout: 600, figure: 379, deeper: 295, card: 259, code_cells: 158, equation: 90 },
+  blocks: { ...BASELINES.live },
   markers: null,
 };
+const overrides = {};
 const MARK_R7 = 'R7/code_cells.py';
 const MARK_CORR = 'ch02-b09-corr-cell 22-09-26';
 
 function usage(msg) {
   if (msg) console.error(`structural-parity: ${msg}`);
-  console.error('usage: node structural-parity.mjs <module.json> [--triple S/L/Q] ' +
+  console.error('usage: node structural-parity.mjs <module.json> [--baseline live|red] [--triple S/L/Q] ' +
                 '[--blocks type=N,...] [--markers R7/corr/absent]');
   process.exit(2);
 }
@@ -49,17 +67,22 @@ const args = process.argv.slice(2);
 let file = null;
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
-  if (a === '--triple') want.triple = ints(args[++i], 3, '--triple');
+  if (a === '--baseline') {
+    const name = args[++i];
+    if (!Object.hasOwn(BASELINES, name)) usage(`--baseline must be one of ${Object.keys(BASELINES).join('|')}`);
+    want.blocks = { ...BASELINES[name] };
+  } else if (a === '--triple') want.triple = ints(args[++i], 3, '--triple');
   else if (a === '--markers') want.markers = ints(args[++i], 3, '--markers');
   else if (a === '--blocks') {
     for (const kv of String(args[++i] ?? '').split(',')) {
       const [k, v] = kv.split('=');
       if (!TYPES.includes(k) || !Number.isInteger(Number(v))) usage(`bad --blocks entry "${kv}"`);
-      want.blocks[k] = Number(v);
+      overrides[k] = Number(v);
     }
   } else if (!file) file = a;
   else usage(`unexpected argument ${a}`);
 }
+Object.assign(want.blocks, overrides);
 if (!file) usage('no module.json given');
 
 let doc;

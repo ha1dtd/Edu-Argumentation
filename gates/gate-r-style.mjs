@@ -167,7 +167,7 @@ const HOVER = [
 // The top bar, in order (user, 23-09-26). Labels are the entries' EXISTING text — the user's "AI Quiz"
 // is the entry labelled GENERATE QUIZ (#nav-generated-quiz); no entry was renamed or invented.
 const NAV_ORDER = [
-  ['nav-tutorial', 'HOME'], ['nav-learn', 'LEARN'], ['nav-quiz', 'PRACTICE'], ['nav-generated-quiz', 'GENERATE QUIZ'],
+  ['nav-tutorial', 'HOME'], ['nav-learn', 'LEARN'], ['nav-quiz', 'PRACTICE'], ['nav-generated-quiz', 'AI-QUIZ'],
   ['nav-settings', 'SETTINGS'], ['nav-account', 'ACCOUNT'], ['nav-logout', ''],
 ];
 
@@ -435,12 +435,15 @@ const layout = { align: {}, shift: {}, row: {}, keys: {} };
     const b = document.getElementById('toc-toggle-btn'); const t = document.getElementById('tutorial-main-title');
     const art = document.getElementById('tutorial-article');
     const br = b.getBoundingClientRect(); const tr = t.getBoundingClientRect(); const pane = art.firstElementChild.getBoundingClientRect();
+    // ⚑ 24-09-26 (plan D8): the fixture lesson (ch02-b07) has code, so the Lab link sits in this row too.
+    const lab = document.getElementById('lab-open-btn'); const lr = lab ? lab.getBoundingClientRect() : null;
     const lh = parseFloat(getComputedStyle(t).lineHeight);
     return { btn: { l: br.left, r: br.right, w: br.width, h: br.height, mid: br.top + br.height / 2 },
       title: { l: tr.left, r: tr.right, mid: tr.top + tr.height / 2, lines: Math.round(tr.height / lh), text: t.textContent.trim().slice(0, 50) },
       paneRight: pane.right - parseFloat(getComputedStyle(art.firstElementChild).paddingRight),
       titleOverflow: t.scrollWidth > t.clientWidth + 1, articleOverflowX: art.scrollWidth > art.clientWidth + 1,
-      ariaLabel: b.getAttribute('aria-label'), title_attr: b.getAttribute('title'), keys: b.getAttribute('aria-keyshortcuts') };
+      ariaLabel: b.getAttribute('aria-label'), title_attr: b.getAttribute('title'), keys: b.getAttribute('aria-keyshortcuts'),
+      lab: lr ? { l: lr.left, r: lr.right, h: lr.height, mid: lr.top + lr.height / 2 } : null };
   });
   const tocState = () => page.evaluate(() => {
     const art = document.getElementById('tutorial-article');
@@ -612,6 +615,9 @@ for (const [id, rows] of Object.entries(PAIRS)) {
     if (!(r.btn.r <= r.title.l)) bad.push(`[${vw}] button not left of title (btn.r ${r.btn.r} title.l ${r.title.l})`);
     if (!(Math.abs(r.btn.mid - r.title.mid) <= 1)) bad.push(`[${vw}] not on one row: centres ${r.btn.mid} vs ${r.title.mid}`);
     if (!(r.btn.w >= 44 && r.btn.h >= 44)) bad.push(`[${vw}] button ${r.btn.w}x${r.btn.h}`);
+    // Lab link (24-09-26): right of the title, same row (centres <= 1px), inside the pane, >= 44px tall.
+    if (!r.lab) bad.push(`[${vw}] no #lab-open-btn on the code lesson ch02-b07`);
+    else if (!(r.lab.l >= r.title.r - 1 && Math.abs(r.lab.mid - r.title.mid) <= 1 && r.lab.r <= r.paneRight + 1 && r.lab.h >= 44)) bad.push(`[${vw}] Lab link off the row / outside the pane: ${JSON.stringify(r.lab)} title.r ${r.title.r} pane ${r.paneRight}`);
     if (r.title.r > r.paneRight + 1 || r.titleOverflow || r.articleOverflowX) bad.push(`[${vw}] title overflows the pane (title.r ${r.title.r} pane ${r.paneRight})`);
     if (r.ariaLabel !== 'Contents' || r.title_attr !== 'Toggle sidebar ( [ )' || r.keys !== '[') bad.push(`[${vw}] attrs ${r.ariaLabel}/${r.title_attr}/${r.keys}`);
   }

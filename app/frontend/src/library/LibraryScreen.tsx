@@ -123,7 +123,7 @@ export function WelcomeCard({ onOpenReader, onPractice, onGenerate, aiReady, pro
             onClick={onGenerate}
             className={OUTLINE_BTN}
           >
-            Generate quiz
+            AI-Quiz
           </button>
         </div>
       </div>
@@ -132,7 +132,8 @@ export function WelcomeCard({ onOpenReader, onPractice, onGenerate, aiReady, pro
 }
 
 /** renderHomeKpis (app.js:405) — across-the-library totals. */
-export function HomeKpis() {
+/** `hidden`: the AI-Quiz loading state hides the home widgets (user, 24-09-26) — see AppShell. */
+export function HomeKpis({ hidden = false }: { hidden?: boolean } = {}) {
   const { books } = useLibrary();
   const sum = (key: 'lessons' | 'chapters' | 'questions') =>
     books.reduce((total, book) => total + (Number(book[key]) || 0), 0);
@@ -143,7 +144,7 @@ export function HomeKpis() {
   const furthest = [...books].sort((a, b) => (Number(b.done) || 0) - (Number(a.done) || 0))[0];
 
   return (
-    <section id="home-kpis" className={books.length ? 'mt-10' : 'hidden-view mt-10'} aria-labelledby="home-kpis-heading">
+    <section id="home-kpis" className={books.length && !hidden ? 'mt-10' : 'hidden-view mt-10'} aria-labelledby="home-kpis-heading">
       <h2 id="home-kpis-heading" className="text-2xl text-white font-light mb-4">Your progress</h2>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="rounded-2xl border border-gray-700 bg-gray-800 px-5 py-4">
@@ -182,7 +183,8 @@ export function HomeKpis() {
 }
 
 /** #services-section — renderLibrary (app.js:465). */
-export function LibrarySection() {
+/** `hidden`: the AI-Quiz loading state hides the home widgets (user, 24-09-26) — see AppShell. */
+export function LibrarySection({ hidden = false }: { hidden?: boolean } = {}) {
   const { ordered } = useLibrary();
   const { activeBookFile, openBook, closeBook, data } = useBookContext();
   const { overall } = useProgressContext();
@@ -191,7 +193,7 @@ export function LibrarySection() {
   const importHref = typeof location === 'undefined' ? '#' : `${location.protocol}//${location.hostname}:8769/`;
 
   return (
-    <section id="services-section" className="mt-10" aria-labelledby="library-heading">
+    <section id="services-section" className={hidden ? 'hidden-view mt-10' : 'mt-10'} aria-labelledby="library-heading">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <h2 id="library-heading" className="text-2xl text-white font-light">Library</h2>
         <div className="flex flex-wrap gap-2">

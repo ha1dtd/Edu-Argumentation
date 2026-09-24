@@ -130,12 +130,32 @@
    "lesson": 1
   },
   {
+   "term": "neural network",
+   "match": [
+    "\\bneural networks?\\b"
+   ],
+   "exclude": [],
+   "definition": "a kind of model built from many small connected units, each of which multiplies its inputs by numbers, adds them up and passes the result on (Chapter 10).",
+   "lesson": 1
+  },
+  {
    "term": "convolutional network",
    "match": [
     "\\bconvolutional\\b"
    ],
    "exclude": [],
    "definition": "a kind of neural network made for pictures that looks at nearby pixels together (Chapter 14).",
+   "lesson": 1
+  },
+  {
+   "term": "weight",
+   "match": [
+    "\\bweights?\\b"
+   ],
+   "exclude": [
+    "\\bsample_weight\\b"
+   ],
+   "definition": "a number a model multiplies one input by before adding the results up; a bigger weight means that input counts more in the answer.",
    "lesson": 1
   },
   {

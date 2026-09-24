@@ -1016,7 +1016,7 @@
    ],
    "exclude": [],
    "definition": "a saved copy of a model (and optimizer) during or after training, so it can be reloaded and continued.",
-   "lesson": 7
+   "lesson": 12
   },
   {
    "term": "penalty",

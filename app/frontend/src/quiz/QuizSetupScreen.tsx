@@ -197,7 +197,7 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
         >
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <h2 id="setup-title" className="text-3xl text-white font-light">
-              {mode === 'practice' ? 'Practice' : 'Generate quiz'}
+              {mode === 'practice' ? 'Practice' : 'AI-Quiz'}
             </h2>
             <div className="flex items-center gap-2">
               <button id="setup-all-btn" type="button" className={GHOST_BTN} onClick={() => setSelected(new Set(allIds))}>

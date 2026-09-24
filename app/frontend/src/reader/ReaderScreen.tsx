@@ -29,6 +29,7 @@ import { useBookContext } from '../state/BookProvider';
 import { useProgressContext } from '../state/ProgressProvider';
 import { useReaderCursor } from '../state/ReaderCursorProvider';
 import { BlockRenderer } from './BlockRenderer';
+import { lessonHasCode } from './labCode';
 import { TheoryToc } from './TheoryToc';
 import { ExercisePanel } from '../exercises/ExercisePanel';
 import { exerciseSpec } from '../exercises/exerciseSpec';
@@ -50,7 +51,7 @@ function isWideViewport(): boolean {
 }
 
 export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
-  const { chapters, blocksOf, assetBase, quizBank } = useBookContext();
+  const { chapters, blocksOf, assetBase, quizBank, moduleId } = useBookContext();
   const { isBlockComplete } = useProgressContext();
   // ⚠ COLLISION REPAIR (slice A3, 22-09-26). Slices A2 and A3 both edited this file in
   //   the same window. A2 lifted the cursor into state/ReaderCursorProvider (a 5th
@@ -227,7 +228,7 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
         ref={articleRef}
         className="min-w-0 flex-1 min-h-0 overflow-y-auto flex flex-col bg-gray-800 border border-gray-700 rounded-xl"
       >
-        <div className="flex-1 w-full p-6 sm:p-8 lg:p-10">
+        <div className="flex-1 w-full p-4 sm:p-8 lg:p-10">
           {/*
             ⚑ PHASE 04 PARITY: these two do NOT exist in the legacy markup (index.html:333-341)
               — renderTheoryBlock writes to them through `if (dom.x)` guards that find nothing.
@@ -245,7 +246,7 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
               is `min-w-0 break-words` so a long title wraps inside the row on a phone instead of
               pushing the row wider than the pane. Margin below moved from the h2 to the row.
           */}
-          <div className="flex items-center gap-3 sm:gap-4 mb-8">
+          <div className="flex items-center gap-2 sm:gap-4 mb-8">
             <button
               id="toc-toggle-btn"
               type="button"
@@ -262,9 +263,38 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
               </svg>
             </button>
             {/* ⛔ <h2>, not <h1> — index.html:342. */}
+            {/*
+              ⚑ 24-09-26 (user, plan D9): the title carries the lesson's number in its chapter —
+                "13. Title" — in the SAME <h2>, same font and size. One text node, so
+                textContent is exactly "<n>. <term>" (gates strip /^\d+\.\s/ before comparing).
+            */}
             <h2 id="tutorial-main-title" className="min-w-0 flex-1 break-words text-[1.875rem] sm:text-4xl text-white font-light">
-              {block?.term ?? `Theory block ${cursor.blockIndex + 1}`}
+              {`${cursor.blockIndex + 1}. ${block?.term ?? `Theory block ${cursor.blockIndex + 1}`}`}
             </h2>
+            {/*
+              ⚑ 24-09-26 (plan D8, ruling R27): "Lab" opens this lesson's code in the separate Lab
+                app, in a new tab. Only when the lesson HAS code (labCode.ts = Lab's own D5 rule).
+                The href names the book by its MODULE id (e.g. openintro-statistics-2019-1045f2f5),
+                never the reader's path slug — Lab keys books by module id.
+              ⚑ 24-09-26 (390 px polish): the link is compact on a phone (px-2, text-xs, 44x44 floor),
+                the row gap is gap-2 and the pane padding p-4 below sm, so the title keeps ~232 px and a
+                word like "Representative" (220 px at this size) wraps whole instead of breaking
+                mid-word. `break-words` stays only as the last resort for a single word wider than
+                that (e.g. "Hyperparameters", 252 px) — never overflowing the pane.
+                Reading stays static (R24): this is a link, not a run button.
+            */}
+            {lessonHasCode(block) ? (
+              <a
+                id="lab-open-btn"
+                href={`/lab/${encodeURIComponent(moduleId)}/${blockId}`}
+                target="_blank"
+                rel="noopener"
+                title="Open this lesson's code in Lab — edit it and run it (new tab)"
+                className="shrink-0 min-h-[44px] min-w-[44px] px-2 sm:px-4 rounded-lg border border-gray-600 text-gray-300 hover:text-white hover:border-brand-600 transition-colors active:scale-95 flex items-center justify-center font-semibold uppercase tracking-wider text-xs sm:text-sm"
+              >
+                Lab
+              </a>
+            ) : null}
           </div>
 
           {/* ⛔ `prose` IS LOAD-BEARING — see app.css `#tutorial-content.prose`. */}
@@ -308,7 +338,7 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
               onClick={() => void actions.startBlockAiQuiz()}
               className="min-h-[44px] px-5 rounded-lg border border-gray-600 text-gray-300 hover:border-brand-600 hover:text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              AI quiz
+              AI-Quiz
             </button>
             <button
               id="next-block-btn"

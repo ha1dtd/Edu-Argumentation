@@ -184,7 +184,11 @@ const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));
 // Read from INSIDE the page: Playwright's page.url() can lag a history.replaceState under load.
 const path = () => page.evaluate(() => location.pathname);
-const title = () => page.evaluate(() => document.getElementById('tutorial-main-title')?.textContent?.trim() || '');
+// ⚑ 24-09-26 (plan D9): the title reads "<n>. <term>". titleRaw() is the whole text; title() strips the
+//   number so the term compares exactly as before, and each check below ALSO asserts the number.
+const titleRaw = () => page.evaluate(() => document.getElementById('tutorial-main-title')?.textContent?.trim() || '');
+const title = async () => (await titleRaw()).replace(/^\d+\.\s/, '');
+const numbered = async (n) => (await titleRaw()).startsWith(`${n}. `);
 const bank = JSON.parse(fs.readFileSync(`${LIB}/geron-homl3/module.json`, 'utf8'));
 const term = (ci, bi) => String(bank.tutorialData.sections[ci].items[bi].term || '');
 
@@ -204,14 +208,14 @@ const term = (ci, bi) => String(bank.tutorialData.sections[ci].items[bi].term ||
   await page.waitForFunction(() => /^\/geron-homl3\/chapter-2\/3-/.test(location.pathname) && !location.pathname.includes('stale-words'), null, { timeout: 5000 }).catch(() => {});
   const canonical = (await path()).startsWith('/geron-homl3/chapter-2/3-') && !(await path()).includes('stale-words');
   check('AUTH-12 browser: deep link -> /login; wrong password shows the generic alert, sets no cookie; right password returns to the lesson, slug canonicalised',
-    atLogin && alert?.trim() === GENERIC && noCookie && canonical && (await title()) === term(1, 2),
+    atLogin && alert?.trim() === GENERIC && noCookie && canonical && (await title()) === term(1, 2) && (await numbered(3)),
     JSON.stringify({ atLogin, alert, noCookie, path: (await path()), title: await title() }));
 }
 {
   await page.goto(`${BASE}/#chapter=1&block=8`, { waitUntil: 'networkidle' });
   await page.waitForTimeout(1200);
   check('AUTH-13 legacy #chapter=1&block=8 is rewritten to its path and opens that lesson (B15 retired)',
-    /^\/geron-homl3\/chapter-1\/8-/.test((await path())) && !page.url().includes('#') && (await title()) === term(0, 7),
+    /^\/geron-homl3\/chapter-1\/8-/.test((await path())) && !page.url().includes('#') && (await title()) === term(0, 7) && (await numbered(8)),
     `${page.url()} ${await title()}`);
 }
 {
@@ -232,7 +236,7 @@ const term = (ci, bi) => String(bank.tutorialData.sections[ci].items[bi].term ||
   await page.waitForTimeout(1200);
   const doc = await raw((await path()), { headers: { Cookie: reader.cookie } });
   check('AUTH-15 refresh on a deep path: 200 app document and the same lesson', doc.status === 200
-    && /^\/geron-homl3\/chapter-4\/5-/.test((await path())) && (await title()) === term(3, 4), `${doc.status} ${(await path())} ${await title()}`);
+    && /^\/geron-homl3\/chapter-4\/5-/.test((await path())) && (await title()) === term(3, 4) && (await numbered(5)), `${doc.status} ${(await path())} ${await title()}`);
 }
 {
   await page.goto(`${BASE}/geron-homl3/chapter-2/1-x`, { waitUntil: 'networkidle' });
@@ -244,7 +248,7 @@ const term = (ci, bi) => String(bank.tutorialData.sections[ci].items[bi].term ||
   const back = [(await path()), await title()];
   await page.goForward(); await page.waitForTimeout(700);
   check('AUTH-16 Back and Forward move lesson by lesson (path AND content)',
-    /\/chapter-2\/3-/.test(third) && /\/chapter-2\/2-/.test(back[0]) && back[1] === term(1, 1) && (await path()) === third && (await title()) === term(1, 2),
+    /\/chapter-2\/3-/.test(third) && /\/chapter-2\/2-/.test(back[0]) && back[1] === term(1, 1) && (await path()) === third && (await title()) === term(1, 2) && (await numbered(3)),
     JSON.stringify({ third, back, fwd: (await path()) }));
 }
 {

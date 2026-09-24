@@ -14,7 +14,9 @@
 #   8791     run-gates.sh's legacy smoke harness.      DO NOT TOUCH.
 #   8793     a stray legacy harness (pid 440643).      DO NOT TOUCH.
 #   18792/3  scratch uvicorns from a PVL probe.        DO NOT TOUCH.
-#   8792     the REMOTE service on 192.168.100.66.     Used for curls ONLY, never started here.
+#   8767     the REMOTE service on 192.168.100.66 (the new app since the P6b cutover, 24-09-26;
+#            it was :8792, now retired). Used for curls ONLY, never started here.
+#   8799  <- the LOCAL legacy reference for gate-r-parity (frozen aws-quiz-app/, P6b). Owned here.
 #
 #   ⚠ run-gates.sh's start-of-run cleanup is PORT-SCOPED: it kills any edu_server.py on ITS
 #     port. Two runners sharing a port therefore kill each other's servers mid-suite. That is
@@ -56,7 +58,7 @@ REACT_DIR="${R_REACT_DIR:-/var/tmp/edu-react-smoke}"    # this suite's own web r
 OUT_DIR="${R_OUT_DIR:-/var/tmp/p3-react}"
 PORT="${R_PORT:-8795}"                                   # ⛔ THIS SCRIPT'S OWN PORT — see above
 export R_BASE="${R_BASE:-http://127.0.0.1:${PORT}}"
-export R_REMOTE="${R_REMOTE:-http://192.168.100.66:8792}"
+export R_REMOTE="${R_REMOTE:-http://192.168.100.66:8767}"   # P6b 24-09-26: was :8792 (retired)
 export R_LIB_ROOT="$SMOKE_DIR/lib"
 export R_MODULE="${R_MODULE:-geron-homl3}"
 export R_REPORT_MODULE="${R_REPORT_MODULE:-demo-book}"
@@ -102,7 +104,7 @@ kill_tunnel () {
     if ps -o args= -p "$p" 2>/dev/null | grep -q '^ssh .*-L'; then kill "$p" 2>/dev/null || true; fi
   done
 }
-cleanup () { kill_on_port "$PORT"; kill_on_port "$WPORT"; kill_on_port "${R_LEGACY_ROUTE_PORT:-8798}"; kill_stub; kill_tunnel; declare -F revoke_remote >/dev/null && revoke_remote; }
+cleanup () { kill_on_port "$PORT"; kill_on_port "$WPORT"; kill_on_port "${R_LEGACY_ROUTE_PORT:-8798}"; kill_on_port "${R_LEGACY_REF_PORT:-8799}"; kill_stub; kill_tunnel; declare -F revoke_remote >/dev/null && revoke_remote; }
 trap cleanup EXIT INT TERM
 
 # --- harness state ----------------------------------------------------------
@@ -241,6 +243,35 @@ ENV
   echo "   write harness up: $R_WRITE_BASE (stub :$SPORT, stores $WDIR/stores)"
 }
 
+# ⚑ P6b 24-09-26 — the LOCAL legacy reference for gate-r-parity (see the call site).
+LREF_PORT="${R_LEGACY_REF_PORT:-8799}"
+LREF_DIR="${R_LEGACY_REF_DIR:-/var/tmp/edu-parity-legacy}"
+start_legacy_ref () {
+  kill_on_port "$LREF_PORT"; sleep 1
+  case "$LREF_DIR" in /tmp/*|*/dev/shm/*) echo "REFUSING: tmpfs path (RAM)"; return 1;; esac
+  rm -rf "$LREF_DIR"; mkdir -p "$LREF_DIR/app" "$LREF_DIR/stores"
+  rsync -a --exclude '__pycache__' --exclude '*.pyc' "$REPO_DIR/aws-quiz-app/" "$LREF_DIR/app/"
+  cat > "$LREF_DIR/stores/provider.env" <<ENV
+EDU_QUIZ_API_URL=http://127.0.0.1:${SPORT}/v1/chat/completions
+EDU_QUIZ_API_KEY=fake-key-SECRETVALUE-for-gates
+EDU_QUIZ_MODEL=edu-tutor
+EDU_QUIZ_ACCESS_TOKEN=
+EDU_QUIZ_JSON_MODE=true
+ENV
+  chmod 600 "$LREF_DIR/stores/provider.env"
+  echo '{}' > "$LREF_DIR/stores/progress.json"
+  printf '{"ai_question_count":5,"fresh_quiz_size":20,"require_access_token":false}\n' > "$LREF_DIR/stores/settings.json"
+  ( cd "$LREF_DIR/app" && set -a && . "$LREF_DIR/stores/provider.env" && set +a && \
+    EDU_ENV_PATH="$LREF_DIR/stores/provider.env" EDU_LIBRARY_ROOT="$SMOKE_DIR/lib" \
+    EDU_PROGRESS_PATH="$LREF_DIR/stores/progress.json" EDU_SETTINGS_PATH="$LREF_DIR/stores/settings.json" \
+    EDU_LIBRARY_META_PATH="$LREF_DIR/stores/library-meta.json" EDU_BOOK_ROOT="$LREF_DIR/stores/books" \
+    EDU_ASK_LOG_PATH="$LREF_DIR/stores/ask.jsonl" \
+    nohup python3 edu_server.py --port "$LREF_PORT" --directory "$LREF_DIR/app" > "$OUT_DIR/legacy-ref-$LREF_PORT.log" 2>&1 & )
+  for _ in $(seq 1 40); do curl -sf -o /dev/null "http://127.0.0.1:${LREF_PORT}/api/provider" && break; sleep 0.25; done
+  curl -sf -o /dev/null "http://127.0.0.1:${LREF_PORT}/" || { echo "LEGACY REFERENCE DID NOT COME UP on :$LREF_PORT"; tail -20 "$OUT_DIR/legacy-ref-$LREF_PORT.log"; return 1; }
+  echo "   legacy reference up: http://127.0.0.1:${LREF_PORT} (frozen aws-quiz-app/, stub provider, stores $LREF_DIR/stores)"
+}
+
 RC=0
 declare -A COUNT EXITC
 
@@ -309,7 +340,7 @@ for spec in \
   "gate-r-sep.mjs:rsep:${R_SEP_COUNT:-6}" \
   "gate-r-read.mjs:rread:${R_READ_COUNT:-12}" \
   "gate-r-contract.mjs:rcontract:${R_CONTRACT_COUNT:-7}" \
-  "gate-r-dom.mjs:rdom:${R_DOM_COUNT:-8}" \
+  "gate-r-dom.mjs:rdom:${R_DOM_COUNT:-9}" \
   "gate-r-ro.mjs:rro:${R_RO_COUNT:-3}" \
   "gate-r-trap.mjs:rtrap:${R_TRAP_COUNT:-8}" \
   "gate-r-journey.mjs:rjourney:${R_JOURNEY_COUNT:-6}" \
@@ -349,10 +380,17 @@ R_NO_PRELOAD=1 run_suite gate-r-proxy.mjs rproxy "${R_PROXY_COUNT:-6}"; RTOTAL=$
 echo "== write harness (for gate-r-writeui.mjs) =="
 if start_write_harness; then
   run_suite gate-r-writeui.mjs rwriteui "${R_WRITEUI_COUNT:-10}"; RTOTAL=$(( RTOTAL + ${COUNT[rwriteui]} ))
-  # gate-r-parity.mjs compares against the LIVE :8767 (read-only, non-GET aborted). It runs on the
-  # write harness because that one has a provider "ready", like :8767 — the AI buttons' state is
-  # part of what is compared.
-  R_BASE="$R_WRITE_BASE" run_suite gate-r-parity.mjs rparity "${R_PARITY_COUNT:-9}"; RTOTAL=$(( RTOTAL + ${COUNT[rparity]} ))
+  # gate-r-parity.mjs compares the new build against the LEGACY interface. It runs on the write
+  # harness because that one has a provider "ready", like the legacy — the AI buttons' state is part
+  # of what is compared.
+  # ⚑ P6b 24-09-26: the live legacy is GONE (the new app owns :8767). The reference is now the FROZEN
+  #   legacy code, aws-quiz-app/ (measured byte-equal to the last deployed /srv/foxai/edu-argumentation
+  #   tree: index.html, edu_server.py, js/*.js), served LOCALLY by edu_server.py on its own port with the
+  #   SAME harness library and the SAME stub provider as the new side. Its stores are throwaway /var/tmp.
+  if start_legacy_ref; then
+    R_LEGACY="http://127.0.0.1:${LREF_PORT}" R_BASE="$R_WRITE_BASE" run_suite gate-r-parity.mjs rparity "${R_PARITY_COUNT:-9}"; RTOTAL=$(( RTOTAL + ${COUNT[rparity]} ))
+  else RC=1; fi
+  kill_on_port "$LREF_PORT"
 else RC=1; fi
 echo "== write harness, fresh process (for gate-r-write.mjs) =="
 if start_write_harness; then
@@ -392,7 +430,7 @@ echo "======================================================"
 # E10: prove the cleanup actually happened. Asserted BEFORE exit, so a leaked server is a
 # RED RUN rather than something the next run silently inherits.
 cleanup; sleep 1
-LEFT=$(ss -ltnH "( sport = :$PORT or sport = :$WPORT or sport = :$SPORT )" 2>/dev/null | wc -l)
+LEFT=$(ss -ltnH "( sport = :$PORT or sport = :$WPORT or sport = :$SPORT or sport = :$LREF_PORT )" 2>/dev/null | wc -l)
 if [ "$LEFT" -ne 0 ]; then
   echo " <-- FAIL: a server is STILL listening on :$PORT after cleanup"; RC=1
 else

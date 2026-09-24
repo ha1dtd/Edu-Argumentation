@@ -1169,6 +1169,34 @@
    "exclude": [],
    "definition": "TensorFlow's normal mode: each line runs immediately, like ordinary Python (the opposite of graph mode).",
    "lesson": 12
+  },
+  {
+   "term": "softplus",
+   "match": [
+    "\\bsoftplus\\b"
+   ],
+   "exclude": [],
+   "definition": "the activation log(1 + e^z): a smooth version of ReLU — always above 0, close to 0 for very negative z and close to z for large z.",
+   "lesson": 5
+  },
+  {
+   "term": "layer normalization",
+   "match": [
+    "\\blayer normali[sz]ation\\b",
+    "\\bLayerNormalization\\b"
+   ],
+   "exclude": [],
+   "definition": "rescaling each example's own features to average 0 and spread 1 (then a learned scale and offset), row by row, so it works the same on one example as on many.",
+   "lesson": 13
+  },
+  {
+   "term": "Fashion MNIST",
+   "match": [
+    "\\bfashion[ -]mnist\\b"
+   ],
+   "exclude": [],
+   "definition": "an image set of 70,000 small grey photos of clothes, 28 x 28 pixels, in 10 classes such as T-shirt, trouser and ankle boot (60,000 for training, 10,000 for testing).",
+   "lesson": 13
   }
  ]
 }

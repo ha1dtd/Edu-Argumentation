@@ -345,7 +345,7 @@
     "\\bBatchNorm\\b"
    ],
    "definition": "a small group of images processed together in one step (32 by default).",
-   "lesson": 4
+   "lesson": 2
   },
   {
    "term": "custom layer",
@@ -405,7 +405,7 @@
    ],
    "exclude": [],
    "definition": "the method that computes every weight's gradient by walking backward from the loss through the layers, one layer at a time.",
-   "lesson": 5
+   "lesson": 2
   },
   {
    "term": "gradient",
@@ -414,7 +414,7 @@
    ],
    "exclude": [],
    "definition": "for every weight, one number saying how much the loss would change if that weight moved a little, and in which direction.",
-   "lesson": 5
+   "lesson": 2
   },
   {
    "term": "inference",
@@ -618,7 +618,7 @@
     "\\bloss of\\b"
    ],
    "definition": "one number saying how wrong the network's predictions are; training pushes it down.",
-   "lesson": 5
+   "lesson": 2
   },
   {
    "term": "ImageNet",
@@ -1146,6 +1146,44 @@
    "exclude": [],
    "definition": "segmentation that also tells objects of the same class apart (each bicycle separately).",
    "lesson": 24
+  },
+  {
+   "term": "functional API",
+   "match": [
+    "\\bfunctional[- ]API\\b"
+   ],
+   "exclude": [],
+   "definition": "the Keras style that builds a model by calling layers on tensors, x = layer(x), then naming the first and last tensors in tf.keras.Model(inputs=..., outputs=...), instead of listing layers in Sequential.",
+   "lesson": 13
+  },
+  {
+   "term": "VRAM",
+   "match": [
+    "\\bVRAM\\b"
+   ],
+   "exclude": [],
+   "definition": "the GPU's own memory, separate from the computer's RAM; the model, its activations and a batch must all fit in it during training.",
+   "lesson": 25
+  },
+  {
+   "term": "MNIST",
+   "match": [
+    "\\bMNIST\\b"
+   ],
+   "exclude": [
+    "\\bfashion[ _-]mnist\\b"
+   ],
+   "definition": "70,000 grey 28 x 28 images of handwritten digits 0-9 (60,000 for training, 10,000 for testing) — the older set that Fashion MNIST was made to replace.",
+   "lesson": 25
+  },
+  {
+   "term": "neural style transfer",
+   "match": [
+    "\\bneural style transfer\\b"
+   ],
+   "exclude": [],
+   "definition": "repainting one photo in the style of another (say, a painting) by adjusting its pixels until a pretrained CNN's feature maps match the photo's content and the painting's textures.",
+   "lesson": 25
   }
  ]
 }

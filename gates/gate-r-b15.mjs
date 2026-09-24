@@ -68,7 +68,7 @@
  */
 import { chromium } from 'playwright';
 
-const BASE = process.env.GATE_BASE || process.env.R_REMOTE || 'http://192.168.100.66:8792';
+const BASE = process.env.GATE_BASE || process.env.R_REMOTE || 'http://192.168.100.66:8767';  // P6b 24-09-26: was :8792 (retired)
 const MODULE_ID = process.env.GATE_MODULE || 'geron-homl3';
 
 /** The deep link the probe arrives on. Its whole job is to be SOMETHING OTHER THAN the
@@ -202,7 +202,9 @@ check('R-B15b AFTER the LEARN click: the deep link is DISCARDED and the hash is 
   + ' conjunct2 RED means it jumped somewhere that is NOT the first incomplete block.');
 
 check('R-B15c the reader actually LOADED A LESSON on the deep link (not a placeholder shell)',
-  after.title.length > 0 && !/^Theory block \d+$/.test(after.title),
+  // ⚑ 24-09-26 (plan D9): the title is "<n>. <term>" — the number is REQUIRED and is stripped before the
+  //   placeholder test, or "13. Theory block 13" would slip past it and pass on a broken build.
+  after.title.length > 0 && /^\d+\.\s/.test(after.title) && !/^Theory block \d+$/.test(after.title.replace(/^\d+\.\s/, '')),
   `title=${JSON.stringify(after.title)} — ⛔ "Theory block N" is BlockRenderer's PLACEHOLDER:`
   + ' it means the reader opened with NO BOOK LOADED. The legacy app loads the book on the'
   + ' deep-link path and shows the real lesson title. This is a SEPARATE, LARGER defect than'

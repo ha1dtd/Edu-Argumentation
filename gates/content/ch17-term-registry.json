@@ -1113,6 +1113,16 @@
    "lesson": 14
   },
   {
+   "term": "bias term",
+   "match": [
+    "\\bbias terms?\\b",
+    "\\bbias(es)?\\b"
+   ],
+   "exclude": [],
+   "definition": "a neuron's own extra number, added to its weighted sum; it is learned like a weight, and a layer has one per neuron.",
+   "lesson": 4
+  },
+  {
    "term": "affine transformation",
    "match": [
     "\\baffine\\b"
@@ -1280,6 +1290,91 @@
    "exclude": [],
    "definition": "compression that throws some detail away for good (like JPEG photos).",
    "lesson": 2
+  },
+  {
+   "term": "freeze",
+   "match": [
+    "\\bfreez\\w*",
+    "\\bfrozen\\b"
+   ],
+   "exclude": [],
+   "definition": "stop training some layers, so their weights stay fixed while the rest of the network trains (in Keras: `trainable = False`).",
+   "lesson": 4
+  },
+  {
+   "term": "tensor",
+   "match": [
+    "\\btensors?\\b"
+   ],
+   "exclude": [],
+   "definition": "TensorFlow's name for a block of numbers with any number of axes, e.g. 28 × 28 × 1 for one photo; 32 photos together are a 32 × 28 × 28 × 1 tensor.",
+   "lesson": 5
+  },
+  {
+   "term": "subclass",
+   "match": [
+    "\\bsubclass\\w*",
+    "\\bbase class",
+    "\\bparent class",
+    "super\\(\\)"
+   ],
+   "exclude": [],
+   "definition": "a class built on top of another (its parent, or base, class): it inherits everything the parent does and adds or changes only what it writes itself; `super().__init__()` runs the parent's own setup.",
+   "lesson": 7
+  },
+  {
+   "term": "forward pass",
+   "match": [
+    "\\bforward pass(es)?\\b"
+   ],
+   "exclude": [],
+   "definition": "one run of the input through the network (or one layer), from start to end, to get its output.",
+   "lesson": 8
+  },
+  {
+   "term": "graph",
+   "match": [
+    "\\bgraphs?\\b"
+   ],
+   "exclude": [],
+   "definition": "the fixed plan of operations TensorFlow builds from your code before running it.",
+   "lesson": 8
+  },
+  {
+   "term": "prior",
+   "match": [
+    "\\bprior\\b"
+   ],
+   "exclude": [],
+   "definition": "in statistics, the distribution you assume before seeing any data; here, the standard normal the codings are pulled toward.",
+   "lesson": 8
+  },
+  {
+   "term": "backpropagation",
+   "match": [
+    "\\bbackprop\\w*"
+   ],
+   "exclude": [],
+   "definition": "the step of training that works out, layer by layer from the output back to the input, how each weight should change to lower the loss.",
+   "lesson": 10
+  },
+  {
+   "term": "broadcast",
+   "match": [
+    "\\bbroadcast\\w*"
+   ],
+   "exclude": [],
+   "definition": "automatically repeat an array along a size-1 axis so that it matches a bigger array, e.g. one value per pixel stretched across 512 channels.",
+   "lesson": 13
+  },
+  {
+   "term": "scalar",
+   "match": [
+    "\\bscalars?\\b"
+   ],
+   "exclude": [],
+   "definition": "a single number (a tensor with no axes).",
+   "lesson": 13
   }
  ]
 }

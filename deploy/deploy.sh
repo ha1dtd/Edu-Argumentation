@@ -340,7 +340,21 @@ do_rollback() {
 }
 
 # ---------------------------------------------------------------------------
+# ⚑ edu-replatform P6b (24-09-26): the NEW app (foxai-edu-study) owns :8767 and this script's unit
+#   (foxai-edu-argumentation) is stopped + disabled. A deploy or --rollback from here would restart the
+#   old unit into a port the new app holds: it cannot bind, Restart=always crash-loops it, and the
+#   NRestarts gate reports a failure AFTER the tree was already swapped. Refuse up front instead.
+#   To bring the old stack back, follow the rollback in
+#   process/features/ml/active/edu-replatform_21-09-26/phase-06b-cutover_REPORT_24-09-26.md (move the
+#   new unit back to :8792 FIRST); this guard then lets the script run again.
+refuse_if_new_app_owns_8767() {
+  if ssh "$HOST" "systemctl cat foxai-edu-study 2>/dev/null | grep -q -- '--port 8767'"; then
+    fail "foxai-edu-study owns :8767 (P6b cutover). Refusing to deploy/restart ${SERVICE} into that port. See the P6b report for the rollback order."
+  fi
+}
+
 main() {
+  [[ "$DRY_RUN" -eq 1 ]] || refuse_if_new_app_owns_8767
   if [[ "$MODE" == rollback ]]; then do_rollback; exit 0; fi
   if [[ "$INSTALL_UNIT" -eq 1 ]]; then install_unit; fi
 

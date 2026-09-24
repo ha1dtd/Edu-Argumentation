@@ -308,6 +308,15 @@
    "lesson": 3
   },
   {
+   "term": "decision boundary",
+   "match": [
+    "\\bdecision boundar(y|ies)\\b"
+   ],
+   "exclude": [],
+   "definition": "the line where a classification model's answer changes from one class to the other: points on one side get one class, points on the other side get the other.",
+   "lesson": 3
+  },
+  {
    "term": "probability",
    "match": [
     "\\bprobabilit(y|ies)\\b"

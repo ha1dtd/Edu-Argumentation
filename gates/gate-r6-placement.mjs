@@ -53,7 +53,7 @@
  */
 import { chromium } from 'playwright';
 
-const BASE = process.env.GATE_BASE || process.env.R_REMOTE || 'http://192.168.100.66:8792';
+const BASE = process.env.GATE_BASE || process.env.R_REMOTE || 'http://192.168.100.66:8767';  // P6b 24-09-26: was :8792 (retired)
 
 const results = [];
 const check = (id, pass, detail) => {

@@ -766,6 +766,15 @@
    "lesson": 6
   },
   {
+   "term": "sequence-to-sequence",
+   "match": [
+    "\\bsequence-to-sequence\\b"
+   ],
+   "exclude": [],
+   "definition": "a model that takes a sequence in and gives a sequence out: in b01 a window of characters in and the next character at every position out; in b08–b12 an English sentence in and a Spanish one out.",
+   "lesson": 1
+  },
+  {
    "term": "functional API",
    "match": [
     "\\bfunctional API\\b"
@@ -1132,7 +1141,7 @@
     "\\bcontext vectors?\\b"
    ],
    "exclude": [],
-   "definition": "the weighted sum of encoder outputs that attention hands to the decoder at one step.",
+   "definition": "the numbers that summarise the input sentence for the decoder: in b08–b09 the encoder's final state; with attention (b12), a weighted sum of all the encoder's outputs, recomputed at every step.",
    "lesson": 8
   },
   {
@@ -1555,15 +1564,25 @@
    "lesson": 18
   },
   {
+   "term": "bias term",
+   "match": [
+    "\\bbias terms?\\b"
+   ],
+   "exclude": [],
+   "definition": "a neuron's own extra number, added to its weighted sum; it is learned like a weight, and a layer has one per neuron.",
+   "lesson": 2
+  },
+  {
    "term": "bias (in a model's answers)",
    "match": [
     "\\bbias(ed|es)?\\b"
    ],
    "exclude": [
-    "inductive bias(es)?"
+    "inductive bias(es)?",
+    "\\bbias terms?\\b"
    ],
    "definition": "a systematic lean of a model's answers in one direction; in b18, treating some groups of people unfairly because of what was in its training data.",
-   "lesson": 2
+   "lesson": 11
   },
   {
    "term": "counterfactual test",
@@ -1589,7 +1608,7 @@
     "\\bReber\\b"
    ],
    "exclude": [],
-   "definition": "a small set of rules that decides which letter strings are valid; used to test sequence models.",
+   "definition": "a small state machine (a diagram of states joined by arrows, each arrow labelled with a letter) that decides which letter strings are valid: a string is valid if you can walk it from the start state to the end state; used to test sequence models.",
    "lesson": 19
   },
   {

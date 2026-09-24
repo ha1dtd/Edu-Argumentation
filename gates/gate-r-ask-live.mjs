@@ -15,7 +15,9 @@
 import { execFileSync } from 'node:child_process';
 
 const HOST = process.env.ASK_HOST || 'nn';
-const NEW = process.env.ASK_NEW || 'http://192.168.100.66:8792';
+// ⚑ P6b 24-09-26: the new app took over :8767 and :8792 is retired. There is no live legacy any
+//   more, so ASK-4 needs ASK_OLD pointed at a locally served legacy edu_server.py to mean anything.
+const NEW = process.env.ASK_NEW || 'http://192.168.100.66:8767';
 const OLD = process.env.ASK_OLD || 'http://192.168.100.66:8767';
 const BACKEND = '/srv/foxai/edu-study/backend';
 const PY = '/home/ubuntu/edu-study-venv/bin/python';

@@ -29,11 +29,14 @@
 import { execFileSync } from 'node:child_process';
 
 const HOST = process.env.EDU_HOST || 'nn';
+// ⚑ P6b 24-09-26 (user): the new app took over :8767; the legacy unit is STOPPED + DISABLED (not
+//   masked, not deleted — it is the rollback) and :8792 is retired. The LIVE pair is study + importer.
 const UNITS = [
-  ['foxai-edu-argumentation', 8767],
   ['foxai-edu-importer', 8769],
-  ['foxai-edu-study', 8792],
+  ['foxai-edu-study', 8767],
 ];
+const LEGACY_UNIT = 'foxai-edu-argumentation';
+const RETIRED_PORT = 8792;
 // E0c: the :8767 unit FILE is untouched. Anchored on content sha256, never on MainPID and
 // never on ActiveEnterTimestamp — a legitimate restart moves both, and Step C restarts it.
 // mtime 2026-09-14 09:12:08 is ADVISORY ONLY and is deliberately not asserted.
@@ -56,10 +59,10 @@ function ssh(cmd) {
   }
 }
 
-/* ---- R-SEP1: the three units EXIST and are running. Asserted BEFORE any PID read. ---- */
+/* ---- R-SEP1: study + importer running, legacy stopped+disabled. Asserted BEFORE any PID read. ---- */
 const show = {};
-for (const [unit] of UNITS) {
-  const out = ssh(`systemctl show -p LoadState -p ActiveState -p SubState -p MainPID ${unit}`);
+for (const unit of [...UNITS.map(([u]) => u), LEGACY_UNIT]) {
+  const out = ssh(`systemctl show -p LoadState -p ActiveState -p SubState -p MainPID -p UnitFileState ${unit}`);
   const kv = {};
   for (const line of out.split('\n')) {
     const i = line.indexOf('=');
@@ -72,29 +75,41 @@ const liveness = UNITS.map(([u]) => {
   return { u, ok: k.LoadState === 'loaded' && k.ActiveState === 'active' && k.SubState === 'running', k };
 });
 const notLive = liveness.filter((l) => !l.ok);
+const lg = show[LEGACY_UNIT];
+// loaded (NOT masked: a masked unit reads LoadState=masked), inactive, disabled — the rollback stays one start away.
+const legacyRetired = lg.LoadState === 'loaded' && lg.ActiveState === 'inactive' && lg.UnitFileState === 'disabled';
 check(
-  'R-SEP1 all three units are loaded+active+running (asserted BEFORE MainPID is read)',
-  notLive.length === 0,
-  liveness.map((l) => `${l.u}=${l.k.LoadState || '?'}/${l.k.ActiveState || '?'}/${l.k.SubState || '?'}`).join(' '),
+  'R-SEP1 study + importer loaded+active+running; the legacy unit loaded+inactive+disabled (not masked) (asserted BEFORE MainPID is read)',
+  notLive.length === 0 && legacyRetired,
+  liveness.map((l) => `${l.u}=${l.k.LoadState || '?'}/${l.k.ActiveState || '?'}/${l.k.SubState || '?'}`).join(' ')
+    + ` ${LEGACY_UNIT}=${lg.LoadState || '?'}/${lg.ActiveState || '?'}/${lg.UnitFileState || '?'}`,
 );
 
-/* ---- R-SEP2: three DISTINCT NON-ZERO MainPIDs. Never equality with a baseline (E14). ---- */
+/* ---- R-SEP2: DISTINCT NON-ZERO MainPIDs (ruling R5), and each port is held by ITS unit's PID ---- */
 const pids = UNITS.map(([u]) => Number(show[u].MainPID || 0));
 const distinct = new Set(pids.filter((p) => p > 0));
+const listeners = ssh(`ss -ltnpH '( sport = :8767 or sport = :8769 or sport = :${RETIRED_PORT} )'`);
+const ownerOf = (port) => {
+  const line = listeners.split('\n').find((l) => new RegExp(`:${port}\\s`).test(l)) || '';
+  const m = line.match(/pid=(\d+)/);
+  return m ? Number(m[1]) : 0;
+};
+const portOk = UNITS.every(([u, port]) => ownerOf(port) === Number(show[u].MainPID || -1));
+const retiredOpen = ownerOf(RETIRED_PORT) !== 0 || new RegExp(`:${RETIRED_PORT}\\s`).test(listeners);
 check(
-  'R-SEP2 three DISTINCT NON-ZERO MainPIDs (:8767 :8769 :8792 are separate processes)',
-  notLive.length === 0 && pids.every((p) => p > 0) && distinct.size === 3,
-  `pids=${pids.join('/')} distinct=${distinct.size} (baseline 3233505/3224633/3221182 is ADVISORY — Step C restarts :8767)`,
+  'R-SEP2 DISTINCT NON-ZERO MainPIDs for :8767 (study) and :8769 (importer), each port held by its own unit, and NOTHING on the retired :8792',
+  notLive.length === 0 && pids.every((p) => p > 0) && distinct.size === 2 && portOk && !retiredOpen,
+  `pids=${pids.join('/')} distinct=${distinct.size} 8767->${ownerOf(8767)} 8769->${ownerOf(8769)} ${RETIRED_PORT}->${retiredOpen ? 'LISTENING' : 'closed'}`,
 );
 
-/* ---- R-SEP3 / E0f: the :8792 unit carries NO EnvironmentFile= ---- */
+/* ---- R-SEP3 / E0f: the study unit carries NO EnvironmentFile= ---- */
 // E15: `grep -c` EXITS 1 WHEN THE COUNT IS 0 — i.e. on this gate's PASSING case. The count is
 // captured and compared as a NUMBER; `|| true` keeps a passing gate from aborting the shell.
 const envCount = ssh(
   `grep -c '^EnvironmentFile=' /etc/systemd/system/foxai-edu-study.service || true`,
 ).trim();
 check(
-  'R-SEP3 the :8792 unit declares ZERO EnvironmentFile= (no credential reaches the new stack)',
+  'R-SEP3 the study unit (:8767) declares ZERO EnvironmentFile= (no credential reaches the new stack)',
   envCount === '0',
   `EnvironmentFile= count=${JSON.stringify(envCount)} (grep -c exits 1 on 0 — captured, not exit-code-tested)`,
 );
@@ -119,16 +134,16 @@ const unitCred = ssh(
   `grep -cE '(${CRED_VARS.join('|')})' /etc/systemd/system/foxai-edu-study.service || true`,
 ).trim();
 check(
-  'R-SEP4 :8792 carries no EDU_QUIZ_* / EDU_RUNNER_* / EDU_ADMIN_TOKEN (live /proc environ)',
+  'R-SEP4 the study process (:8767) carries no EDU_QUIZ_* / EDU_RUNNER_* / EDU_ADMIN_TOKEN (live /proc environ)',
   unitCred === '0' && envTotal > 0 && credHits === '0',
   `unit-file inline hits=${JSON.stringify(unitCred)} process-environ hits=${JSON.stringify(credHits)} ` +
   `of ${envTotal} readable vars (floor: envTotal>0, or a refused read reads green)`,
 );
 
-/* ---- R-CARRY-8767UNIT (E0c / Phase-02 F-1) ---- */
+/* ---- R-CARRY-LEGACYUNIT (E0c / Phase-02 F-1) — P6b: the legacy unit FILE is the rollback, kept byte-untouched ---- */
 const sha8767 = ssh('sha256sum /etc/systemd/system/foxai-edu-argumentation.service').trim().split(/\s+/)[0];
 check(
-  'R-CARRY-8767UNIT the :8767 unit FILE is byte-untouched (sha256, not MainPID, not timestamp)',
+  'R-CARRY-LEGACYUNIT the legacy unit FILE (foxai-edu-argumentation, the rollback) is byte-untouched (sha256, not MainPID, not timestamp)',
   sha8767 === UNIT_8767_SHA,
   `got=${sha8767} pinned=${UNIT_8767_SHA}`,
 );

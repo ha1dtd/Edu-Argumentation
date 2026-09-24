@@ -783,6 +783,16 @@
    "exclude": [],
    "definition": "a family of models that, unlike PCA, use the labels to find the directions that best separate the classes.",
    "lesson": 8
+  },
+  {
+   "term": "gradient boosting",
+   "match": [
+    "\\bgradient boosting\\b",
+    "\\bgradient-boosted\\b"
+   ],
+   "exclude": [],
+   "definition": "an ensemble that trains many small trees one after another, each new tree fixing the errors the earlier ones still make. Chapter 7 teaches it.",
+   "lesson": 1
   }
  ]
 }

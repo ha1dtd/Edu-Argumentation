@@ -60,7 +60,7 @@ for (const [tag, file, want] of [
   ['gate-r-sep.mjs', 'rsep.txt', 6],
   ['gate-r-read.mjs', 'rread.txt', 12],
   ['gate-r-contract.mjs', 'rcontract.txt', 7],
-  ['gate-r-dom.mjs', 'rdom.txt', 8],
+  ['gate-r-dom.mjs', 'rdom.txt', 9],
   ['gate-r-ro.mjs', 'rro.txt', 3],
   // ⚑ ADDED 22-09-26 (EVL cycle 2, gap G-EVL-4). Seven Exit Gate assertions had NO COMMAND
   //    ANYWHERE and were about to be frozen as Phase 04's fence in that state. A suite whose

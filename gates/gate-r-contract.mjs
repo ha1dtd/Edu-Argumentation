@@ -55,7 +55,7 @@ import { fileURLToPath } from 'node:url';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const BASE = process.env.R_BASE || 'http://127.0.0.1:8795';
-const REMOTE = process.env.R_REMOTE || 'http://192.168.100.66:8792';
+const REMOTE = process.env.R_REMOTE || 'http://192.168.100.66:8767';  // P6b 24-09-26: was :8792 (retired)
 const MODULE = process.env.R_MODULE || 'geron-homl3';
 const FROZEN = path.join(DIR, 'selector-contract.frozen.json');
 
@@ -327,7 +327,7 @@ try {
 try {
   remoteSha = createHash('sha256').update(execFileSync('curl', ['-s', '-m', '25', REMOTE + '/login'])).digest('hex');
 } catch { /* leave UNREAD */ }
-check('R-C0 FLOOR: the LOCAL preview serves byte-identical index.html to the DEPLOYED :8792',
+check('R-C0 FLOOR: the LOCAL preview serves byte-identical index.html to the DEPLOYED study app (:8767 since P6b)',
   localSha === remoteSha && localSha !== 'UNREAD',
   `local(${BASE})=${localSha} remote(${REMOTE})=${remoteSha} — without this the sweep measures a build nobody runs`);
 

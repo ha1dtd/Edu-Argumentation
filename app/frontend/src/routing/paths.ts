@@ -31,7 +31,7 @@ export const BOOK_SLUGS: Readonly<Record<string, string>> = {
 };
 
 /** Paths that are app screens, never a book slug. */
-const RESERVED = new Set(['account', 'settings', 'login', 'api', 'book', 'data', 'assets', 'favicon.svg']);
+const RESERVED = new Set(['account', 'settings', 'login', 'api', 'book', 'data', 'assets', 'favicon.svg', 'lab']);  // 'lab': the Lab add-on at /lab/ (R27, 24-09-26)
 
 export function slugify(text: string, max = 60): string {
   return String(text || '')

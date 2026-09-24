@@ -282,7 +282,7 @@ export function ResultScreen({ onBackToReader, onNewQuiz, onResumeQuiz, onGenera
           {...resultBtn(!origin && state.scope === 'ai' && !missed, 3, state.scope !== 'ai')}
           onClick={onGenerateAnother}
         >
-          {origin ? 'Another AI quiz on this block' : 'Generate Another Quiz'}
+          {origin ? 'Another AI-Quiz on this block' : 'Another AI-Quiz'}
         </button>
 
         <button

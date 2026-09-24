@@ -191,7 +191,7 @@ const gotoBlock = async (ci, bi) => {
 // ⛔⛔ THE CARD CLICK IS A **TOGGLE**, NOT AN "OPEN" — REPAIRED 22-09-26 (EVL fix cycle 1).
 //     Identical defect, identical repair, to gate-r-contract.mjs's 'book-selected' step; read
 //     that file's note for the full reasoning. ⚠ NAVIGATION ONLY — ⛔ no assertion changed, no
-//     expected count changed (this file stays 8 result lines).
+//     expected count changed (this file stays 8 result lines — 9 since R-LAB, 24-09-26).
 //
 //     WHAT WAS WRONG: the unconditional click assumed it OPENS. The legacy toggles —
 //     aws-quiz-app/js/app.js:605-608, `if (file === activeBookFile) { closeBook(); return; }`.
@@ -406,6 +406,26 @@ check('R-T2 ZERO [data-theme-fallback] across BOTH books — floor: every DERIVE
   `${JSON.stringify(themeSweep)}`
   + ' — ⛔ one-block-per-chapter, or a loose `text-*-N00` detector, reads GREEN on a book that'
   + ' really carries an unknown theme (both proven 22-09-26 with ch.4 forced to fuchsia-500)');
+
+/* ---- R-LAB (G-reader, 24-09-26, plan D8/D9): numbered title + the Lab link ONLY on a code lesson ----
+   ch02-b07 has a Full-script card (code) and ch01-b01 has none — both measured on this fixture with
+   lab/backend/library.py's D5 rule. The href names the book by MODULE id, opens a new tab, noopener. */
+await openBook(MODULE);
+const readerFacts = () => page.evaluate(() => {
+  const a = document.getElementById('lab-open-btn');
+  return { title: document.getElementById('tutorial-main-title')?.textContent?.trim() || '',
+    lab: a ? { href: a.getAttribute('href'), target: a.getAttribute('target'), rel: a.getAttribute('rel') || '', text: a.textContent.trim() } : null };
+});
+await gotoBlock(1, 6);
+const codeLesson = await readerFacts();
+await gotoBlock(0, 0);
+const plainLesson = await readerFacts();
+check('R-LAB reader title is "<n>. <term>"; a code lesson carries #lab-open-btn -> /lab/<moduleId>/<chNN-bMM> (new tab, noopener); a no-code lesson carries none',
+  /^7\. \S/.test(codeLesson.title) && /^1\. \S/.test(plainLesson.title)
+  && codeLesson.lab !== null && codeLesson.lab.href === `/lab/${MODULE}/ch02-b07` && codeLesson.lab.target === '_blank'
+  && codeLesson.lab.rel.split(/\s+/).includes('noopener') && codeLesson.lab.text === 'Lab'
+  && plainLesson.lab === null,
+  JSON.stringify({ codeLesson, plainLesson }));
 
 /* ---- R-P1 PRIMARY: A-G12's own shape, against the React DOM ---- */
 await openBook(MODULE);

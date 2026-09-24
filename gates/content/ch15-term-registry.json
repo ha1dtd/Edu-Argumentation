@@ -1517,6 +1517,25 @@
    "exclude": [],
    "definition": "guessing a value BETWEEN known ones, which is easier than forecasting one that comes after them all.",
    "lesson": 5
+  },
+  {
+   "term": "softmax",
+   "match": [
+    "\\bsoftmax\\b"
+   ],
+   "exclude": [],
+   "definition": "an output activation for picking one of several classes: it turns the last layer's numbers into probabilities, one per class, that add up to 1.",
+   "lesson": 16
+  },
+  {
+   "term": "2D CNN",
+   "match": [
+    "\\b[23]D CNNs?\\b",
+    "\\b2D convolutional (neural )?network"
+   ],
+   "exclude": [],
+   "definition": "a 2D convolutional neural network: convolutional layers whose filters slide across an image's width and height (its spatial dimensions) rather than along time; Chapter 14 teaches them.",
+   "lesson": 16
   }
  ]
 }

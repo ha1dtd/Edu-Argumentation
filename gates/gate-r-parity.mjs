@@ -30,7 +30,9 @@
 import { chromium } from 'playwright';
 
 const NEW = process.env.R_BASE || 'http://127.0.0.1:8795';
-const LEGACY = process.env.R_LEGACY || 'http://192.168.100.66:8767';
+// ⚑ P6b 24-09-26: the live legacy is retired (the new app owns :8767). run-gates-react.sh serves the
+//   frozen aws-quiz-app/ locally and sets R_LEGACY to it; this default matches that port.
+const LEGACY = process.env.R_LEGACY || 'http://127.0.0.1:8799';
 const PROPS = [
   'font-family', 'font-size', 'font-weight', 'color', 'background-color', 'border-top-color',
   'border-top-width', 'border-top-left-radius', 'padding-top', 'padding-left', 'display',

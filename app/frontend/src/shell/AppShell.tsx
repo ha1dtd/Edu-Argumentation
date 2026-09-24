@@ -463,9 +463,16 @@ export function AppShell() {
             #services-section are its SIBLINGS — not children, as slice A1 had them.
           ⛔ enterReader() FIRST, then the screen switch — THAT ORDER IS B15.
         */}
+        {/*
+          ⚑ 24-09-26 (user): while an AI-Quiz is being written (screen === 'loading') the home
+            widgets under the spinner were still showing — welcome card, KPIs and library all
+            rendered below "Writing a fresh quiz". They hide in THAT state only. Every other
+            state keeps welcome visible exactly as before, so B15's pinned
+            ["welcome-screen","tutorial-screen"] after LEARN is unchanged.
+        */}
         <Screen
           id="welcome-screen"
-          visible
+          visible={screen !== 'loading'}
           className="animate-fade-in bg-gray-800 border border-gray-700 rounded-2xl p-6 sm:p-8"
         >
           <WelcomeCard
@@ -480,8 +487,8 @@ export function AppShell() {
             providerReady={actions.providerReady}
           />
         </Screen>
-        <HomeKpis />
-        <LibrarySection />
+        <HomeKpis hidden={screen === 'loading'} />
+        <LibrarySection hidden={screen === 'loading'} />
       </div>
       </div>
       </div>
