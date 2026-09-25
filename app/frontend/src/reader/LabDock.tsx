@@ -18,6 +18,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 const WIDTH_KEY = 'reader:labWidth';
 const MIN_LAB = 360;
 const MIN_READER = 360;
+const SNAP_PX = 12;
 
 function storedWidth(): number | null {
   try {
@@ -32,6 +33,10 @@ export function LabDock({ src }: { src: string }) {
   const paneRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState<number | null>(storedWidth);
   const [dragging, setDragging] = useState(false);
+  // ⚑ 25-09-26 (user): while dragging, a dashed line marks the exact middle of the row; within
+  //   SNAP_PX of it the divider snaps to an exact 50/50.
+  const [middle, setMiddle] = useState<{ x: number; top: number; height: number } | null>(null);
+  const [snapped, setSnapped] = useState(false);
 
   // First open with no remembered width: half of the row.
   useEffect(() => {
@@ -49,18 +54,26 @@ export function LabDock({ src }: { src: string }) {
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
+    const box = paneRef.current?.parentElement?.getBoundingClientRect();
+    if (box) setMiddle({ x: box.left + box.width / 2, top: box.top, height: box.height });
     setDragging(true);
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!dragging) return;
     const row = paneRef.current?.parentElement;
     if (!row) return;
-    setWidth(clamp(row.getBoundingClientRect().right - event.clientX));
+    const box = row.getBoundingClientRect();
+    const half = box.width / 2;
+    const near = Math.abs(event.clientX - (box.left + half)) <= SNAP_PX;
+    setSnapped(near);
+    setWidth(clamp(near ? half : box.right - event.clientX));
   };
   const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!dragging) return;
     event.currentTarget.releasePointerCapture(event.pointerId);
     setDragging(false);
+    setMiddle(null);
+    setSnapped(false);
     try {
       if (width) window.localStorage.setItem(WIDTH_KEY, String(Math.round(width)));
     } catch {
@@ -80,15 +93,36 @@ export function LabDock({ src }: { src: string }) {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        className={`hidden lg:flex shrink-0 w-2 cursor-col-resize items-center justify-center rounded-full transition-colors ${dragging ? 'bg-brand-600' : 'bg-transparent hover:bg-gray-700'}`}
+        // ⚑ 25-09-26 (user): no gap between the lesson and Lab; the lesson keeps ALL its rounded corners
+        //   and the panel has no frame of its own (Lab's boxes carry their borders). The divider takes no
+        //   room: zero width, -mx-2 cancels the row's gap-2 on both sides, and a 10 px grab strip
+        //   sits over the seam (z-20 so it is above both borders).
+        className="group hidden lg:block relative shrink-0 w-0 -mx-2 z-20"
       >
-        <span className="h-10 w-0.5 rounded-full bg-gray-500" aria-hidden="true" />
+        <div
+          // ⚑ 25-09-26 (user): the strip lies ENTIRELY on the Lab side of the seam — reaching into the
+          //   lesson put it over the lesson's scrollbar, so grabbing the divider scrolled the lesson.
+          className={`absolute inset-y-0 left-0 w-[10px] cursor-col-resize flex items-center justify-start`}
+        >
+          <span
+            className={`h-full w-[3px] rounded-full transition-colors ${snapped ? 'bg-white' : dragging ? 'bg-brand-600' : 'bg-transparent group-hover:bg-brand-600'}`}
+            aria-hidden="true"
+          />
+        </div>
       </div>
+      {dragging && middle ? (
+        <div
+          id="lab-dock-middle"
+          aria-hidden="true"
+          className={`pointer-events-none fixed z-[60] w-0 border-l-2 border-dashed ${snapped ? 'border-white' : 'border-brand-600/70'}`}
+          style={{ left: middle.x - 1, top: middle.top, height: middle.height }}
+        />
+      ) : null}
       <div
         id="lab-dock"
         ref={paneRef}
         style={width ? ({ '--lab-dock-w': `${width}px` } as CSSProperties) : undefined}
-        className="fixed inset-0 z-50 flex flex-col bg-gray-900 lg:static lg:inset-auto lg:z-auto lg:shrink-0 lg:min-h-0 lg:w-[var(--lab-dock-w,50%)] lg:rounded-xl lg:border lg:border-gray-700 lg:overflow-hidden"
+        className="fixed inset-0 z-50 flex flex-col bg-gray-900 lg:static lg:inset-auto lg:z-auto lg:shrink-0 lg:min-h-0 lg:w-[var(--lab-dock-w,50%)] lg:rounded-xl lg:overflow-hidden"
       >
         {/* While dragging, the iframe would swallow the pointer; a transparent sheet keeps it here. */}
         <div className="relative flex-1 min-h-0">

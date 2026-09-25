@@ -293,7 +293,7 @@ export function ReaderScreen({ isVisible, actions, onShowReader }: ReaderScreenP
       <article
         id="tutorial-article"
         ref={articleRef}
-        className="min-w-0 flex-1 min-h-0 overflow-y-auto flex flex-col bg-gray-800 border border-gray-700 rounded-xl"
+        className={`min-w-0 flex-1 min-h-0 overflow-y-auto flex flex-col bg-gray-800 border border-gray-700 rounded-xl`}
       >
         <div className="flex-1 w-full p-4 sm:p-8 lg:p-10">
           {/*

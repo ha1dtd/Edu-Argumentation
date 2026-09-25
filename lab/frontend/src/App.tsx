@@ -64,6 +64,7 @@ export function App() {
     }
   });
   const [dragging, setDragging] = useState(false);
+  const [snapped, setSnapped] = useState(false);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const [wide, setWide] = useState(() => window.matchMedia('(min-width: 768px)').matches);
   const [fills, setFills] = useState(() => EMBEDDED || window.matchMedia('(min-width: 1024px) and (min-height: 640px)').matches);
@@ -234,11 +235,16 @@ export function App() {
     const box = workspaceRef.current?.getBoundingClientRect();
     if (!box || !axis) return;
     const raw = axis === 'x' ? (clientX - box.left) / box.width : (clientY - box.top) / box.height;
-    const next = Math.min(0.8, Math.max(0.2, raw));
+    // ⚑ 25-09-26 (user): snap to an exact 50/50 within 12 px of the middle.
+    const size = axis === 'x' ? box.width : box.height;
+    const near = Math.abs(raw - 0.5) * size <= 12;
+    setSnapped(near);
+    const next = near ? 0.5 : Math.min(0.8, Math.max(0.2, raw));
     setSplits((old) => (twoColumns ? { ...old, side: next } : { ...old, stacked: next }));
   };
   const endDrag = () => {
     setDragging(false);
+    setSnapped(false);
     writeStore('lab:split', JSON.stringify(splits));
   };
   const sidebar = layout.selector === 'sidebar';
@@ -277,11 +283,12 @@ export function App() {
   return (
     <>
       {EMBEDDED ? null : <Header name={name} />}
-      {/* ⚑ 25-09-26 (user): 6 px page padding (the Learn page's reading pane uses 6 px), and the menu box
+      {/* ⚑ 25-09-26 (user): 6 px page padding (the Learn page's reading pane uses 6 px) — inside the Learn
+          window only on the LEFT (the 6 px gap to the lesson), so top and bottom line up with the lesson card — and the menu box
           JOINS the Code/Result widgets — on top of both (top row) or left of them (sidebar, lg+) — with
           one shared border and only the outer corners rounded (app.css, #lab-stage). The notice and the
           standalone title row sit above that joined block. */}
-      <main id="lab-main" className="flex-1 flex flex-col gap-1.5 p-1.5 min-h-0">
+      <main id="lab-main" className={`flex-1 flex flex-col gap-1.5 min-h-0 ${EMBEDDED ? 'pl-1.5' : 'p-1.5'}`}>
         {notice ? (
           <p id="lab-notice" className="rounded-lg border border-gray-600 bg-gray-800 px-4 py-3 text-sm text-gray-200">
             {notice}
@@ -347,8 +354,16 @@ export function App() {
                     style={axis === 'x' ? { left: `calc(${share * 100}% - 5px)` } : { top: `calc(${share * 100}% - 5px)` }}
                     className={`group absolute z-10 flex items-center justify-center ${axis === 'x' ? 'top-0 bottom-0 w-[10px] cursor-col-resize' : 'left-0 right-0 h-[10px] cursor-row-resize'}`}
                   >
-                    <span className={`rounded-full transition-colors ${dragging ? 'bg-brand-600' : 'bg-transparent group-hover:bg-brand-600'} ${axis === 'x' ? 'w-[3px] h-full' : 'h-[3px] w-full'}`} />
+                    <span className={`rounded-full transition-colors ${snapped ? 'bg-white' : dragging ? 'bg-brand-600' : 'bg-transparent group-hover:bg-brand-600'} ${axis === 'x' ? 'w-[3px] h-full' : 'h-[3px] w-full'}`} />
                   </div>
+                ) : null}
+                {axis && dragging ? (
+                  // The exact middle, dashed, while dragging.
+                  <div
+                    id="lab-split-middle"
+                    aria-hidden="true"
+                    className={`pointer-events-none absolute z-10 border-dashed ${snapped ? 'border-white' : 'border-brand-600/70'} ${axis === 'x' ? 'top-0 bottom-0 left-1/2 w-0 border-l-2 -translate-x-px' : 'left-0 right-0 top-1/2 h-0 border-t-2 -translate-y-px'}`}
+                  />
                 ) : null}
                 <div id="lab-result-pane" className="lab-pane min-w-0 flex flex-col">
                   <ResultPanel state={result} onCopy={copy} />
