@@ -414,7 +414,7 @@ await openBook(MODULE);
 const readerFacts = () => page.evaluate(() => {
   const a = document.getElementById('lab-open-btn');
   return { title: document.getElementById('tutorial-main-title')?.textContent?.trim() || '',
-    lab: a ? { href: a.getAttribute('href'), target: a.getAttribute('target'), rel: a.getAttribute('rel') || '', text: a.textContent.trim() } : null };
+    lab: a ? { href: a.getAttribute('href'), target: a.getAttribute('target'), rel: a.getAttribute('rel') || '', text: a.getAttribute('aria-label') } : null };
 });
 await gotoBlock(1, 6);
 const codeLesson = await readerFacts();

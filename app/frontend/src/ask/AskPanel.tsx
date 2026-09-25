@@ -110,6 +110,8 @@ export function AskPanel({ reading }: AskPanelProps) {
   const [question, setQuestion] = useState('');
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const fabRef = useRef<HTMLButtonElement | null>(null);
   const { activeBookFile, chapters, blocksOf } = useBookContext();
   const { cursor } = useReaderCursor();
   const provider = useProviderReadiness();
@@ -121,6 +123,27 @@ export function AskPanel({ reading }: AskPanelProps) {
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
+  }, [open]);
+
+  // ⚑ 25-09-26 (user): a click OUTSIDE the panel closes it (Escape too). The FAB is excluded — it
+  //   toggles on its own click. Nothing is lost: the conversation is saved, and an answer still in
+  //   flight lands in the log and is there when the panel is reopened.
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target || panelRef.current?.contains(target) || fabRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
   }, [open]);
 
   // Keep the log scrolled to the newest bubble (askBubble / the finally in askSubmit).
@@ -191,6 +214,7 @@ export function AskPanel({ reading }: AskPanelProps) {
     <>
       <button
         id="ask-fab"
+        ref={fabRef}
         type="button"
         aria-label="Ask about this lesson"
         aria-expanded={open}
@@ -205,6 +229,7 @@ export function AskPanel({ reading }: AskPanelProps) {
 
       <section
         id="ask-panel"
+        ref={panelRef}
         aria-label="Ask about this lesson"
         className={`${open ? '' : 'hidden-view '}fixed bottom-24 right-6 z-40 flex flex-col w-[44rem] max-w-[calc(100vw-3rem)] h-[80vh] max-h-[calc(100vh-8rem)] rounded-2xl border border-gray-700 bg-gray-800 shadow-2xl`}
         data-max-turns={ASK_MAX_TURNS}

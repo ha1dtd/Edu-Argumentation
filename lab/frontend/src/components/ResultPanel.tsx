@@ -70,7 +70,7 @@ export function ResultPanel({ state, onCopy }: { state: ResultState; onCopy: () 
   let status: { text: string; tone: string } | null = null;
   let body: ReactNode = null;
   if (state.kind === 'idle') {
-    body = <p className="text-sm text-gray-500">Press Run to execute this code on the shared runner. The result appears here.</p>;
+    body = null; // ⚑ 25-09-26 (user): no placeholder text — an empty panel until the first Run.
   } else if (state.kind === 'running') {
     status = {
       text: `Running… ${state.seconds} s${state.seconds >= 3 ? ' (the first run of a lesson starts a kernel, which can take ~10 s)' : ''}`,

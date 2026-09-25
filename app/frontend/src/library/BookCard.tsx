@@ -26,6 +26,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../data/queries';
 import { postJson } from '../data/writes';
 import type { LibraryBook } from '../data/types';
+import { useAccount } from '../account/AccountContext';
 
 export interface BookCardProps {
   book: LibraryBook;
@@ -63,6 +64,24 @@ export function BookCard({ book, current, done, onOpen }: BookCardProps) {
   const titleTimer = useRef<number | null>(null);
   const queryClient = useQueryClient();
   const title = shownTitle ?? book.title;
+  const account = useAccount();
+  // ⚑ 25-09-26 (user): the OWNER can delete the SELECTED book — an imported (packaged) one, never
+  //   the default. The server re-checks all three (POST /api/book/delete) and soft-deletes it.
+  const canDelete = current && account.isOwner && Boolean(book.book) && !book.default;
+  const [deleting, setDeleting] = useState(false);
+  const remove = async () => {
+    if (!window.confirm(`Delete "${title}"?\n\nIt disappears from the library and Lab for every account. It is moved aside on the server, so it can still be restored.`)) return;
+    setDeleting(true);
+    try {
+      const response = await postJson('/api/book/delete', { file: book.file });
+      const reply = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(reply.error || `Delete failed (${response.status}).`);
+      window.location.assign('/');   // the open book is gone: start clean on the library
+    } catch (error) {
+      setDeleting(false);
+      window.alert(`Could not delete the book: ${(error as Error).message}`);
+    }
+  };
 
   /**
    * renameBook (app.js:548) — optimistic: the card redraws at once; on failure it is put
@@ -180,7 +199,24 @@ export function BookCard({ book, current, done, onOpen }: BookCardProps) {
       >
         <div className="h-full rounded-full bg-brand-600" style={{ width: `${percent}%` }} />
       </div>
-      <p className="text-xs text-gray-400 tabular-nums">{`${done}/${book.lessons} lessons · ${percent}%`}</p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-gray-400 tabular-nums">{`${done}/${book.lessons} lessons · ${percent}%`}</p>
+        {canDelete ? (
+          <button
+            id="book-delete-btn"
+            type="button"
+            disabled={deleting}
+            onClick={(event) => {
+              event.stopPropagation();   // never let the click reach the card (open/close the book)
+              void remove();
+            }}
+            onKeyDown={(event) => event.stopPropagation()}
+            className="min-h-[36px] px-3 rounded-lg border border-gray-600 text-gray-300 hover:text-white hover:border-brand-600 hover:bg-brand-600 text-xs font-semibold uppercase tracking-wider transition-colors active:scale-95 disabled:opacity-50"
+          >
+            {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

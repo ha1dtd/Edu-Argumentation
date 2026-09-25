@@ -290,9 +290,15 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
                 target="_blank"
                 rel="noopener"
                 title="Open this lesson's code in Lab — edit it and run it (new tab)"
-                className="shrink-0 min-h-[44px] min-w-[44px] px-2 sm:px-4 rounded-lg border border-gray-600 text-gray-300 hover:text-white hover:border-brand-600 transition-colors active:scale-95 flex items-center justify-center font-semibold uppercase tracking-wider text-xs sm:text-sm"
+                aria-label="Lab"
+                className="shrink-0 min-h-[44px] min-w-[44px] rounded-lg border border-gray-600 text-gray-300 hover:text-white hover:border-brand-600 transition-colors active:scale-95 flex items-center justify-center"
               >
-                Lab
+                {/* ⚑ 25-09-26 (user): a lab-flask GLYPH, not the word — also frees the title's width at 390 px. */}
+                <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9 3h6" />
+                  <path d="M10 3v6.2L4.6 18.4A1.7 1.7 0 0 0 6.1 21h11.8a1.7 1.7 0 0 0 1.5-2.6L14 9.2V3" />
+                  <path d="M7.2 14.5h9.6" />
+                </svg>
               </a>
             ) : null}
           </div>
@@ -340,6 +346,17 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
             >
               AI-Quiz
             </button>
+            {actions.aiBusy ? (
+              // ⚑ 25-09-26 (user): cancel the AI-Quiz being written for this block.
+              <button
+                id="block-ai-cancel-btn"
+                type="button"
+                onClick={actions.cancelAiQuiz}
+                className="min-h-[44px] px-5 rounded-lg border border-gray-600 text-gray-300 hover:border-brand-600 hover:text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95"
+              >
+                Cancel
+              </button>
+            ) : null}
             <button
               id="next-block-btn"
               type="button"

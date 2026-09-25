@@ -95,9 +95,29 @@ body.reader-mode #root { height: 100%; min-height: 0; }
 .service-card { border: 1px solid #374151; background-color: #1f2937; transition: all 0.3s; }
 .service-card:hover:not(:disabled) { border-color: #ef5b5b; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3); }
 .service-card:hover:not(:disabled) .icon-circle { border-color: #ef5b5b; color: #ef5b5b; }
-::-webkit-scrollbar { width: 8px; }
-::-webkit-scrollbar-track { background: #1f2937; }
-::-webkit-scrollbar-thumb { background: #ef5b5b; border-radius: 4px; }
+/* ── OVERLAY SCROLLBARS, APP-WIDE (25-09-26, user; ported from the CoreX console index.css) ──
+   Invisible at rest; a thumb fades in PER AXIS while that axis is scrolled or while the pointer
+   is on that bar's own strip — classes from overlayScrollbars (JS). Vertical AND horizontal.
+   Brand red everywhere; code (pre / the Lab editor) keeps a quiet grey. Track always transparent. */
+* { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background-color: transparent; border-radius: 999px;
+  border: 2px solid transparent; background-clip: padding-box;
+  transition: background-color 220ms ease;
+}
+.is-scrolling-y::-webkit-scrollbar-thumb:vertical, .is-scroll-hover-y::-webkit-scrollbar-thumb:vertical,
+.is-scrolling-x::-webkit-scrollbar-thumb:horizontal, .is-scroll-hover-x::-webkit-scrollbar-thumb:horizontal { background-color: #ef5b5b; }
+.is-scroll-hover-y::-webkit-scrollbar-thumb:vertical:hover, .is-scroll-hover-x::-webkit-scrollbar-thumb:horizontal:hover { background-color: #f87171; }
+.is-scrolling-y, .is-scrolling-x, .is-scroll-hover-y, .is-scroll-hover-x { scrollbar-color: #ef5b5b transparent; } /* Firefox: no per-axis API */
+pre.is-scrolling-y::-webkit-scrollbar-thumb:vertical, pre.is-scroll-hover-y::-webkit-scrollbar-thumb:vertical,
+pre.is-scrolling-x::-webkit-scrollbar-thumb:horizontal, pre.is-scroll-hover-x::-webkit-scrollbar-thumb:horizontal,
+#lab-editor.is-scrolling-y::-webkit-scrollbar-thumb:vertical, #lab-editor.is-scroll-hover-y::-webkit-scrollbar-thumb:vertical,
+#lab-editor.is-scrolling-x::-webkit-scrollbar-thumb:horizontal, #lab-editor.is-scroll-hover-x::-webkit-scrollbar-thumb:horizontal { background-color: #6b7280; }
+pre.is-scrolling-y, pre.is-scrolling-x, pre.is-scroll-hover-y, pre.is-scroll-hover-x,
+#lab-editor.is-scrolling-y, #lab-editor.is-scrolling-x, #lab-editor.is-scroll-hover-y, #lab-editor.is-scroll-hover-x { scrollbar-color: #6b7280 transparent; }
+@media (prefers-reduced-motion: reduce) { *::-webkit-scrollbar-thumb { transition: none; } }
 /* ⚑ 23-09-26 (user): "the page moves a bit" when going to Learn or Account. Measured: the window
    scrollbar (8px) exists on Home/Settings/Account and NOT on Learn (body.reader-mode is a 100dvh,
    overflow-hidden shell), and on any page short enough not to scroll. The fixed header is sized to

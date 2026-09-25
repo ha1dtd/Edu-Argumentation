@@ -25,6 +25,8 @@ edu-replatform Phase 03, slice D.
 from __future__ import annotations
 
 import json
+import time
+import shutil
 import os
 from pathlib import Path
 from typing import Any
@@ -163,6 +165,46 @@ def list_packaged_books(recency: dict[str, float] | None = None) -> list[dict[st
             "default": folder.name == DEFAULT_MODULE,
         }, folder, titles, recency))
     return out
+
+
+def delete_packaged_book(folder_name: str) -> str:
+    """SOFT delete (user, 25-09-26; owner only — enforced by the route): move library/<id>/ to
+    <data>/deleted/<id>-<UTC stamp>/library. Restorable by moving it back. Reading progress in the
+    database is keyed by the id and is left alone, so a restore brings it back too.
+    Only a PACKAGED book: a legacy data/*.json book lives in the rsync'd deploy tree and would
+    simply come back on the next deploy. The default book is refused."""
+    if folder_name == DEFAULT_MODULE:
+        raise ValueError("The default book cannot be deleted.")
+    root = store_path("EDU_LIBRARY_ROOT")
+    if not MODULE_ID.match(folder_name):
+        raise ValueError("Unknown book.")
+    book = (root / folder_name).resolve()
+    if book.parent != root.resolve() or not (book / "module.json").is_file():
+        raise ValueError("Unknown book.")
+    target = root.parent / "deleted" / f"{folder_name}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    target.mkdir(parents=True)
+    shutil.move(str(book), str(target / "library"))
+    # ⚑ 25-09-26 (user): the importer's copy goes too — its modules/<name>.json (+ .report.json)
+    #   and the legacy assets/<id>/ — so the book leaves "Modules on this server" as well.
+    #   Matched by the SAME id rule the package was written with (module_id_for).
+    modules = root.parent / "modules"
+    if modules.is_dir():
+        for path in sorted(modules.glob("*.json")):
+            if path.name.endswith(".report.json"):
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict) and module_id_for(data) == folder_name:
+                (target / "modules").mkdir(exist_ok=True)
+                for item in (path, path.with_suffix(".report.json")):
+                    if item.exists():
+                        shutil.move(str(item), str(target / "modules" / item.name))
+    assets = root.parent / "assets" / folder_name
+    if assets.is_dir():
+        shutil.move(str(assets), str(target / "assets"))
+    return target.name
 
 
 def list_data_books(recency: dict[str, float] | None = None) -> list[dict[str, Any]]:

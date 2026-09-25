@@ -304,7 +304,7 @@ index_structure_check() {
 #       build  (identical)
 #   The duplicated t-sagemaker-clarify-bias-mastery is REAL and is the legacy's too: two files
 #   (SageMaker_Clarify.json, SageMakerClarifyBiasMastery.json) carry the same title.
-EDU_STUDY_EXPECT_MODULES="${EDU_STUDY_EXPECT_MODULES:-5 ['geron-homl3', 'openintro-statistics-2019-1045f2f5', 't-domain-4-deep-dive-deployment-mlops', 't-sagemaker-clarify-bias-mastery', 't-sagemaker-clarify-bias-mastery']}"
+EDU_STUDY_EXPECT_MODULES="${EDU_STUDY_EXPECT_MODULES:-5 ['geron-homl3', 'openintro-statistics-2019-1045f2f5', 't-domain-4-deep-dive-deployment-mlops', 't-sagemaker-clarify-bias-mastery', 't-sagemaker-clarify-bias-mastery']}"  # 25-09-26: openintro-statistics-pdf-1045f2f5 deleted (user; test upload, soft-deleted to deleted/)
 
 # Parse a /api/modules payload on stdin into the canonical "<count> <sorted list>" form.
 # Exits non-zero on malformed JSON or a missing `books` key -- a 200 that is not the

@@ -18,6 +18,9 @@ import App from './App';
 //      chain were all simply ABSENT while the tree typechecked cleanly.
 import './styles/tailwind.css';
 import './styles/app.css';
+import { initOverlayScrollbars } from './overlayScrollbars';
+
+initOverlayScrollbars();
 
 // NO STATE LIBRARY (plan B2). Verified against the house reference: the CoreX console
 // ships zero of zustand/redux/jotai/mobx/recoil/valtio. Server state lives in TanStack

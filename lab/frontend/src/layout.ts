@@ -1,15 +1,17 @@
 import { readStore, writeStore } from './storage';
 
-// Plan D6: side-by-side <-> stacked, and which panels show. Remembered in localStorage.
+// Plan D6: side-by-side <-> stacked, and where the three selectors sit. Remembered in localStorage.
+// ⚑ 25-09-26 (user): the Both / Code only / Result only switch was removed — both panels always show.
 export type Arrangement = 'side' | 'stacked';
-export type View = 'both' | 'code' | 'result';
+/** 'top' = one short row of three dropdowns above the workspace; 'sidebar' = a left column. */
+export type SelectorPlace = 'top' | 'sidebar';
 export interface Layout {
   arrangement: Arrangement;
-  view: View;
+  selector: SelectorPlace;
 }
 
 const KEY = 'lab:layout';
-export const DEFAULT_LAYOUT: Layout = { arrangement: 'side', view: 'both' };
+export const DEFAULT_LAYOUT: Layout = { arrangement: 'side', selector: 'top' };
 
 export function loadLayout(): Layout {
   const raw = readStore(KEY);
@@ -18,7 +20,7 @@ export function loadLayout(): Layout {
     const parsed = JSON.parse(raw) as Partial<Layout>;
     return {
       arrangement: parsed.arrangement === 'stacked' ? 'stacked' : 'side',
-      view: parsed.view === 'code' || parsed.view === 'result' ? parsed.view : 'both',
+      selector: parsed.selector === 'sidebar' ? 'sidebar' : 'top',
     };
   } catch {
     return DEFAULT_LAYOUT;

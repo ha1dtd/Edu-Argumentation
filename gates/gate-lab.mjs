@@ -65,8 +65,8 @@ await page.goto(`${LAB}/lab/geron-homl3/ch02-b05`, { waitUntil: 'networkidle' })
 await page.waitForSelector('#lab-editor');
 const original = (await api('/lab/api/books/geron-homl3/lessons/ch02-b05')).code;
 const title = (await page.textContent('#lab-lesson-title'))?.trim() || '';
-const active = await page.getAttribute('[data-lesson="ch02-b05"]', 'aria-current');
-check('LAB-DEEPLINK /lab/geron-homl3/ch02-b05 opens that lesson (title "5. …", list item current, editor = the lesson code)',
+const active = (await page.$eval('#lab-lesson-select', (e) => e.value)) === 'ch02-b05' ? 'true' : 'false';
+check('LAB-DEEPLINK /lab/geron-homl3/ch02-b05 opens that lesson (title "5. …", Lesson menu on it, editor = the lesson code)',
   /^5\. \S/.test(title) && active === 'true' && (await editorValue()) === original, JSON.stringify({ title, active }));
 
 /* ---- layout toggle persists across reload ---- */
@@ -81,17 +81,39 @@ const sideCols = await page.$eval('#lab-workspace', (e) => getComputedStyle(e).g
 check('LAB-LAYOUT "Stacked" survives a reload (localStorage) and gives one column; "Side by side" gives two at 1440 px',
   afterReload === 'stacked' && stackedCols === 1 && sideCols === 2, JSON.stringify({ afterReload, stackedCols, sideCols }));
 
-/* ---- edit -> reload keeps it -> Reset to original is byte-equal ---- */
+/* ---- selectors: exactly three menus; top row <-> left sidebar, remembered ---- */
+const menus = await page.locator('#lab-selector select').count();
+const placeTop = await page.getAttribute('#lab-selector', 'data-place');
+await page.click('#lab-selector-place');
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForSelector('#lab-selector');
+const placeSide = await page.getAttribute('#lab-selector', 'data-place');
+const asideW = await page.$eval('#lab-aside', (e) => e.getBoundingClientRect().width);
+await shot(page, 'lab-selector-sidebar-1440.png');
+await page.click('#lab-selector-place');
+await page.waitForTimeout(200);
+const placeBack = await page.getAttribute('#lab-selector', 'data-place');
+const buttons = await page.$$eval('#lab-code-pane button[id]', (bs) => bs.map((b) => b.textContent.trim()).join(','));
+const noView = (await page.locator('[id^="lab-view-"]').count()) === 0;
+const glyphs = await page.$$eval('#lab-layout-side, #lab-layout-stacked', (bs) => bs.every((b) => b.textContent.trim() === '' && b.querySelector('svg')));
+const study = await page.$eval('#lab-study-link', (a) => (a.querySelector('svg') ? a.getAttribute('aria-label') : null));
+const userColor = await page.$eval('#lab-user', (e) => getComputedStyle(e).color).catch(() => null);
+check('LAB-UI 3 menus (book/chapter/lesson); top <-> sidebar survives reload; buttons Run,Stop,Reset,Copy; no view switch; layout = 2 glyphs; Study = book glyph; account in brand red',
+  menus === 3 && placeTop === 'top' && placeSide === 'sidebar' && asideW < 400 && placeBack === 'top' && buttons === 'Run,Stop,Reset,Copy' && noView && glyphs
+  && study === 'Study app' && userColor === 'rgb(239, 91, 91)',
+  JSON.stringify({ menus, placeTop, placeSide, asideW, placeBack, buttons, noView, glyphs, study, userColor }));
+
+/* ---- edit -> reload keeps it -> Reset is byte-equal ---- */
 await page.click('#lab-editor');
 await page.keyboard.press('Control+End');
 await page.keyboard.type('\n# edited by gate-lab');
 await page.reload({ waitUntil: 'networkidle' });
 await page.waitForSelector('#lab-editor');
 const kept = (await editorValue()).endsWith('# edited by gate-lab');
-await page.click('#lab-reset-code-btn');
+await page.click('#lab-reset-btn');
 const resetEqual = (await editorValue()) === original;
 const keyGone = await page.evaluate(() => localStorage.getItem('lab:code:geron-homl3:ch02-b05') === null);
-check('LAB-RESET an edit survives reload; Reset to original restores the lesson code byte-for-byte and forgets the edit',
+check('LAB-RESET an edit survives reload; Reset restores the lesson code byte-for-byte and forgets the edit',
   kept && resetEqual && keyGone, JSON.stringify({ kept, resetEqual, keyGone }));
 
 /* ---- run: stdout + image ---- */
@@ -108,15 +130,6 @@ await shot(page, 'lab-run-stdout-1440.png');
 await page.locator('#lab-result [data-output="image"]').first().scrollIntoViewIfNeeded();
 await shot(page, 'lab-run-image-1440.png');
 
-/* ---- view switch ---- */
-await page.click('#lab-view-code');
-const codeOnly = (await visible('#lab-code-pane')) && !(await visible('#lab-result-pane'));
-await page.click('#lab-view-result');
-const resultOnly = !(await visible('#lab-code-pane')) && (await visible('#lab-result-pane'));
-await shot(page, 'lab-result-only-1440.png');
-await page.click('#lab-view-both');
-check('LAB-VIEW "Code only" hides the result panel; "Result only" hides the code panel', codeOnly && resultOnly, JSON.stringify({ codeOnly, resultOnly }));
-
 /* ---- stacked screenshot ---- */
 await page.click('#lab-layout-stacked');
 await page.evaluate(() => window.scrollTo(0, 0));
@@ -131,13 +144,13 @@ const heavyText = (await page.textContent('#lab-heavy p'))?.trim();
 check('LAB-HEAVY a script over the time cap shows the R13 message (with a Copy button), never hangs',
   heavyText === HEAVY && (await visible('#lab-heavy-copy-btn')), JSON.stringify({ heavyText }));
 await shot(page, 'lab-heavy-message-1440.png');
-await page.click('#lab-reset-code-btn');
+await page.click('#lab-reset-btn');
 
 /* ---- unknown deep link ---- */
 await page.goto(`${LAB}/lab/geron-homl3/ch01-b01`, { waitUntil: 'networkidle' });
 await page.waitForSelector('#lab-notice');
 const notice = (await page.textContent('#lab-notice'))?.trim() || '';
-check('LAB-NOCODE a deep link to a lesson with no code explains itself and shows the list', /no code/.test(notice) && (await page.locator('#lab-lesson-list li').count()) > 0, notice);
+check('LAB-NOCODE a deep link to a lesson with no code explains itself and the Lesson menu still offers lessons', /no code/.test(notice) && (await page.locator('#lab-lesson-select option:not([disabled])').count()) > 0, notice);
 
 /* ---- phone width: side-by-side collapses to one column ---- */
 await page.setViewportSize({ width: 390, height: 844 });
@@ -153,7 +166,7 @@ await page.goto(`${STUDY}/geron-homl3/chapter-2/7-x`, { waitUntil: 'networkidle'
 await page.waitForSelector('#tutorial-main-title');
 await page.waitForTimeout(1500);
 const rTitle = (await page.textContent('#tutorial-main-title'))?.trim() || '';
-const rLab = await page.$eval('#lab-open-btn', (a) => ({ href: a.getAttribute('href'), target: a.target, rel: a.rel, text: a.textContent.trim() })).catch(() => null);
+const rLab = await page.$eval('#lab-open-btn', (a) => ({ href: a.getAttribute('href'), target: a.target, rel: a.rel, text: a.getAttribute('aria-label') })).catch(() => null);
 await shot(page, 'reader-title-lab-button-1440.png', { clip: { x: 0, y: 0, width: 1440, height: 320 } });
 await page.goto(`${STUDY}/openintro-stats/chapter-2/10-x`, { waitUntil: 'networkidle' });
 await page.waitForSelector('#tutorial-main-title');

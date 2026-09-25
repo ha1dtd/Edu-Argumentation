@@ -1,43 +1,47 @@
-import type { Arrangement, Layout, View } from '../layout';
+import type { Arrangement } from '../layout';
 
-const BTN = 'min-h-[36px] px-3 text-xs font-semibold uppercase tracking-wider transition-colors';
+// ⚑ 25-09-26 (user): two GLYPHS, no text — side by side = two columns, stacked = two rows.
+//   Sits at the right end of the lesson-title row. The name is the tooltip + aria-label.
+const BTN = 'min-h-[36px] min-w-[40px] flex items-center justify-center transition-colors';
 const on = 'bg-gray-700 text-white';
 const off = 'text-gray-400 hover:text-white';
 
-export function LayoutToggle({ layout, onChange }: { layout: Layout; onChange: (next: Layout) => void }) {
-  const arrangement = (value: Arrangement, label: string) => (
+function Glyph({ value }: { value: Arrangement }) {
+  return (
+    <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+      {value === 'side' ? (
+        <>
+          <rect x="2" y="3" width="7" height="14" rx="1.5" />
+          <rect x="11" y="3" width="7" height="14" rx="1.5" />
+        </>
+      ) : (
+        <>
+          <rect x="2" y="2.5" width="16" height="6.5" rx="1.5" />
+          <rect x="2" y="11" width="16" height="6.5" rx="1.5" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+export function LayoutToggle({ arrangement, onChange }: { arrangement: Arrangement; onChange: (next: Arrangement) => void }) {
+  const button = (value: Arrangement, label: string) => (
     <button
       id={`lab-layout-${value}`}
       type="button"
-      aria-pressed={layout.arrangement === value ? 'true' : 'false'}
-      className={`${BTN} ${layout.arrangement === value ? on : off}`}
-      onClick={() => onChange({ ...layout, arrangement: value })}
+      title={label}
+      aria-label={label}
+      aria-pressed={arrangement === value ? 'true' : 'false'}
+      className={`${BTN} ${arrangement === value ? on : off}`}
+      onClick={() => onChange(value)}
     >
-      {label}
-    </button>
-  );
-  const view = (value: View, label: string) => (
-    <button
-      id={`lab-view-${value}`}
-      type="button"
-      aria-pressed={layout.view === value ? 'true' : 'false'}
-      className={`${BTN} ${layout.view === value ? on : off}`}
-      onClick={() => onChange({ ...layout, view: value })}
-    >
-      {label}
+      <Glyph value={value} />
     </button>
   );
   return (
-    <div className="flex flex-wrap items-center gap-3">
-      <div className="flex rounded-lg border border-gray-600 overflow-hidden" role="group" aria-label="Layout">
-        {arrangement('side', 'Side by side')}
-        {arrangement('stacked', 'Stacked')}
-      </div>
-      <div className="flex rounded-lg border border-gray-600 overflow-hidden" role="group" aria-label="Show">
-        {view('both', 'Both')}
-        {view('code', 'Code only')}
-        {view('result', 'Result only')}
-      </div>
+    <div className="ml-auto flex shrink-0 rounded-lg border border-gray-600 overflow-hidden" role="group" aria-label="Layout">
+      {button('side', 'Side by side')}
+      {button('stacked', 'Stacked')}
     </div>
   );
 }

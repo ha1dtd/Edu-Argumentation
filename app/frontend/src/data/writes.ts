@@ -18,6 +18,7 @@ import { bounceToLogin } from './client';
 export type WriteRoute =
   | '/api/progress'
   | '/api/book/rename'
+  | '/api/book/delete'
   | '/api/settings'
   | '/api/quiz'
   | '/api/quiz/fresh'
@@ -36,11 +37,14 @@ export type WriteRoute =
 
 /** The one write primitive. Returns the raw Response — each caller owns its own error copy,
  *  exactly as each legacy call site did. */
-export function postJson(route: WriteRoute, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
+// `signal` (25-09-26): lets the reader CANCEL an AI-Quiz while it is being written. Aborting stops
+// the wait in the browser; a model call the server already started still finishes on its side.
+export function postJson(route: WriteRoute, body: unknown, headers: Record<string, string> = {}, signal?: AbortSignal): Promise<Response> {
   return fetch(route, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
+    signal,
   }).then((response) => {
     // ⚑ Phase 06a: a session that expired mid-read goes to sign-in. The login POST's own 401 is
     //   "wrong password", which the login page shows — never a bounce.

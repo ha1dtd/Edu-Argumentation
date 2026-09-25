@@ -442,6 +442,15 @@ export function AppShell() {
             {actions.loading.scope || 'AI is reading random book sections · up to a minute'}
           </p>
           <p id="loading-model" className="mt-2 text-gray-500 text-xs">{actions.loading.model}</p>
+          {/* ⚑ 25-09-26 (user): stop writing this quiz and go back. */}
+          <button
+            id="loading-cancel-btn"
+            type="button"
+            onClick={actions.cancelAiQuiz}
+            className="mt-8 inline-flex items-center justify-center min-h-[44px] px-5 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+          >
+            Cancel
+          </button>
         </Screen>
 
         {/*

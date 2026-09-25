@@ -24,5 +24,5 @@ export function removeStore(key: string): void {
   }
 }
 
-/** Edited code for one lesson. Removed again by "Reset to original". */
+/** Edited code for one lesson. Removed again by "Reset". */
 export const codeKey = (book: string, lesson: string) => `lab:code:${book}:${lesson}`;

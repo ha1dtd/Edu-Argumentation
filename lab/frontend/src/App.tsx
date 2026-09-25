@@ -2,14 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, api } from './api';
 import type { Book, LessonDetail } from './api';
 import { Header } from './components/Header';
-import { BookPicker } from './components/BookPicker';
-import { LessonList } from './components/LessonList';
+import { Selector } from './components/Selector';
 import { CodeEditor } from './components/CodeEditor';
 import { ResultPanel } from './components/ResultPanel';
 import type { ResultState } from './components/ResultPanel';
 import { LayoutToggle } from './components/LayoutToggle';
 import { loadLayout, saveLayout } from './layout';
-import type { Layout } from './layout';
+import type { Arrangement, Layout, SelectorPlace } from './layout';
 import { codeKey, readStore, removeStore, writeStore } from './storage';
 
 // Deep link: /lab/<bookId>/<chNN-bMM>. The book id is the MODULE id (e.g.
@@ -64,7 +63,7 @@ export function App() {
   const applySelection = useCallback((all: Book[], wantBook: string | null, wantLesson: string | null, push: boolean) => {
     let target = all.find((b) => b.id === wantBook) ?? null;
     let message: string | null = null;
-    if (wantBook && !target) message = `There is no book "${wantBook}" in Lab. Pick one from the list.`;
+    if (wantBook && !target) message = `There is no book "${wantBook}" in Lab. Pick one from the Book menu.`;
     target = target ?? all[0] ?? null;
     let lesson: string | null = null;
     let chapterNumber = target?.chapters[0]?.n ?? null;
@@ -74,7 +73,7 @@ export function App() {
         chapterNumber = owner.n;
         lesson = wantLesson;
       } else {
-        message = `Lesson ${wantLesson} has no code to run, or does not exist. Pick a lesson from the list.`;
+        message = `Lesson ${wantLesson} has no code to run, or does not exist. Pick a lesson from the Lesson menu.`;
       }
     }
     setBookId(target?.id ?? null);
@@ -138,12 +137,6 @@ export function App() {
     else writeStore(codeKey(bookId, lessonId), next);
   };
 
-  const resetCode = () => {
-    if (!bookId || !lessonId || !detail) return;
-    removeStore(codeKey(bookId, lessonId));
-    setCode(detail.code);
-  };
-
   const copy = async () => {
     const ok = await copyText(code);
     setCopied(ok);
@@ -175,14 +168,19 @@ export function App() {
     if (bookId && lessonId) api.stop(bookId, lessonId).catch(() => undefined);
   };
 
-  const resetKernel = async () => {
-    if (!bookId || !lessonId) return;
+  // Reset = start over: the lesson's original code, a fresh kernel (every variable from earlier
+  // runs forgotten) and an empty result. The kernel half is best-effort — the code is restored even
+  // when the runner cannot be reached, and the notice says which half failed.
+  const reset = async () => {
+    if (!bookId || !lessonId || !detail || running) return;
+    removeStore(codeKey(bookId, lessonId));
+    setCode(detail.code);
+    setResult({ kind: 'idle' });
+    setNotice(null);
     try {
       await api.resetKernel(bookId, lessonId);
-      setResult({ kind: 'idle' });
-      setNotice('Kernel reset — every variable from earlier runs of this lesson is gone.');
     } catch (error) {
-      setNotice(error instanceof ApiError ? error.message : 'Could not reset the kernel.');
+      setNotice(`Code restored, but the Python session could not be reset: ${error instanceof ApiError ? error.message : 'the runner did not answer'}.`);
     }
   };
 
@@ -190,37 +188,47 @@ export function App() {
     setLayout(next);
     saveLayout(next);
   };
+  const changeArrangement = (arrangement: Arrangement) => changeLayout({ ...layout, arrangement });
+  const changePlace = (selector: SelectorPlace) => changeLayout({ ...layout, selector });
 
   const lessonRef = chapter?.lessons.find((l) => l.id === lessonId) ?? null;
-  const showCode = layout.view !== 'result';
-  const showResult = layout.view !== 'code';
-  const twoColumns = layout.arrangement === 'side' && showCode && showResult;
-  // Stacked with both panels: split the height (code 45 % / result 55 %, app.css). Else one row.
-  const split = layout.arrangement === 'stacked' && showCode && showResult;
+  const twoColumns = layout.arrangement === 'side';
+  // Stacked: split the height (code 45 % / result 55 %, app.css). Side by side: one row.
+  const split = layout.arrangement === 'stacked';
+  const sidebar = layout.selector === 'sidebar';
+
+  const selector = books ? (
+    <Selector
+      books={books}
+      bookId={bookId}
+      chapterN={chapterN}
+      lessonId={lessonId}
+      place={layout.selector}
+      onBook={(id) => applySelection(books, id, null, true)}
+      onChapter={(n) => {
+        setChapterN(n);
+        setLessonId(null);
+        window.history.pushState(null, '', pathFor(bookId, null));
+      }}
+      onLesson={selectLesson}
+      onPlace={changePlace}
+    />
+  ) : (
+    <p className="text-sm text-gray-400">{loadError ?? 'Loading books…'}</p>
+  );
 
   return (
     <>
       <Header name={name} />
-      <main id="lab-main" className="flex-1 flex flex-col lg:flex-row gap-6 p-4 sm:p-6 lg:px-8 lg:py-6 min-h-0">
-        <aside id="lab-aside" className="lg:w-80 shrink-0 flex flex-col gap-4 bg-gray-800 border border-gray-700 rounded-xl p-4 lg:overflow-y-auto">
-          {books ? (
-            <>
-              <BookPicker
-                books={books}
-                bookId={bookId}
-                chapterN={chapterN}
-                onBook={(id) => books && applySelection(books, id, null, true)}
-                onChapter={(n) => {
-                  setChapterN(n);
-                  setLessonId(null);
-                  window.history.pushState(null, '', pathFor(bookId, null));
-                }}
-              />
-              <LessonList lessons={chapter?.lessons ?? []} lessonId={lessonId} onSelect={selectLesson} />
-            </>
-          ) : (
-            <p className="text-sm text-gray-400">{loadError ?? 'Loading books…'}</p>
-          )}
+      <main id="lab-main" className={`flex-1 flex flex-col ${sidebar ? 'lg:flex-row gap-6' : 'gap-4'} p-4 sm:p-6 lg:px-8 lg:py-6 min-h-0`}>
+        {/* ⚑ 25-09-26: the three selectors — one short row on top, or a left sidebar (lg+). Below lg the
+            sidebar mode also renders on top: a phone has no room for a column. */}
+        <aside
+          id="lab-aside"
+          data-place={layout.selector}
+          className={sidebar ? 'lg:w-72 shrink-0 flex flex-col gap-4 bg-gray-800 border border-gray-700 rounded-xl p-4 lg:overflow-y-auto' : 'shrink-0 bg-gray-800 border border-gray-700 rounded-xl px-4 py-3'}
+        >
+          {selector}
           {books && books.length === 0 ? <p className="text-sm text-gray-400">No book has code to run yet.</p> : null}
         </aside>
 
@@ -232,20 +240,19 @@ export function App() {
           ) : null}
           {lessonRef && detail ? (
             <>
-              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
-                <h2 id="lab-lesson-title" className="min-w-0 break-words text-2xl sm:text-3xl text-white font-light">
+              <div className="flex items-center gap-4">
+                <h2 id="lab-lesson-title" className="min-w-0 flex-1 break-words text-2xl sm:text-3xl text-white font-light">
                   {lessonRef.n}. {lessonRef.title}
                 </h2>
-                <LayoutToggle layout={layout} onChange={changeLayout} />
+                <LayoutToggle arrangement={layout.arrangement} onChange={changeArrangement} />
               </div>
               <div
                 id="lab-workspace"
                 data-arrangement={layout.arrangement}
-                data-view={layout.view}
                 data-rows={split ? 'split' : 'one'}
-                className={`grid gap-4 grid-cols-1 ${twoColumns ? 'md:grid-cols-2' : ''}`}
+                className={`grid gap-0 grid-cols-1 ${twoColumns ? 'md:grid-cols-2' : ''}`}
               >
-                <div id="lab-code-pane" className={showCode ? 'lab-pane min-w-0 flex flex-col' : 'hidden'}>
+                <div id="lab-code-pane" className="lab-pane min-w-0 flex flex-col">
                   <CodeEditor
                     code={code}
                     edited={edited}
@@ -253,13 +260,12 @@ export function App() {
                     onChange={changeCode}
                     onRun={run}
                     onStop={stop}
-                    onResetCode={resetCode}
+                    onReset={reset}
                     onCopy={copy}
-                    onResetKernel={resetKernel}
                     copied={copied}
                   />
                 </div>
-                <div id="lab-result-pane" className={showResult ? 'lab-pane min-w-0 flex flex-col' : 'hidden'}>
+                <div id="lab-result-pane" className="lab-pane min-w-0 flex flex-col">
                   <ResultPanel state={result} onCopy={copy} />
                 </div>
               </div>
@@ -267,7 +273,7 @@ export function App() {
           ) : books && !lessonId ? (
             <div className="rounded-xl bg-gray-800 border border-gray-700 p-8 text-gray-300">
               <h2 className="text-2xl text-white font-light mb-2">Lab</h2>
-              <p>Pick a lesson on the left. Its code opens here — change it, run it, and see the result.</p>
+              <p>Pick a book, a chapter and a lesson. Its code opens here — change it, run it, and see the result.</p>
               <p className="mt-2 text-sm text-gray-400">Your edits stay in this browser. Each person gets their own kernel.</p>
             </div>
           ) : null}

@@ -26,14 +26,29 @@ body { background-color: #111827; color: #cbd5e1; -webkit-font-smoothing: antial
   .lab-pane { height: auto; min-height: 0; }
 }
 
-/* Visible, themed scrollbars on the code and on every result block (dark track, grey thumb). */
-#lab-editor, .lab-pre, #lab-result, #lab-aside {
-  scrollbar-width: thin;
-  scrollbar-color: #4b5563 transparent;
+/* ── OVERLAY SCROLLBARS, APP-WIDE (25-09-26, user; ported from the CoreX console index.css) ──
+   Invisible at rest; a thumb fades in PER AXIS while that axis is scrolled or while the pointer
+   is on that bar's own strip — classes from overlayScrollbars (JS). Vertical AND horizontal.
+   Brand red everywhere; code (pre / the Lab editor) keeps a quiet grey. Track always transparent. */
+* { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background-color: transparent; border-radius: 999px;
+  border: 2px solid transparent; background-clip: padding-box;
+  transition: background-color 220ms ease;
 }
-#lab-editor::-webkit-scrollbar, .lab-pre::-webkit-scrollbar, #lab-result::-webkit-scrollbar { width: 10px; height: 10px; }
-#lab-editor::-webkit-scrollbar-thumb, .lab-pre::-webkit-scrollbar-thumb, #lab-result::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 6px; }
-#lab-editor::-webkit-scrollbar-track, .lab-pre::-webkit-scrollbar-track, #lab-result::-webkit-scrollbar-track { background: transparent; }
+.is-scrolling-y::-webkit-scrollbar-thumb:vertical, .is-scroll-hover-y::-webkit-scrollbar-thumb:vertical,
+.is-scrolling-x::-webkit-scrollbar-thumb:horizontal, .is-scroll-hover-x::-webkit-scrollbar-thumb:horizontal { background-color: #ef5b5b; }
+.is-scroll-hover-y::-webkit-scrollbar-thumb:vertical:hover, .is-scroll-hover-x::-webkit-scrollbar-thumb:horizontal:hover { background-color: #f87171; }
+.is-scrolling-y, .is-scrolling-x, .is-scroll-hover-y, .is-scroll-hover-x { scrollbar-color: #ef5b5b transparent; } /* Firefox: no per-axis API */
+pre.is-scrolling-y::-webkit-scrollbar-thumb:vertical, pre.is-scroll-hover-y::-webkit-scrollbar-thumb:vertical,
+pre.is-scrolling-x::-webkit-scrollbar-thumb:horizontal, pre.is-scroll-hover-x::-webkit-scrollbar-thumb:horizontal,
+#lab-editor.is-scrolling-y::-webkit-scrollbar-thumb:vertical, #lab-editor.is-scroll-hover-y::-webkit-scrollbar-thumb:vertical,
+#lab-editor.is-scrolling-x::-webkit-scrollbar-thumb:horizontal, #lab-editor.is-scroll-hover-x::-webkit-scrollbar-thumb:horizontal { background-color: #6b7280; }
+pre.is-scrolling-y, pre.is-scrolling-x, pre.is-scroll-hover-y, pre.is-scroll-hover-x,
+#lab-editor.is-scrolling-y, #lab-editor.is-scrolling-x, #lab-editor.is-scroll-hover-y, #lab-editor.is-scroll-hover-x { scrollbar-color: #6b7280 transparent; }
+@media (prefers-reduced-motion: reduce) { *::-webkit-scrollbar-thumb { transition: none; } }
 
 /* The code editor is a plain <textarea> (no editor dependency). Keep tabs at 4 columns and
    never wrap code lines — wrapped Python reads as different code. Long lines scroll sideways. */
@@ -50,4 +65,19 @@ body { background-color: #111827; color: #cbd5e1; -webkit-font-smoothing: antial
   padding-right: 2.25rem;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%239ca3af'%3E%3Cpath fill-rule='evenodd' d='M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z' clip-rule='evenodd'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 0.6rem center; background-size: 1.1rem;
+}
+
+/* ⚑ 25-09-26 (user): Code and Result TOUCH — no gap, one shared 1px border, and only the outer
+ * corners rounded — in BOTH modes. Stacked (and side-by-side below md, where the grid is one
+ * column): code on top, result below. Side by side (md+): code left, result right.
+ * Id selectors outrank the cards' Tailwind rounded-xl / border utilities. */
+#lab-workspace #lab-code { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+#lab-workspace #lab-result { border-top-left-radius: 0; border-top-right-radius: 0; border-top-width: 0; }
+@media (min-width: 768px) {
+  #lab-workspace[data-arrangement="side"] #lab-code {
+    border-radius: 0.75rem 0 0 0.75rem;
+  }
+  #lab-workspace[data-arrangement="side"] #lab-result {
+    border-radius: 0 0.75rem 0.75rem 0; border-top-width: 1px; border-left-width: 0;
+  }
 }

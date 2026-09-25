@@ -131,6 +131,22 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
     setSaveNote({ failed: outcome.failed, completedBlock: outcome.marked ? blockId : null });
   }, [moduleId, recordProgress]);
 
+  // ⚑ 25-09-26 (user): an AI-Quiz being written can be CANCELLED. One controller for whichever
+  //   generation is in flight (reader block quiz or the picker's fresh quiz); a newer start or a
+  //   Cancel aborts it. An aborted request is never reported as an error.
+  const aiAbort = useRef<AbortController | null>(null);
+  const beginAiRequest = () => {
+    aiAbort.current?.abort();
+    const controller = new AbortController();
+    aiAbort.current = controller;
+    return controller;
+  };
+  const cancelAiQuiz = useCallback(() => {
+    aiAbort.current?.abort();
+    aiAbort.current = null;
+  }, []);
+  const isAbort = (error: unknown) => (error as Error)?.name === 'AbortError';
+
   /** setAiQuiz (app.js:1048). */
   const setAiQuiz = useCallback(
     (questions: QuizQuestion[], blockId: string | null) => {
@@ -149,11 +165,13 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
       if (token === null) return;
       setAiBlockStatus('Generating questions from this block...');
       setAiBusy(true);
+      const controller = beginAiRequest();
       try {
         const response = await postJson(
           '/api/quiz',
           { module: activeBookFile, chapter: at.chapterIndex + 1, block: at.blockIndex + 1, count: aiQuestionCount },
           { 'X-Edu-Quiz-Token': token },
+          controller.signal,
         );
         const reply = (await response.json()) as { questions?: QuizQuestion[]; error?: string };
         if (!response.ok) throw new Error(reply.error || `Request failed (${response.status}).`);
@@ -164,8 +182,9 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
         setAiBlockStatus('');
         showQuiz('ai');
       } catch (error) {
-        setAiBlockStatus((error as Error).message);
+        setAiBlockStatus(isAbort(error) ? 'AI-Quiz cancelled.' : (error as Error).message);
       } finally {
+        if (aiAbort.current === controller) aiAbort.current = null;
         setAiBusy(false);
       }
     },
@@ -238,16 +257,20 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
               ...(picked.length ? { blocks: picked.map((b) => [b.chapterIndex + 1, b.blockIndex + 1]) } : {}),
             },
           };
+      const controller = beginAiRequest();
       try {
-        const response = await postJson(request.url, request.body, { 'X-Edu-Quiz-Token': token });
+        const response = await postJson(request.url, request.body, { 'X-Edu-Quiz-Token': token }, controller.signal);
         const reply = (await response.json()) as { questions?: QuizQuestion[]; error?: string };
         if (!response.ok) throw new Error(reply.error || `Request failed (${response.status}).`);
         setAiQuiz(reply.questions ?? [], oneBlock ? theoryBlockId(oneBlock.chapterIndex, oneBlock.blockIndex) : null);
         generateMemory.current = { fromSetup: true, selection };
         showQuiz('ai');
       } catch (error) {
-        window.alert(`Could not generate a quiz: ${(error as Error).message}`);
-        showHome();
+        if (!isAbort(error)) window.alert(`Could not generate a quiz: ${(error as Error).message}`);
+        // A cancel started a newer screen already only if another generation replaced this one.
+        if (aiAbort.current === null || aiAbort.current === controller) showHome();
+      } finally {
+        if (aiAbort.current === controller) aiAbort.current = null;
       }
     },
     [hasTitle, aiReady, provider.tokenRequired, provider.model, activeBookFile, aiQuestionCount,
@@ -286,6 +309,7 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
     beginBlockAssessment,
     startBlockAiQuiz,
     startGeneratedQuiz,
+    cancelAiQuiz,
     generateAnother,
     generatedCountFor,
     aiQuestionCount,

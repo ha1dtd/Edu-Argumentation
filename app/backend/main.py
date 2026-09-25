@@ -199,17 +199,27 @@ LAB_PORT = 8798
 _LAB_HOST = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 
 
+# ⚑ 25-09-26: the importer (VPN door only, owner-gated) uses the same bounce: its sign-in redirect
+#   sends ?next=/importer/, and after sign-in this sends the browser back to http://<host>:8769/.
+IMPORTER_PORT = 8769
+
+
 def _lab_redirect(request: Request) -> Response | None:
     path = request.url.path
-    if path != "/lab" and not path.startswith("/lab/"):
+    if path in ("/lab", "/importer") or path.startswith(("/lab/", "/importer/")):
+        pass
+    else:
         return None
     if request.method not in ("GET", "HEAD") or _request_https(request):
         return None
     host = request.headers.get("host", "").rsplit(":", 1)[0]
     if not _LAB_HOST.match(host):
         return None
+    query = f"?{request.url.query}" if request.url.query else ""
+    if path == "/importer" or path.startswith("/importer/"):
+        return RedirectResponse(f"http://{host}:{IMPORTER_PORT}/", status_code=302, headers={"Cache-Control": "no-store"})
     rest = path[len("/lab"):].lstrip("/")
-    target = f"http://{host}:{LAB_PORT}/lab/{rest}" + (f"?{request.url.query}" if request.url.query else "")
+    target = f"http://{host}:{LAB_PORT}/lab/{rest}" + query
     return RedirectResponse(target, status_code=302, headers={"Cache-Control": "no-store"})
 
 
@@ -529,6 +539,28 @@ def api_book_rename(req: Posted = Depends(posted)) -> Response:
             raise ValueError("Unknown book.")
         store.set_book_title(file, title)
         return _json(HTTPStatus.OK, {"file": file, "title": title})
+    except (ValueError, TypeError, OSError, json.JSONDecodeError) as error:
+        return _json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+
+
+# ---- delete (25-09-26, user: OWNER ONLY, from the home page's selected book) -------------------
+@app.post("/api/book/delete")
+def api_book_delete(req: Posted = Depends(posted)) -> Response:
+    """Soft-delete a packaged book (moved to deleted/, restorable). The importer has NO sign-in,
+    so deleting lives HERE, behind the session and the owner flag — never on the importer."""
+    blocked = _gate(req)
+    if blocked:
+        return blocked
+    if not req.account.is_owner:
+        return _json(HTTPStatus.FORBIDDEN, {"error": "Only the owner account can delete a book."})
+    try:
+        file = str(req.read_json().get("file") or "")
+        book = next((b for b in content.list_modules() if b["file"] == file), None)
+        if book is None or not book.get("book"):
+            raise ValueError("Only an imported (packaged) book can be deleted.")
+        moved_to = content.delete_packaged_book(str(book["book"]))
+        print(f"book deleted by owner {req.account.username}: {book['book']} -> deleted/{moved_to}", flush=True)
+        return _json(HTTPStatus.OK, {"deleted": book["book"], "movedTo": moved_to})
     except (ValueError, TypeError, OSError, json.JSONDecodeError) as error:
         return _json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
 
