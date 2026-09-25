@@ -31,6 +31,7 @@ import { useReaderCursor } from '../state/ReaderCursorProvider';
 import { BlockRenderer } from './BlockRenderer';
 import { lessonHasCode } from './labCode';
 import { TheoryToc } from './TheoryToc';
+import { LabDock, labOrigins, labPath } from './LabDock';
 import { ExercisePanel } from '../exercises/ExercisePanel';
 import { exerciseSpec } from '../exercises/exerciseSpec';
 import type { SubBlock } from '../data/types';
@@ -42,6 +43,8 @@ export interface ReaderScreenProps {
   isVisible: boolean;
   /** Phase 04: the assessment + AI quiz actions (shell/useStudyActions). */
   actions: StudyActions;
+  /** 25-09-26: bring the reader to the front (Lab asked to be docked back into it). */
+  onShowReader?: () => void;
 }
 
 /** isWideViewport (app.js:259) — the contents panel is a column at lg+, a drawer below. */
@@ -50,7 +53,7 @@ function isWideViewport(): boolean {
   return typeof window !== 'undefined' && window.matchMedia(WIDE_VIEWPORT).matches;
 }
 
-export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
+export function ReaderScreen({ isVisible, actions, onShowReader }: ReaderScreenProps) {
   const { chapters, blocksOf, assetBase, quizBank, moduleId } = useBookContext();
   const { isBlockComplete } = useProgressContext();
   // ⚠ COLLISION REPAIR (slice A3, 22-09-26). Slices A2 and A3 both edited this file in
@@ -93,6 +96,54 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
   // tocOpen / setTocOpen / syncTocToViewport (app.js:257-275): open by default where there
   // is room for it, closed where there is not; re-synced when the viewport crosses lg.
   const [tocOpen, setTocOpen] = useState<boolean>(isWideViewport);
+  // ⚑ 25-09-26: the Lab panel beside the reading pane (LabDock). null = closed.
+  const [labSrc, setLabSrc] = useState<string | null>(null);
+  const toggleLabRef = useRef<() => void>(() => undefined);
+
+  // Lab talks to us by postMessage (its header glyphs), from the panel or from its own tab:
+  //   lab:close   (panel)      -> close the panel
+  //   lab:popout  (panel)      -> open that Lab page in a NEW browser tab, close the panel
+  //   lab:dock    (Lab's tab)  -> put that Lab page back into the panel here, show the reader
+  // Only messages from a Lab origin are believed; the href is re-validated (labPath).
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (!labOrigins().includes(event.origin)) return;
+      const data = event.data as { type?: unknown; href?: unknown } | null;
+      if (!data || typeof data.type !== 'string') return;
+      if (data.type === 'lab:close') setLabSrc(null);
+      if (data.type === 'lab:popout') {
+        const path = labPath(data.href);
+        if (path) window.open(path, '_blank');
+        setLabSrc(null);
+      }
+      if (data.type === 'lab:dock') {
+        const path = labPath(data.href);
+        if (!path) return;
+        onShowReader?.();
+        setLabSrc(path);
+        window.focus();
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [onShowReader]);
+
+  // "Back to Learn" from a Lab tab this window did not open arrives as ?lab=/lab/... (no opener to
+  // message). Dock it once, then drop the parameter from the address bar.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const path = labPath(params.get('lab'));
+    if (!params.has('lab')) return;
+    params.delete('lab');
+    const rest = params.toString();
+    window.history.replaceState(window.history.state, '', window.location.pathname + (rest ? `?${rest}` : '') + window.location.hash);
+    if (path) {
+      onShowReader?.();
+      setLabSrc(path);
+    }
+    // once, on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => {
     const query = window.matchMedia(WIDE_VIEWPORT);
     const sync = () => setTocOpen(query.matches);
@@ -144,6 +195,11 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
           focusAfterToggle.current = open ? 'toggle' : 'panel';
           return !open;
         });
+      } else if (event.key === ']') {
+        // ⚑ 25-09-26 (user): `]` toggles the Lab panel, as `[` toggles the contents sidebar.
+        if (event.repeat || typing(event)) return;
+        event.preventDefault();
+        toggleLabRef.current();
       } else if (event.key === 'Escape') {
         if (typing(event)) return;
         setTocOpen((open) => {
@@ -164,6 +220,17 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
   const exercises = block ? exerciseSpec(block) : null;
   const subBlocks: SubBlock[] = Array.isArray(block?.blocks) ? (block.blocks as SubBlock[]) : [];
   const blockId = `ch${String(cursor.chapterIndex + 1).padStart(2, '0')}-b${String(cursor.blockIndex + 1).padStart(2, '0')}`;
+  // `]`: close the Lab panel if open; else open it on this lesson's code — or, for a lesson with
+  // no code, on this book (Lab then shows the book's first lesson with code). Kept in a ref so the
+  // key listener (registered once per visibility) always sees the current lesson.
+  toggleLabRef.current = () => {
+    if (labSrc) {
+      setLabSrc(null);
+      return;
+    }
+    const book = `/lab/${encodeURIComponent(moduleId)}/`;
+    setLabSrc(block && lessonHasCode(block) ? `${book}${blockId}` : book);
+  };
 
   // renderTheoryBlock clears #ai-block-status on every block change (app.js:2297).
   const { setAiBlockStatus } = actions;
@@ -289,8 +356,15 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
                 href={`/lab/${encodeURIComponent(moduleId)}/${blockId}`}
                 target="_blank"
                 rel="noopener"
-                title="Open this lesson's code in Lab — edit it and run it (new tab)"
+                title="Open this lesson's code in Lab, in this window ( ] )"
+                aria-keyshortcuts="]"
                 aria-label="Lab"
+                onClick={(event) => {
+                  // ⚑ 25-09-26 (user): Lab opens in THIS window on every screen; a new tab only from
+                  //   Lab's own "open in a new tab" glyph. (Middle-click still opens a tab.)
+                  event.preventDefault();
+                  setLabSrc(event.currentTarget.getAttribute('href'));
+                }}
                 className="shrink-0 min-h-[44px] min-w-[44px] rounded-lg border border-gray-600 text-gray-300 hover:text-white hover:border-brand-600 transition-colors active:scale-95 flex items-center justify-center"
               >
                 {/* ⚑ 25-09-26 (user): a lab-flask GLYPH, not the word — also frees the title's width at 390 px. */}
@@ -372,6 +446,7 @@ export function ReaderScreen({ isVisible, actions }: ReaderScreenProps) {
           </p>
         </div>
       </article>
+      {labSrc ? <LabDock src={labSrc} /> : null}
     </>
   );
 

@@ -52,16 +52,17 @@ const errors = [];
   await page.goto(`http://${VPN}:8767${LESSON.reader}`, { waitUntil: 'networkidle' });
   await page.waitForSelector('#lab-open-btn', { timeout: 20_000 });
   const href = await page.getAttribute('#lab-open-btn', 'href');
-  const [tab] = await Promise.all([ctx.waitForEvent('page'), page.click('#lab-open-btn')]);
-  tab.on('pageerror', (e) => errors.push(String(e)));
+  // ⚑ 25-09-26: the Lab button opens Lab IN THIS WINDOW (reader/LabDock.tsx iframe), not a new tab.
+  await page.click('#lab-open-btn');
+  const tab = await (await page.waitForSelector('#lab-dock-frame', { timeout: 20_000 })).contentFrame();
   await tab.waitForLoadState('networkidle');
   await tab.waitForSelector('#lab-editor', { timeout: 20_000 }).catch(() => {});
   const url = tab.url();
   const title = (await tab.textContent('#lab-lesson-title').catch(() => ''))?.trim() || '';
   const editor = await tab.$eval('#lab-editor', (e) => e.value).catch(() => '');
   const code = await tab.evaluate(async (u) => (await (await fetch(u, { credentials: 'same-origin' })).json()).code, `/lab/api/books/${LESSON.book}/lessons/${LESSON.id}`).catch(() => null);
-  await tab.screenshot({ path: path.join(SHOTS, 'lab-from-vpn-origin-1440.png') });
-  check('S-vpn-lab VPN reader (http :8767) Lab button -> new tab on http://<host>:8798/lab/<book>/<lesson> showing that lesson\'s code',
+  await page.screenshot({ path: path.join(SHOTS, 'lab-from-vpn-origin-1440.png') });
+  check('S-vpn-lab VPN reader (http :8767) Lab button -> panel in the same window framing http://<host>:8798/lab/<book>/<lesson> showing that lesson\'s code',
     url === `http://${VPN}:8798/lab/${LESSON.book}/${LESSON.id}` && title.startsWith(`${LESSON.n}. `) && Boolean(code) && editor === code,
     JSON.stringify({ href, url, title: title.slice(0, 50), codeMatches: Boolean(code) && editor === code }));
   await ctx.close();
@@ -109,14 +110,15 @@ const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(`https://${PUB}${LESSON.reader}`, { waitUntil: 'networkidle' });
   await page.waitForSelector('#lab-open-btn', { timeout: 20_000 });
-  const [tab] = await Promise.all([ctx.waitForEvent('page'), page.click('#lab-open-btn')]);
-  tab.on('pageerror', (e) => errors.push(String(e)));
+  // ⚑ 25-09-26: the Lab button opens Lab IN THIS WINDOW (reader/LabDock.tsx iframe), not a new tab.
+  await page.click('#lab-open-btn');
+  const tab = await (await page.waitForSelector('#lab-dock-frame', { timeout: 20_000 })).contentFrame();
   await tab.waitForLoadState('networkidle');
   await tab.waitForSelector('#lab-editor', { timeout: 20_000 }).catch(() => {});
   const url = tab.url();
   const title = (await tab.textContent('#lab-lesson-title').catch(() => ''))?.trim() || '';
-  await tab.screenshot({ path: path.join(SHOTS, 'lab-from-public-1440.png') });
-  check('S-public-lab public reader (https) Lab button -> https://<public-ip>/lab/<book>/<lesson> showing Lab',
+  await page.screenshot({ path: path.join(SHOTS, 'lab-from-public-1440.png') });
+  check('S-public-lab public reader (https) Lab button -> panel framing https://<public-ip>/lab/<book>/<lesson> showing Lab',
     url === `https://${PUB}/lab/${LESSON.book}/${LESSON.id}` && title.startsWith(`${LESSON.n}. `), JSON.stringify({ url, title: title.slice(0, 50) }));
   await ctx.close();
 }

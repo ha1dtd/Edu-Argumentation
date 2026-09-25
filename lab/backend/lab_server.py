@@ -276,6 +276,18 @@ def _login_base(request: Request) -> str:
     return f"http://{host}:{STUDY_PORT}" if host else ""
 
 
+# ⚑ 25-09-26 (user): the study app shows Lab in a panel beside the lesson (app/frontend
+#   reader/LabDock.tsx). Only the study app may frame Lab: its own origin (public door, nginx) and,
+#   on the direct VPN door, the study app on the same host at :STUDY_PORT. Nobody else (clickjacking).
+@app.middleware("http")
+async def frame_policy(request: Request, call_next):
+    response = await call_next(request)
+    host = _direct_host(request)
+    parents = "'self'" + (f" http://{host}:{STUDY_PORT}" if host else "")
+    response.headers["Content-Security-Policy"] = f"frame-ancestors {parents}"
+    return response
+
+
 UNAVAILABLE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Lab</title></head>
 <body style="background:#111827;color:#cbd5e1;font-family:sans-serif;padding:3rem">
 <h1>Lab</h1><p>The sign-in service is unavailable right now. Try again in a minute.</p></body></html>"""

@@ -1,4 +1,5 @@
 import type { Book } from '../api';
+import type { ReactNode } from 'react';
 import type { SelectorPlace } from '../layout';
 
 // ⚑ 25-09-26 (user): THREE dropdowns — Book, Chapter, Lesson — and nothing else (the lesson list
@@ -9,7 +10,7 @@ import type { SelectorPlace } from '../layout';
 // the glyph button switches, and only shows where a sidebar can exist (lg+).
 const SELECT =
   'lab-select w-full min-w-0 min-h-[44px] rounded-lg border border-gray-600 bg-gray-900 pl-3 py-2 text-sm text-white focus:border-brand-600 focus:outline-none focus:ring-1 focus:ring-brand-600 transition-colors disabled:opacity-50';
-const CAPTION = 'min-w-0 flex flex-col gap-1 text-xs uppercase tracking-wider text-gray-400';
+const CAPTION = 'min-w-0 flex-1 flex flex-col gap-1 text-xs uppercase tracking-wider text-gray-400';
 
 function PlaceGlyph({ place }: { place: SelectorPlace }) {
   // Draws the layout the button switches TO.
@@ -32,6 +33,8 @@ export function Selector(props: {
   onChapter: (n: number) => void;
   onLesson: (id: string) => void;
   onPlace: (place: SelectorPlace) => void;
+  /** 25-09-26: Lab's window glyphs (close / new tab) when it has no header — inside the Learn window. */
+  extra?: ReactNode;
 }) {
   const book = props.books.find((b) => b.id === props.bookId) ?? null;
   const chapter = book?.chapters.find((c) => c.n === props.chapterN) ?? null;
@@ -42,11 +45,16 @@ export function Selector(props: {
     <div
       id="lab-selector"
       data-place={props.place}
-      className={top ? 'grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-[repeat(3,minmax(0,1fr))_auto] gap-3 items-end' : 'flex flex-col gap-3'}
+      // ⚑ 25-09-26 (user): the three menus SHRINK to the room left (flex-1, min-w-0) so the trailing
+      //   buttons stay on the same row at EVERY width — never a column; a long name ends in an ellipsis.
+      className={top ? 'flex flex-row items-end gap-2 sm:gap-3' : 'flex flex-col gap-3'}
     >
       {!top ? (
-        <div className="hidden lg:flex justify-end">
-          <PlaceButton other={other} onPlace={props.onPlace} />
+        <div className={`${props.extra ? 'flex' : 'hidden lg:flex'} shrink-0 items-center justify-end gap-2`}>
+          <div className="hidden lg:flex">
+            <PlaceButton other={other} onPlace={props.onPlace} />
+          </div>
+          {props.extra}
         </div>
       ) : null}
       <label className={CAPTION}>
@@ -99,8 +107,11 @@ export function Selector(props: {
         </select>
       </label>
       {top ? (
-        <div className="hidden lg:flex">
-          <PlaceButton other={other} onPlace={props.onPlace} />
+        <div className={`${props.extra ? 'flex' : 'hidden lg:flex'} shrink-0 items-center justify-end gap-2`}>
+          <div className="hidden lg:flex">
+            <PlaceButton other={other} onPlace={props.onPlace} />
+          </div>
+          {props.extra}
         </div>
       ) : null}
     </div>

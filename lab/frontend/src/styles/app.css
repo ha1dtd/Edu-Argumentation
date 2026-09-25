@@ -20,11 +20,24 @@ body { background-color: #111827; color: #cbd5e1; -webkit-font-smoothing: antial
   #lab-main { min-height: 0; overflow: hidden; }
   #lab-aside { min-height: 0; max-height: none; }
   #lab-section { min-height: 0; }
+  #lab-stage { min-height: 0; }
   #lab-workspace { flex: 1 1 0; min-height: 0; }
   #lab-workspace[data-rows="split"] { grid-template-rows: minmax(0, 45fr) minmax(0, 55fr); }
   #lab-workspace[data-rows="one"] { grid-template-rows: minmax(0, 1fr); }
   .lab-pane { height: auto; min-height: 0; }
 }
+
+/* ⚑ 25-09-26: inside the study app's Learn window (an iframe, usually < 1024 px wide) Lab ALWAYS
+   fills its frame — body.lab-fill is set by main.tsx when embedded. Same rules as above. */
+body.lab-fill { height: 100vh; height: 100dvh; overflow: hidden; }
+body.lab-fill #lab-main { min-height: 0; overflow: hidden; }
+body.lab-fill #lab-aside { min-height: 0; max-height: none; }
+body.lab-fill #lab-section { min-height: 0; }
+body.lab-fill #lab-stage { min-height: 0; }
+body.lab-fill #lab-workspace { flex: 1 1 0; min-height: 0; }
+body.lab-fill #lab-workspace[data-rows="split"] { grid-template-rows: minmax(0, 45fr) minmax(0, 55fr); }
+body.lab-fill #lab-workspace[data-rows="one"] { grid-template-rows: minmax(0, 1fr); }
+body.lab-fill .lab-pane { height: auto; min-height: 0; }
 
 /* ── OVERLAY SCROLLBARS, APP-WIDE (25-09-26, user; ported from the CoreX console index.css) ──
    Invisible at rest; a thumb fades in PER AXIS while that axis is scrolled or while the pointer
@@ -67,17 +80,31 @@ pre.is-scrolling-y, pre.is-scrolling-x, pre.is-scroll-hover-y, pre.is-scroll-hov
   background-repeat: no-repeat; background-position: right 0.6rem center; background-size: 1.1rem;
 }
 
-/* ⚑ 25-09-26 (user): Code and Result TOUCH — no gap, one shared 1px border, and only the outer
- * corners rounded — in BOTH modes. Stacked (and side-by-side below md, where the grid is one
- * column): code on top, result below. Side by side (md+): code left, result right.
- * Id selectors outrank the cards' Tailwind rounded-xl / border utilities. */
-#lab-workspace #lab-code { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-#lab-workspace #lab-result { border-top-left-radius: 0; border-top-right-radius: 0; border-top-width: 0; }
+/* ⚑ 25-09-26 (user): ONE joined block — the menu box, Code and Result touch with a single shared
+ * 1px border and only the block's OUTER corners rounded, in every combination:
+ *   menus on TOP (and "sidebar" below lg, where it renders on top): menus / [Code | Result] or
+ *     menus / Code / Result;
+ *   menus as a SIDEBAR (lg+): menus | [Code | Result]  or  menus | (Code / Result).
+ * Id selectors (#lab-stage ... #lab-code) outrank the cards' Tailwind rounded-xl / border utilities.
+ * Only when a lesson is open (data-lesson="yes"); the empty-state card keeps its own corners. */
+#lab-stage[data-lesson="yes"] #lab-code,
+#lab-stage[data-lesson="yes"] #lab-result { border-radius: 0; }
+#lab-stage[data-lesson="yes"] #lab-result { border-top-width: 0; }            /* stacked: under Code */
+
+/* menus ON TOP */
+#lab-stage[data-lesson="yes"] #lab-aside { border-radius: 0.75rem 0.75rem 0 0; }
+#lab-stage[data-lesson="yes"] #lab-code { border-top-width: 0; }
+#lab-stage[data-lesson="yes"] #lab-result { border-radius: 0 0 0.75rem 0.75rem; }  /* stacked: bottom */
 @media (min-width: 768px) {
-  #lab-workspace[data-arrangement="side"] #lab-code {
-    border-radius: 0.75rem 0 0 0.75rem;
-  }
-  #lab-workspace[data-arrangement="side"] #lab-result {
-    border-radius: 0 0.75rem 0.75rem 0; border-top-width: 1px; border-left-width: 0;
-  }
+  #lab-stage[data-lesson="yes"] #lab-workspace[data-arrangement="side"] #lab-code { border-radius: 0 0 0 0.75rem; }
+  #lab-stage[data-lesson="yes"] #lab-workspace[data-arrangement="side"] #lab-result { border-radius: 0 0 0.75rem 0; border-left-width: 0; }
+}
+
+/* menus as a SIDEBAR (lg+ only — below lg the sidebar renders on top, rules above apply) */
+@media (min-width: 1024px) {
+  #lab-stage[data-lesson="yes"][data-place="sidebar"] #lab-aside { border-radius: 0.75rem 0 0 0.75rem; border-right-width: 0; }
+  #lab-stage[data-lesson="yes"][data-place="sidebar"] #lab-code { border-top-width: 1px; border-radius: 0 0.75rem 0 0; }
+  #lab-stage[data-lesson="yes"][data-place="sidebar"] #lab-result { border-radius: 0 0 0.75rem 0; }
+  #lab-stage[data-lesson="yes"][data-place="sidebar"] #lab-workspace[data-arrangement="side"] #lab-code { border-radius: 0; }
+  #lab-stage[data-lesson="yes"][data-place="sidebar"] #lab-workspace[data-arrangement="side"] #lab-result { border-radius: 0 0.75rem 0.75rem 0; border-top-width: 1px; border-left-width: 0; }
 }

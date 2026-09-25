@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, api } from './api';
 import type { Book, LessonDetail } from './api';
-import { Header } from './components/Header';
+import { EMBEDDED, Header, WindowControls } from './components/Header';
 import { Selector } from './components/Selector';
 import { CodeEditor } from './components/CodeEditor';
 import { ResultPanel } from './components/ResultPanel';
@@ -52,6 +52,35 @@ export function App() {
   const [result, setResult] = useState<ResultState>({ kind: 'idle' });
   const [layout, setLayout] = useState<Layout>(loadLayout);
   const [copied, setCopied] = useState(false);
+  // ⚑ 25-09-26 (user): a divider between Code and Result, in both layouts. Share of the CODE pane,
+  //   per layout, remembered. Stacked starts at 55 % (was a fixed 45 %: "code is very short").
+  const [splits, setSplits] = useState<{ side: number; stacked: number }>(() => {
+    try {
+      const saved = JSON.parse(readStore('lab:split') || '{}') as { side?: number; stacked?: number };
+      const ok = (v: unknown, d: number) => (typeof v === 'number' && v >= 0.2 && v <= 0.8 ? v : d);
+      return { side: ok(saved.side, 0.5), stacked: ok(saved.stacked, 0.55) };
+    } catch {
+      return { side: 0.5, stacked: 0.55 };
+    }
+  });
+  const [dragging, setDragging] = useState(false);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const [wide, setWide] = useState(() => window.matchMedia('(min-width: 768px)').matches);
+  const [fills, setFills] = useState(() => EMBEDDED || window.matchMedia('(min-width: 1024px) and (min-height: 640px)').matches);
+  useEffect(() => {
+    const md = window.matchMedia('(min-width: 768px)');
+    const fill = window.matchMedia('(min-width: 1024px) and (min-height: 640px)');
+    const sync = () => {
+      setWide(md.matches);
+      setFills(EMBEDDED || fill.matches);
+    };
+    md.addEventListener('change', sync);
+    fill.addEventListener('change', sync);
+    return () => {
+      md.removeEventListener('change', sync);
+      fill.removeEventListener('change', sync);
+    };
+  }, []);
   const runId = useRef(0);
 
   const book = useMemo(() => books?.find((b) => b.id === bookId) ?? null, [books, bookId]);
@@ -195,6 +224,23 @@ export function App() {
   const twoColumns = layout.arrangement === 'side';
   // Stacked: split the height (code 45 % / result 55 %, app.css). Side by side: one row.
   const split = layout.arrangement === 'stacked';
+  // Which way the Code/Result seam can be dragged right now (null = no divider: one column that
+  // scrolls with the page).
+  const axis: 'x' | 'y' | null = twoColumns ? (wide ? 'x' : null) : fills ? 'y' : null;
+  const share = twoColumns ? splits.side : splits.stacked;
+  const track = `minmax(0, ${share}fr) minmax(0, ${1 - share}fr)`;
+  const workspaceStyle = axis === 'x' ? { gridTemplateColumns: track } : axis === 'y' ? { gridTemplateRows: track } : undefined;
+  const dragTo = (clientX: number, clientY: number) => {
+    const box = workspaceRef.current?.getBoundingClientRect();
+    if (!box || !axis) return;
+    const raw = axis === 'x' ? (clientX - box.left) / box.width : (clientY - box.top) / box.height;
+    const next = Math.min(0.8, Math.max(0.2, raw));
+    setSplits((old) => (twoColumns ? { ...old, side: next } : { ...old, stacked: next }));
+  };
+  const endDrag = () => {
+    setDragging(false);
+    writeStore('lab:split', JSON.stringify(splits));
+  };
   const sidebar = layout.selector === 'sidebar';
 
   const selector = books ? (
@@ -212,45 +258,63 @@ export function App() {
       }}
       onLesson={selectLesson}
       onPlace={changePlace}
+      extra={
+        EMBEDDED ? (
+          <>
+            <LayoutToggle arrangement={layout.arrangement} onChange={changeArrangement} />
+            <WindowControls />
+          </>
+        ) : undefined
+      }
     />
   ) : (
-    <p className="text-sm text-gray-400">{loadError ?? 'Loading books…'}</p>
+    <div className="flex items-center justify-between gap-3">
+      <p className="text-sm text-gray-400">{loadError ?? 'Loading books…'}</p>
+      {EMBEDDED ? <WindowControls /> : null}
+    </div>
   );
 
   return (
     <>
-      <Header name={name} />
-      <main id="lab-main" className={`flex-1 flex flex-col ${sidebar ? 'lg:flex-row gap-6' : 'gap-4'} p-4 sm:p-6 lg:px-8 lg:py-6 min-h-0`}>
-        {/* ⚑ 25-09-26: the three selectors — one short row on top, or a left sidebar (lg+). Below lg the
-            sidebar mode also renders on top: a phone has no room for a column. */}
-        <aside
+      {EMBEDDED ? null : <Header name={name} />}
+      {/* ⚑ 25-09-26 (user): 6 px page padding (the Learn page's reading pane uses 6 px), and the menu box
+          JOINS the Code/Result widgets — on top of both (top row) or left of them (sidebar, lg+) — with
+          one shared border and only the outer corners rounded (app.css, #lab-stage). The notice and the
+          standalone title row sit above that joined block. */}
+      <main id="lab-main" className="flex-1 flex flex-col gap-1.5 p-1.5 min-h-0">
+        {notice ? (
+          <p id="lab-notice" className="rounded-lg border border-gray-600 bg-gray-800 px-4 py-3 text-sm text-gray-200">
+            {notice}
+          </p>
+        ) : null}
+        {/* ⚑ 25-09-26 (user): inside the Learn window the lesson title is not repeated — the reader
+            beside it shows it; the layout toggle moves into the selector row (see `extra`). */}
+        {lessonRef && detail ? (
+          <div className={EMBEDDED ? 'hidden' : 'flex items-center gap-4'}>
+            <h2 id="lab-lesson-title" className="min-w-0 flex-1 break-words text-2xl sm:text-3xl text-white font-light">
+              {lessonRef.n}. {lessonRef.title}
+            </h2>
+            <LayoutToggle arrangement={layout.arrangement} onChange={changeArrangement} />
+          </div>
+        ) : null}
+        <div id="lab-stage" data-place={layout.selector} data-lesson={lessonRef && detail ? 'yes' : 'no'} className={`flex-1 min-h-0 flex flex-col ${sidebar ? 'lg:flex-row' : ''}`}>
+          <aside
           id="lab-aside"
           data-place={layout.selector}
-          className={sidebar ? 'lg:w-72 shrink-0 flex flex-col gap-4 bg-gray-800 border border-gray-700 rounded-xl p-4 lg:overflow-y-auto' : 'shrink-0 bg-gray-800 border border-gray-700 rounded-xl px-4 py-3'}
+          className={sidebar ? 'lg:w-72 shrink-0 flex flex-col gap-3 bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 lg:p-3 lg:overflow-y-auto' : 'shrink-0 bg-gray-800 border border-gray-700 rounded-xl px-3 py-2'}
         >
           {selector}
           {books && books.length === 0 ? <p className="text-sm text-gray-400">No book has code to run yet.</p> : null}
         </aside>
-
-        <section id="lab-section" className="flex-1 min-w-0 flex flex-col gap-4">
-          {notice ? (
-            <p id="lab-notice" className="rounded-lg border border-gray-600 bg-gray-800 px-4 py-3 text-sm text-gray-200">
-              {notice}
-            </p>
-          ) : null}
-          {lessonRef && detail ? (
-            <>
-              <div className="flex items-center gap-4">
-                <h2 id="lab-lesson-title" className="min-w-0 flex-1 break-words text-2xl sm:text-3xl text-white font-light">
-                  {lessonRef.n}. {lessonRef.title}
-                </h2>
-                <LayoutToggle arrangement={layout.arrangement} onChange={changeArrangement} />
-              </div>
+          <section id="lab-section" className="flex-1 min-w-0 min-h-0 flex flex-col">
+            {lessonRef && detail ? (
               <div
                 id="lab-workspace"
                 data-arrangement={layout.arrangement}
                 data-rows={split ? 'split' : 'one'}
-                className={`grid gap-0 grid-cols-1 ${twoColumns ? 'md:grid-cols-2' : ''}`}
+                ref={workspaceRef}
+                style={workspaceStyle}
+                className={`relative grid gap-0 grid-cols-1 ${twoColumns ? 'md:grid-cols-2' : ''} ${dragging ? 'select-none' : ''}`}
               >
                 <div id="lab-code-pane" className="lab-pane min-w-0 flex flex-col">
                   <CodeEditor
@@ -265,11 +329,31 @@ export function App() {
                     copied={copied}
                   />
                 </div>
+                {axis ? (
+                  <div
+                    id="lab-split-divider"
+                    role="separator"
+                    aria-orientation={axis === 'x' ? 'vertical' : 'horizontal'}
+                    aria-label="Drag to resize Code and Result"
+                    title="Drag to resize"
+                    onPointerDown={(event) => {
+                      event.preventDefault();
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                      setDragging(true);
+                    }}
+                    onPointerMove={(event) => dragging && dragTo(event.clientX, event.clientY)}
+                    onPointerUp={endDrag}
+                    onPointerCancel={endDrag}
+                    style={axis === 'x' ? { left: `calc(${share * 100}% - 5px)` } : { top: `calc(${share * 100}% - 5px)` }}
+                    className={`group absolute z-10 flex items-center justify-center ${axis === 'x' ? 'top-0 bottom-0 w-[10px] cursor-col-resize' : 'left-0 right-0 h-[10px] cursor-row-resize'}`}
+                  >
+                    <span className={`rounded-full transition-colors ${dragging ? 'bg-brand-600' : 'bg-transparent group-hover:bg-brand-600'} ${axis === 'x' ? 'w-[3px] h-full' : 'h-[3px] w-full'}`} />
+                  </div>
+                ) : null}
                 <div id="lab-result-pane" className="lab-pane min-w-0 flex flex-col">
                   <ResultPanel state={result} onCopy={copy} />
                 </div>
               </div>
-            </>
           ) : books && !lessonId ? (
             <div className="rounded-xl bg-gray-800 border border-gray-700 p-8 text-gray-300">
               <h2 className="text-2xl text-white font-light mb-2">Lab</h2>
@@ -277,7 +361,8 @@ export function App() {
               <p className="mt-2 text-sm text-gray-400">Your edits stay in this browser. Each person gets their own kernel.</p>
             </div>
           ) : null}
-        </section>
+          </section>
+        </div>
       </main>
     </>
   );

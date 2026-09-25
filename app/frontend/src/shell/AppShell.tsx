@@ -526,7 +526,15 @@ export function AppShell() {
           visible={screen === 'tutorial'}
           className="w-full flex-1 min-h-0 flex flex-col lg:flex-row gap-2"
         >
-          <ReaderScreen isVisible={screen === 'tutorial'} actions={actions} />
+          <ReaderScreen
+            isVisible={screen === 'tutorial'}
+            actions={actions}
+            onShowReader={() => {
+              enterReader();
+              setActiveTab('learn');
+              setScreen('tutorial');
+            }}
+          />
         </Screen>
 
         {/* ⚑ Phase 06a — the Account page (ruling R25). Same frame as Settings. */}

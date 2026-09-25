@@ -2,7 +2,7 @@ import type { Arrangement } from '../layout';
 
 // ⚑ 25-09-26 (user): two GLYPHS, no text — side by side = two columns, stacked = two rows.
 //   Sits at the right end of the lesson-title row. The name is the tooltip + aria-label.
-const BTN = 'min-h-[36px] min-w-[40px] flex items-center justify-center transition-colors';
+const BTN = 'min-h-[42px] min-w-[44px] flex items-center justify-center transition-colors'; // 25-09-26: same height as the window glyphs
 const on = 'bg-gray-700 text-white';
 const off = 'text-gray-400 hover:text-white';
 
