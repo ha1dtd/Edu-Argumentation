@@ -402,7 +402,17 @@ else RC=1; fi
 #   ⛔ Its row in gate-r-self.mjs's RS-COUNT table moves WITH this line, always.
 echo "== write harness, fresh process (for gate-r-route.mjs) =="
 if start_write_harness; then
-  R_STUB_PORT="$SPORT" run_suite gate-r-route.mjs rroute "${R_ROUTE_COUNT:-10}"; RTOTAL=$(( RTOTAL + ${COUNT[rroute]} ))
+  # ⚑ 10 -> 12 on 29-09-26 (study-rooms-qna P2): M-QNA-NORMAL / M-QNA-CLAUDE.
+  R_STUB_PORT="$SPORT" run_suite gate-r-route.mjs rroute "${R_ROUTE_COUNT:-12}"; RTOTAL=$(( RTOTAL + ${COUNT[rroute]} ))
+else RC=1; fi
+# ⚑ 29-09-26 (study-rooms-qna P2) — THE Q&A EXAMINER API. A FOURTH fresh write harness, and the ONLY
+#   process anywhere that sets QNA_TEST_DEADLINE_S / QNA_TEST_RETRY_MIN_S (the budget case needs a
+#   10 s deadline; the live unit never carries them). The assignments are scoped to this one call.
+#   R_NO_PRELOAD=1: the suite sends its own cookie (and none, for its 401 case).
+#   ⛔ Its row in gate-r-self.mjs's RS-COUNT table moves WITH this line, always.
+echo "== write harness, fresh process, Q&A test budget (for gate-r-qna.mjs) =="
+if QNA_TEST_DEADLINE_S=10 QNA_TEST_RETRY_MIN_S=5 start_write_harness; then
+  R_NO_PRELOAD=1 R_STUB_PORT="$SPORT" run_suite gate-r-qna.mjs rqna "${R_QNA_COUNT:-28}"; RTOTAL=$(( RTOTAL + ${COUNT[rqna]} ))
 else RC=1; fi
 kill_on_port "$WPORT"; kill_stub
 
@@ -416,13 +426,14 @@ if [ -f "$GATES_DIR/gate-r-self.mjs" ]; then
   # 18 -> 19 on 23-09-26 (model routing per account): the gate-r-route.mjs row.
   # 19 -> 20 on 23-09-26 (style parity): the gate-r-style.mjs row.
   # 20 -> 21 on 23-09-26 (public access via nginx): the gate-r-proxy.mjs row.
-  run_suite gate-r-self.mjs rself "${R_SELF_COUNT:-21}"; RTOTAL=$(( RTOTAL + ${COUNT[rself]} ))
+  # 21 -> 22 on 29-09-26 (study-rooms-qna P2): the gate-r-qna.mjs row.
+  run_suite gate-r-self.mjs rself "${R_SELF_COUNT:-22}"; RTOTAL=$(( RTOTAL + ${COUNT[rself]} ))
 fi
 
 echo
 echo "===================== R- SUMMARY ====================="
 echo " R- vector     : $RTOTAL"
-echo " transcripts   : $OUT_DIR/{rsep,rread,rcontract,rdom,rro,rtrap,rjourney,rtheme,rmodal,rr6,rstyle,rauth,rwriteui,rparity,rwrite,rroute,rself}.txt"
+echo " transcripts   : $OUT_DIR/{rsep,rread,rcontract,rdom,rro,rtrap,rjourney,rtheme,rmodal,rr6,rstyle,rauth,rwriteui,rparity,rwrite,rroute,rqna,rself}.txt"
 echo " local preview : $R_BASE    remote: $R_REMOTE"
 [ "$RC" -eq 0 ] && echo " RESULT        : ALL GREEN" || echo " RESULT        : FAILED"
 echo "======================================================"

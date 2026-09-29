@@ -15,6 +15,8 @@
 import { useEffect } from 'react';
 import { signOut } from '../data/writes';
 import type { NavTab } from './AppShell';
+import { ADDON_LIST } from './screens.meta';
+import type { AddonId } from './screens.meta';
 
 export interface HeaderProps {
   activeTab: NavTab;
@@ -104,6 +106,8 @@ const NAV_TABS: ReadonlyArray<{ id: string; label: string; tab: NavTab }> = [
   // ⚑ Phase 06a (ruling R25): "The top bar would get new entry called Account". Same button, same
   //   classes as its neighbours; :8767 has no such entry, which is a named parity delta.
   { id: 'nav-account', label: 'ACCOUNT', tab: 'account' },
+  // Add-on tabs (study-rooms-qna P1): after ACCOUNT, before #nav-logout (rendered separately, stays last).
+  ...ADDON_LIST.map((m) => ({ id: m.navId, label: m.label, tab: m.id as AddonId })),
 ];
 
 export function Header(props: HeaderProps) {

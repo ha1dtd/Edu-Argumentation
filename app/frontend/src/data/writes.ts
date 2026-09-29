@@ -14,6 +14,7 @@
 // PROGRESS_PENDING_KEY, generationToken, adminToken, rememberAdminToken.
 
 import { bounceToLogin } from './client';
+import type { AddonWriteRoute } from '../shell/screens.meta';
 
 export type WriteRoute =
   | '/api/progress'
@@ -31,7 +32,9 @@ export type WriteRoute =
   | '/api/accounts'
   // ⚑ 23-09-26: owner-only per-account Claude access (which 9router combos the account's AI uses).
   | '/api/accounts/claude-access'
-  | '/api/wrong-answers';
+  | '/api/wrong-answers'
+  // Add-on screens' own POST routes (study-rooms-qna P1 registry; empty in P1).
+  | AddonWriteRoute;
 // ⚑ Ruling R24 (23-09-26): /api/run, /api/run/stop, /api/run/reset-kernel are GONE — the code
 //   runner was removed. Seven write routes remain.
 

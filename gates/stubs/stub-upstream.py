@@ -18,6 +18,13 @@ not configuration ("the file says X").
                                  is HTTP 200 with EMPTY content — so the stub streams too)
   POST /run /interrupt /restart -> runner JSON
 
+  POST /__script              -> ⚑ study-rooms-qna P2 (29-09-26): SCRIPTED-REPLY QUEUE for fault
+                                 injection. Body {"replies": [{"text": "...", "delay_s": 0}, ...],
+                                 "reset": true|false}. The next N completions return those texts in
+                                 order (same streamed format), each after its own delay_s. An empty
+                                 queue = the default behaviour above, unchanged. {"reset": true} with
+                                 no replies clears the queue.
+
 Env: STUB_PORT (default 8797) · STUB_LOG (JSON lines, required) · STUB_DELAY (seconds, 0).
 Never binds anything but 127.0.0.1.
 """
@@ -26,12 +33,39 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.getenv("STUB_PORT", "8797"))
 LOG = os.environ["STUB_LOG"]
 DELAY = float(os.getenv("STUB_DELAY", "0"))
+SCRIPT: list[dict] = []
+SCRIPT_LOCK = threading.Lock()
+
+
+def next_scripted() -> dict | None:
+    with SCRIPT_LOCK:
+        return SCRIPT.pop(0) if SCRIPT else None
+
+
+def qna_kind(system: str) -> str | None:
+    """The Q&A examiner's three prompts (app/backend/addons/qna.py)."""
+    if "Q&A examiner" not in system:
+        return None
+    if "Write ONE open question" in system:
+        return "qna-question"
+    if "Grade the learner" in system:
+        return "qna-grade"
+    return "qna-ask"
+
+
+QNA_DEFAULT = {
+    "qna-question": "Explain the main idea of this lesson in your own words.",
+    "qna-grade": json.dumps({"score": 9, "right": ["stub point"], "almost": [], "missing": [], "wrong": [],
+                             "feedback": "Stub grade."}),
+    "qna-ask": "Stub answer from the theory.",
+}
 
 
 def record(entry: dict) -> None:
@@ -64,10 +98,32 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length) or b"{}")
+        if self.path == "/__script":
+            with SCRIPT_LOCK:
+                if payload.get("reset"):
+                    SCRIPT.clear()
+                SCRIPT.extend(r for r in payload.get("replies") or [] if isinstance(r, dict))
+                queued = len(SCRIPT)
+            self._send(200, json.dumps({"queued": queued}).encode(), "application/json")
+            return
         if DELAY:
             time.sleep(DELAY)
         if self.path.endswith("/chat/completions"):
             system = " ".join(str(m.get("content")) for m in payload.get("messages", []) if m.get("role") == "system")
+            scripted = next_scripted()
+            qkind = qna_kind(system)
+            if scripted is not None or qkind:
+                kind = qkind or "scripted"
+                text = str(scripted.get("text", "")) if scripted is not None else QNA_DEFAULT[qkind]
+                record({"kind": kind, "model": payload.get("model"), "stream": payload.get("stream"),
+                        "auth": self.headers.get("Authorization", "")[:7], "scripted": scripted is not None})
+                if scripted is not None and scripted.get("delay_s"):
+                    time.sleep(float(scripted["delay_s"]))
+                chunks = [text[i:i + 40] for i in range(0, len(text), 40)] or [""]
+                body = "".join(f"data: {json.dumps({'choices': [{'delta': {'content': c}}]})}\n\n" for c in chunks)
+                body += "data: [DONE]\n\n"
+                self._send(200, body.encode(), "text/event-stream")
+                return
             if "multiple-choice study questions" in system:
                 count = int(re.search(r"Create exactly (\d+)", system).group(1))
                 text, kind = json.dumps(quiz(count)), "quiz"

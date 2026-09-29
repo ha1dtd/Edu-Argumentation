@@ -168,8 +168,15 @@ const HOVER = [
 // is the entry labelled GENERATE QUIZ (#nav-generated-quiz); no entry was renamed or invented.
 const NAV_ORDER = [
   ['nav-tutorial', 'HOME'], ['nav-learn', 'LEARN'], ['nav-quiz', 'PRACTICE'], ['nav-generated-quiz', 'AI-QUIZ'],
-  ['nav-settings', 'SETTINGS'], ['nav-account', 'ACCOUNT'], ['nav-logout', ''],
+  ['nav-settings', 'SETTINGS'], ['nav-account', 'ACCOUNT'],
+  // ⚑ study-rooms-qna P2 (29-09-26), DELIBERATE: add-on tabs append after the core tabs (registry
+  //   order, shell/screens.meta.ts); logout stays last.
+  ['nav-qna', 'Q&A'],
+  ['nav-logout', ''],
 ];
+// The tab LOG OUT follows in keyboard order (R-S-LOGOUT). Was the literal 'nav-account' until P2
+// (29-09-26): it is the same fact as NAV_ORDER's last tab, so it now reads it from there.
+const LAST_TAB = NAV_ORDER[NAV_ORDER.length - 2][0];
 
 const browser = await chromium.launch({ executablePath: process.env.GATE_CHROME || chromium.executablePath() });
 const measured = {};      // scheme -> screen -> sel -> props
@@ -580,9 +587,9 @@ for (const [id, rows] of Object.entries(PAIRS)) {
   const ok = ['light', 'dark'].every((s) => {
     const l = logout[s];
     return l.visible && l.named === 1 && l.hadCookie && l.onLogin && l.progress === 401 && l.cookieCleared
-      && (l.reachedBy !== 'keyboard' || (l.tabs > 1 && l.before === 'nav-account'));
+      && (l.reachedBy !== 'keyboard' || (l.tabs > 1 && l.before === LAST_TAB));
   });
-  check('R-S-LOGOUT', ok, `LOG OUT visible, named, keyboard-reachable from the top of a fresh page (tab order: straight after ACCOUNT), lands on /login, old session -> /api/progress 401: ${JSON.stringify(logout)}`);
+  check('R-S-LOGOUT', ok, `LOG OUT visible, named, keyboard-reachable from the top of a fresh page (tab order: straight after the last tab, ${LAST_TAB}), lands on /login, old session -> /api/progress 401: ${JSON.stringify(logout)}`);
 }
 
 {

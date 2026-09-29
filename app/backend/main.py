@@ -1024,6 +1024,13 @@ def api_wrong_answer(req: Posted = Depends(posted)) -> Response:
     return _json(HTTPStatus.CREATED, {"recorded": True})
 
 
+# ⚑ study-rooms-qna P1 (29-09-26): add-on routers. After every core API route, before the
+#   exception handler and the SPA catch-all `/{full_path:path}` (so it never shadows them).
+from addons import ADDON_ROUTERS  # noqa: E402
+for _addon_router in ADDON_ROUTERS:
+    app.include_router(_addon_router)
+
+
 @app.exception_handler(StarletteHTTPException)
 async def _unknown_route(request: Request, exc: StarletteHTTPException) -> Response:
     """A POST to anything outside the ten is the legacy's flat 404 JSON, never a 405 that
@@ -1056,7 +1063,9 @@ def book_file(rest: str) -> Response:
         target, ctype = content.resolve_book_file([p for p in rest.split("/") if p != ""])
     except content.NotAFile:
         return _NOT_FOUND_BOOK
-    return FileResponse(target, media_type=ctype, headers={"Cache-Control": "public, max-age=3600"})
+    # module.json changes on re-import: revalidate every time (ETag -> cheap 304); assets stay cached.
+    cache = "no-cache" if target.name == "module.json" else "public, max-age=3600"
+    return FileResponse(target, media_type=ctype, headers={"Cache-Control": cache})
 
 
 @app.get("/favicon.svg")

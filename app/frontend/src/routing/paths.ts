@@ -20,6 +20,8 @@
 //   book on load (legacyHashCursor below). The server never sees a hash, so this is client-side.
 
 import type { TheoryCursor } from '../data/types';
+import { ADDON_SEGMENTS, addonBySegment } from '../shell/screens.meta';
+import type { AddonId } from '../shell/screens.meta';
 
 /** book file (packaged folder name, or legacy data/*.json name) -> URL slug. Short, readable, STABLE. */
 export const BOOK_SLUGS: Readonly<Record<string, string>> = {
@@ -31,7 +33,7 @@ export const BOOK_SLUGS: Readonly<Record<string, string>> = {
 };
 
 /** Paths that are app screens, never a book slug. */
-const RESERVED = new Set(['account', 'settings', 'login', 'api', 'book', 'data', 'assets', 'favicon.svg', 'lab']);  // 'lab': the Lab add-on at /lab/ (R27, 24-09-26)
+const RESERVED = new Set(['account', 'settings', 'login', 'api', 'book', 'data', 'assets', 'favicon.svg', 'lab', ...ADDON_SEGMENTS]);  // 'lab': the Lab add-on at /lab/ (R27, 24-09-26) · add-on segments (study-rooms-qna P1): a book slug can never shadow an add-on
 
 export function slugify(text: string, max = 60): string {
   return String(text || '')
@@ -70,6 +72,7 @@ export type Route =
   | { kind: 'lesson'; slug: string; chapter: number; lesson: number | null; quiz: boolean }
   | { kind: 'account' }
   | { kind: 'settings' }
+  | { kind: 'addon'; id: AddonId }
   | { kind: 'login' }
   | { kind: 'unknown'; path: string };
 
@@ -86,6 +89,7 @@ export function parseRoute(pathname: string = window.location.pathname): Route {
   const [head, unit, lesson, tail, ...rest] = parts;
   if (parts.length === 1 && head === 'account') return { kind: 'account' };
   if (parts.length === 1 && head === 'settings') return { kind: 'settings' };
+  if (parts.length === 1 && ADDON_SEGMENTS.has(head)) return { kind: 'addon', id: addonBySegment(head).id as AddonId };
   if (parts.length === 1 && head === 'login') return { kind: 'login' };
   if (RESERVED.has(head)) return { kind: 'unknown', path: pathname };
   if (parts.length === 1) return { kind: 'book', slug: head };
@@ -138,6 +142,7 @@ export function legacyHashCursor(hash: string = window.location.hash): TheoryCur
 export function sameRoute(a: Route, b: Route): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'book' && b.kind === 'book') return a.slug === b.slug;
+  if (a.kind === 'addon' && b.kind === 'addon') return a.id === b.id;
   if (a.kind === 'lesson' && b.kind === 'lesson') {
     return a.slug === b.slug && a.chapter === b.chapter && (a.lesson ?? 1) === (b.lesson ?? 1) && a.quiz === b.quiz;
   }

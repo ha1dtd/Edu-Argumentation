@@ -99,7 +99,11 @@ for (const [tag, file, want] of [
   ['gate-r-proxy.mjs', 'rproxy.txt', 6],
   // ⚑ 23-09-26 (user ruling): 9router combo per account and per job, incl. the legacy :8767 tutor.
   //   Moves WITH run-gates-react.sh's gate-r-route.mjs run_suite line.
-  ['gate-r-route.mjs', 'rroute.txt', 10],
+  //   10 -> 12 on 29-09-26 (study-rooms-qna P2): M-QNA-NORMAL / M-QNA-CLAUDE.
+  ['gate-r-route.mjs', 'rroute.txt', 12],
+  // ⚑ 29-09-26 (study-rooms-qna P2): the Q&A examiner API (parser, pass rule, bucket, budget,
+  //   refusal). Moves WITH run-gates-react.sh's gate-r-qna.mjs run_suite line.
+  ['gate-r-qna.mjs', 'rqna.txt', 28],
   // ⚑ 23-09-26 (user): style parity of the Account + sign-in pages and the top bar's LOG OUT against
   //   the home page, by getComputedStyle. Moves WITH run-gates-react.sh's R_NO_PRELOAD=1 rstyle line.
   //   14 -> 19 on 23-09-26: LOG OUT became an icon (R-S-NAV-LOGOUT reworked) + R-S-NAV-ORDER,

@@ -44,7 +44,7 @@
  * not here — they are not `/api/` routes and counting them would break the 15.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,6 +54,7 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const LEGACY = join(REPO_ROOT, 'aws-quiz-app', 'edu_server.py');
 const FASTAPI_APP = join(REPO_ROOT, 'app', 'backend', 'main.py');
+const ADDONS_DIR = join(REPO_ROOT, 'app', 'backend', 'addons');
 
 const EXPECTED_GET = 5;
 const EXPECTED_POST = 7;   // was 10 until ruling R24 removed the 3 run routes
@@ -75,7 +76,24 @@ const EXPECTED_POST = 7;   // was 10 until ruling R24 removed the 3 run routes
 const EXPECTED_LIST_SHA = '7e399903a382eb99ed517d4e487ee8bf2b6cbf21538e9fe38b60fda0584ac142';
 
 // Routes the new app is allowed to have that the legacy app never had.
-const ALLOWED_EXTRA = new Set(['GET /api/health']);
+const ALLOWED_EXTRA = new Set([
+  'GET /api/health',
+  'GET /api/account/stats', // Phase 06a (auth/accounts), allow-listed 29-09-26
+  'GET /api/accounts', // Phase 06a (auth/accounts), allow-listed 29-09-26
+  'GET /api/auth/me', // Phase 06a (auth/accounts), allow-listed 29-09-26
+  'POST /api/account/password', // Phase 06a (auth/accounts), allow-listed 29-09-26
+  'POST /api/accounts', // Phase 06a (auth/accounts), allow-listed 29-09-26
+  'POST /api/accounts/claude-access', // Phase 06a (auth/accounts), allow-listed 29-09-26
+  'POST /api/auth/login', // Phase 06a (auth/accounts), allow-listed 29-09-26
+  'POST /api/auth/logout', // Phase 06a (auth/accounts), allow-listed 29-09-26
+  'POST /api/book/delete', // Phase 06a (auth/accounts), allow-listed 29-09-26
+  'POST /api/wrong-answers', // Phase 06a (auth/accounts), allow-listed 29-09-26
+  'POST /api/qna/question', // add-on qna (P2), 29-09-26
+  'POST /api/qna/grade', // add-on qna (P2), 29-09-26
+  'POST /api/qna/ask', // add-on qna (P2), 29-09-26
+]);
+// ⚑ V6 (29-09-26): this gate compares the app's /api/ routes against the frozen legacy list +
+//   this allow-list ONLY. Each add-on phase adds its own routes here with a dated comment.
 
 function die(msg) {
   console.error(msg);
@@ -132,6 +150,33 @@ function extractFastapi(src) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Add-on routers (study-rooms-qna P1): app/backend/addons/*.py               */
+/* -------------------------------------------------------------------------- */
+// APIRouter(prefix="…") + @router.(get|post|put|patch|delete|websocket)("…") -> "METHOD prefix+path"
+// (WS for websocket). SELF-CHECK: if addons/__init__.py lists > 0 routers in ADDON_ROUTERS and
+// 0 add-on routes parse, the parse broke — exit 1, never a silent "0 extra".
+function extractAddons() {
+  if (!existsSync(ADDONS_DIR)) return { routes: [], listed: 0 };
+  const init = read(join(ADDONS_DIR, '__init__.py'), 'addons/__init__.py');
+  const lit = /ADDON_ROUTERS\s*(?::[^=]*)?=\s*\[([\s\S]*?)\]/.exec(init);
+  if (!lit) die('EXTRACTOR FAILED: could not locate the ADDON_ROUTERS list literal in addons/__init__.py');
+  const listed = [...lit[1].matchAll(/\b[A-Za-z_]\w*\.router\b/g)].length;
+  const routes = [];
+  for (const f of readdirSync(ADDONS_DIR).filter((n) => n.endsWith('.py') && n !== '__init__.py').sort()) {
+    const src = read(join(ADDONS_DIR, f), `addons/${f}`);
+    const pm = /APIRouter\(\s*prefix\s*=\s*["']([^"']*)["']/.exec(src);
+    const prefix = pm ? pm[1] : '';
+    for (const m of src.matchAll(/@router\.(get|post|put|patch|delete|websocket)\(\s*["']([^"']*)["']/g)) {
+      routes.push(`${m[1] === 'websocket' ? 'WS' : m[1].toUpperCase()} ${prefix}${m[2]}`);
+    }
+  }
+  if (listed > 0 && routes.length === 0) {
+    die(`EXTRACTOR FAILED: ADDON_ROUTERS lists ${listed} router(s) but 0 add-on routes parsed`);
+  }
+  return { routes: [...new Set(routes)].sort(), listed };
+}
+
+/* -------------------------------------------------------------------------- */
 const legacySrc = read(LEGACY, 'legacy server');
 const legacy = extractLegacy(legacySrc);
 
@@ -171,7 +216,9 @@ const expected = new Set([
 ]);
 
 const fastapi = extractFastapi(read(FASTAPI_APP, 'FastAPI app'));
-const actual = new Set(fastapi.api);
+const addons = extractAddons();
+console.log(`ADDONS OK: ${addons.listed} router(s) listed · ${addons.routes.length} route(s) parsed`);
+const actual = new Set([...fastapi.api, ...addons.routes.filter((r) => r.split(' ')[1].startsWith('/api/'))]);
 
 const missing = [...expected].filter((r) => !actual.has(r)).sort();
 const extra = [...actual].filter((r) => !expected.has(r) && !ALLOWED_EXTRA.has(r)).sort();
