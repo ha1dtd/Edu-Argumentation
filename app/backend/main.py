@@ -66,6 +66,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import ai
+import bookctx
 import auth
 import content
 import db
@@ -671,7 +672,9 @@ def api_ask(req: Posted = Depends(posted)) -> Response:
         module = ai.load_module(None, book)
         term = module["tutorialData"]["sections"][chapter - 1]["items"][block - 1].get("term", "")
         module_id = store.module_id_for(module)
-        excerpts = ai.book_search(module_id, f"{question} {term}", chapter=chapter)
+        # tutor-book-index (30-09-26): the whole chapter + other-chapter index hits, or -- kill
+        # switch EDU_ASK_CONTEXT=legacy, or no usable index -- exactly today's book_search.
+        context = bookctx.ask_context(module_id, question, term, chapter)
         visuals = ai.block_visuals(module, chapter, block)
     except (ValueError, TypeError, IndexError, KeyError, AttributeError, json.JSONDecodeError) as error:
         return _json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
@@ -692,8 +695,8 @@ def api_ask(req: Posted = Depends(posted)) -> Response:
                 asked.append(moment)
     config = _routed(config, req.account, "tutor")
     try:
-        reply = ai.ask_tutor(config, chapter_title, term, lesson, question, turns, excerpts,
-                             visuals=visuals, images=images)
+        reply = bookctx.tutor_reply(config, context, chapter_title, term, lesson, question, turns,
+                                    visuals, images, block=block)
     except ValueError as error:
         return _json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
     reply["visionReason"] = vision_reason
@@ -711,6 +714,8 @@ def api_ask(req: Posted = Depends(posted)) -> Response:
         # ⚑ Phase 06a: whose question it was. The log file itself is unchanged and shared.
         "account": req.account.id, "username": req.account.username,
         "model": config.model,             # ⚑ 23-09-26: the combo this account's ask was routed to
+        "context": context[0],             # ⚑ 30-09-26 tutor-book-index: "index" | "legacy"
+        "chapterTokens": context[1]["tokens"] if context[0] == "index" else 0,
     })
     return _json(HTTPStatus.OK, reply)
 
