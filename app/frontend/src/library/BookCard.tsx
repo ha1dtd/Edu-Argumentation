@@ -27,6 +27,7 @@ import { queryKeys } from '../data/queries';
 import { postJson } from '../data/writes';
 import type { LibraryBook } from '../data/types';
 import { useAccount } from '../account/AccountContext';
+import { askConfirm, showNotice } from '../shell/dialog';
 
 export interface BookCardProps {
   book: LibraryBook;
@@ -70,7 +71,14 @@ export function BookCard({ book, current, done, onOpen }: BookCardProps) {
   const canDelete = current && account.isOwner && Boolean(book.book) && !book.default;
   const [deleting, setDeleting] = useState(false);
   const remove = async () => {
-    if (!window.confirm(`Delete "${title}"?\n\nIt disappears from the library and Lab for every account. It is moved aside on the server, so it can still be restored.`)) return;
+    // 30-09-26 (defect D): the in-app dialog, danger style, focus starts on Cancel.
+    const ok = await askConfirm({
+      title: `Delete "${title}"?`,
+      body: 'It disappears from the library and Lab for every account. It is moved aside on the server, so it can still be restored.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     setDeleting(true);
     try {
       const response = await postJson('/api/book/delete', { file: book.file });
@@ -79,7 +87,7 @@ export function BookCard({ book, current, done, onOpen }: BookCardProps) {
       window.location.assign('/');   // the open book is gone: start clean on the library
     } catch (error) {
       setDeleting(false);
-      window.alert(`Could not delete the book: ${(error as Error).message}`);
+      void showNotice({ title: 'Could not delete the book', body: (error as Error).message });
     }
   };
 
@@ -102,7 +110,7 @@ export function BookCard({ book, current, done, onOpen }: BookCardProps) {
       );
     } catch (error) {
       setShownTitle(previous);
-      window.alert(`Could not rename the book: ${(error as Error).message}`);
+      void showNotice({ title: 'Could not rename the book', body: (error as Error).message });
     }
   };
 

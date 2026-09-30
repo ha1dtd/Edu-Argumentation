@@ -14,6 +14,7 @@
 // PROGRESS_PENDING_KEY, generationToken, adminToken, rememberAdminToken.
 
 import { bounceToLogin } from './client';
+import { askText } from '../shell/dialog';
 import type { AddonWriteRoute } from '../shell/screens.meta';
 
 export type WriteRoute =
@@ -162,9 +163,10 @@ export async function flushPendingProgress(): Promise<ProgressReply[]> {
  * generationToken (app.js:3024). `null` means the reader cancelled the prompt — abort.
  * `''` means no token is needed. The provider's token_required flag decides.
  */
-export function generationToken(tokenRequired: boolean): string | null {
+// ⚑ 30-09-26 (defect D): asked through the IN-APP dialog (shell/dialog.tsx askText) — async now.
+export async function generationToken(tokenRequired: boolean): Promise<string | null> {
   if (!tokenRequired) return '';
-  return window.prompt('Generation access token') || null;
+  return (await askText({ title: 'Generation access token', label: 'Token', confirmLabel: 'Continue', secret: true })) || null;
 }
 
 /** The admin token lives in sessionStorage only: it dies with the tab (app.js:3426). */

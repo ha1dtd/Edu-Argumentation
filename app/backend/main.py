@@ -223,6 +223,13 @@ def _lab_redirect(request: Request) -> Response | None:
     return RedirectResponse(target, status_code=302, headers={"Cache-Control": "no-store"})
 
 
+async def session_lookup(token: str | None) -> tuple[auth.Account | None, bool]:
+    """THE session lookup — shared by require_session (HTTP) and the live-rooms WebSocket
+    (study-rooms-qna P3; the middleware never runs for a WS scope). Off the event loop. May raise
+    db.StoreUnavailable; each caller maps it (HTTP 503 / WS close 1011)."""
+    return await run_in_threadpool(auth.session_account, token)
+
+
 @app.middleware("http")
 async def require_session(request: Request, call_next):
     path = request.url.path
@@ -233,7 +240,7 @@ async def require_session(request: Request, call_next):
         return await call_next(request)
     token = request.cookies.get(auth.COOKIE_NAME)
     try:
-        account, refreshed = await run_in_threadpool(auth.session_account, token)
+        account, refreshed = await session_lookup(token)
     except db.StoreUnavailable:
         return JSONResponse({"error": "The account store is unavailable. Try again shortly."},
                             status_code=503, headers={"Cache-Control": "no-store"})
@@ -432,9 +439,16 @@ async def posted(request: Request) -> Posted:
                   _via_https(request.url.scheme, request.headers, peer))
 
 
+def origin_ok(headers: Any) -> bool:
+    """THE same-origin rule, headers only — shared by _gate (every POST) and the live-rooms
+    WebSocket (study-rooms-qna P3), which the HTTP middleware never sees. A MISSING Origin passes
+    (browsers always send one on these requests; the session cookie is still required)."""
+    origin = headers.get("Origin")
+    return not origin or origin.split("//", 1)[-1].rstrip("/") == headers.get("Host", "")
+
+
 def _same_origin(req: Posted) -> bool:
-    origin = req.headers.get("Origin")
-    return not origin or origin.split("//", 1)[-1].rstrip("/") == req.headers.get("Host", "")
+    return origin_ok(req.headers)
 
 
 def _bucket_prune(name: str, client: str, now: float) -> deque[float]:

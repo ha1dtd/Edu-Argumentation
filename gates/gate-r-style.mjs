@@ -172,6 +172,8 @@ const NAV_ORDER = [
   // ⚑ study-rooms-qna P2 (29-09-26), DELIBERATE: add-on tabs append after the core tabs (registry
   //   order, shell/screens.meta.ts); logout stays last.
   ['nav-qna', 'Q&A'],
+  // ⚑ 30-09-26 (study-rooms-qna P3): the second add-on tab, after Q&A, before logout (same reason).
+  ['nav-live', 'LIVE'],
   ['nav-logout', ''],
 ];
 // The tab LOG OUT follows in keyboard order (R-S-LOGOUT). Was the literal 'nav-account' until P2

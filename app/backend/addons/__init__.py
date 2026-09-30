@@ -7,5 +7,6 @@ partially initialised when this package is imported).
 from fastapi import APIRouter
 
 from addons import qna  # noqa: E402  (P2, 29-09-26)
+from addons import rooms  # noqa: E402  (P3, 30-09-26: live quiz rooms, HTTP + WebSocket)
 
-ADDON_ROUTERS: list[APIRouter] = [qna.router]
+ADDON_ROUTERS: list[APIRouter] = [qna.router, rooms.router]

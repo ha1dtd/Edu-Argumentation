@@ -91,6 +91,10 @@ const ALLOWED_EXTRA = new Set([
   'POST /api/qna/question', // add-on qna (P2), 29-09-26
   'POST /api/qna/grade', // add-on qna (P2), 29-09-26
   'POST /api/qna/ask', // add-on qna (P2), 29-09-26
+  'POST /api/qna/hint', // add-on qna (P2b hint), 30-09-26
+  'POST /api/rooms', // add-on live rooms (P3), 30-09-26
+  'GET /api/rooms/{code}', // add-on live rooms (P3), 30-09-26
+  'WS /api/rooms/{code}/ws', // add-on live rooms (P3), 30-09-26
 ]);
 // ⚑ V6 (29-09-26): this gate compares the app's /api/ routes against the frozen legacy list +
 //   this allow-list ONLY. Each add-on phase adds its own routes here with a dated comment.

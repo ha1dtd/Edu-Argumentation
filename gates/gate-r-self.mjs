@@ -61,7 +61,7 @@ for (const [tag, file, want] of [
   ['gate-r-read.mjs', 'rread.txt', 12],
   ['gate-r-contract.mjs', 'rcontract.txt', 7],
   ['gate-r-dom.mjs', 'rdom.txt', 9],
-  ['gate-r-ro.mjs', 'rro.txt', 3],
+  ['gate-r-ro.mjs', 'rro.txt', 4],   // 3 -> 4 on 30-09-26: R-RO4 no native browser dialogs (defect D)
   // ⚑ ADDED 22-09-26 (EVL cycle 2, gap G-EVL-4). Seven Exit Gate assertions had NO COMMAND
   //    ANYWHERE and were about to be frozen as Phase 04's fence in that state. A suite whose
   //    self-check disagrees with its own registrations is the next vacuous gate, so this row
@@ -103,7 +103,12 @@ for (const [tag, file, want] of [
   ['gate-r-route.mjs', 'rroute.txt', 12],
   // ⚑ 29-09-26 (study-rooms-qna P2): the Q&A examiner API (parser, pass rule, bucket, budget,
   //   refusal). Moves WITH run-gates-react.sh's gate-r-qna.mjs run_suite line.
-  ['gate-r-qna.mjs', 'rqna.txt', 28],
+  //   28 -> 30 on 30-09-26: QNA-UI-NOLOOP + QNA-UI-LOADING (defects B, C).
+  //   30 -> 39 on 30-09-26: P2b setup / pass mark / hint / redo.
+  ['gate-r-qna.mjs', 'rqna.txt', 39],
+  // ⚑ 30-09-26 (study-rooms-qna P3): live rooms over WebSocket (auth before accept, secrecy, caps,
+  //   expiry, scoring). Moves WITH run-gates-react.sh's gate-r-ws.py run_suite line.
+  ['gate-r-ws.py', 'rws.txt', 27],
   // ⚑ 23-09-26 (user): style parity of the Account + sign-in pages and the top bar's LOG OUT against
   //   the home page, by getComputedStyle. Moves WITH run-gates-react.sh's R_NO_PRELOAD=1 rstyle line.
   //   14 -> 19 on 23-09-26: LOG OUT became an icon (R-S-NAV-LOGOUT reworked) + R-S-NAV-ORDER,

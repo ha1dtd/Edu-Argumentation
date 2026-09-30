@@ -57,6 +57,8 @@ def qna_kind(system: str) -> str | None:
         return "qna-question"
     if "Grade the learner" in system:
         return "qna-grade"
+    if "Give ONE short hint" in system:          # P2b (30-09-26): the optional hint
+        return "qna-hint"
     return "qna-ask"
 
 
@@ -65,6 +67,7 @@ QNA_DEFAULT = {
     "qna-grade": json.dumps({"score": 9, "right": ["stub point"], "almost": [], "missing": [], "wrong": [],
                              "feedback": "Stub grade."}),
     "qna-ask": "Stub answer from the theory.",
+    "qna-hint": "Think about what the performance measure is.",
 }
 
 
@@ -109,14 +112,28 @@ class Handler(BaseHTTPRequestHandler):
         if DELAY:
             time.sleep(DELAY)
         if self.path.endswith("/chat/completions"):
+            # ⚑ 30-09-26 (study-rooms-qna P2, defect A): 9router REFUSES a request whose messages are
+            #   all `system` — measured on nn for edu-tutor-claude AND edu-tutor-normal: HTTP 400
+            #   "messages: at least one message is required" / "messages: Field required". The stub
+            #   used to answer it, so /api/qna/question passed every gate and 502'd for the user.
+            #   It now refuses exactly like the real provider, and logs the refusal.
+            roles = [m.get("role") for m in payload.get("messages", []) if isinstance(m, dict)]
+            if not any(r in ("user", "assistant") for r in roles):
+                record({"kind": "refused-no-user", "model": payload.get("model"), "roles": roles})
+                self._send(400, json.dumps({"error": {"message": "messages: at least one message is required"}}).encode(),
+                           "application/json")
+                return
             system = " ".join(str(m.get("content")) for m in payload.get("messages", []) if m.get("role") == "system")
             scripted = next_scripted()
             qkind = qna_kind(system)
             if scripted is not None or qkind:
                 kind = qkind or "scripted"
                 text = str(scripted.get("text", "")) if scripted is not None else QNA_DEFAULT[qkind]
+                # P2b (30-09-26): the Q&A system prompt is logged (first 1200 chars) so a gate can
+                #   prove the setup options (style, difficulty) reached the model. Fake data only.
                 record({"kind": kind, "model": payload.get("model"), "stream": payload.get("stream"),
-                        "auth": self.headers.get("Authorization", "")[:7], "scripted": scripted is not None})
+                        "auth": self.headers.get("Authorization", "")[:7], "scripted": scripted is not None,
+                        "system": system[:1200] if qkind else ""})
                 if scripted is not None and scripted.get("delay_s"):
                     time.sleep(float(scripted["delay_s"]))
                 chunks = [text[i:i + 40] for i in range(0, len(text), 40)] or [""]

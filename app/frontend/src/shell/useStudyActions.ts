@@ -30,6 +30,7 @@ import { theoryBlockId } from '../state/ProgressProvider';
 import { useQuiz } from '../state/QuizProvider';
 import { owningBlockId, tallyScore, tallyTotal } from '../state/quizReducer';
 import { useReaderCursor } from '../state/ReaderCursorProvider';
+import { showNotice } from './dialog';
 
 /** What the result screen says about the save, beyond the score (app.js:745-750 + 1097). */
 export interface SaveNote {
@@ -161,7 +162,7 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
   const startBlockAiQuiz = useCallback(
     async (at: TheoryCursor = cursor) => {
       if (!aiReady) return;
-      const token = generationToken(provider.tokenRequired);
+      const token = await generationToken(provider.tokenRequired);
       if (token === null) return;
       setAiBlockStatus('Generating questions from this block...');
       setAiBusy(true);
@@ -237,7 +238,7 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
   const startGeneratedQuiz = useCallback(
     async (selection: string[] = []) => {
       if (!hasTitle || !aiReady) return;
-      const token = generationToken(provider.tokenRequired);
+      const token = await generationToken(provider.tokenRequired);
       if (token === null) return;
       setLoading({ scope: generateScopeText(selection), model: provider.model ? `Model: ${provider.model}` : '' });
       showLoading();
@@ -266,7 +267,7 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
         generateMemory.current = { fromSetup: true, selection };
         showQuiz('ai');
       } catch (error) {
-        if (!isAbort(error)) window.alert(`Could not generate a quiz: ${(error as Error).message}`);
+        if (!isAbort(error)) void showNotice({ title: 'Could not generate a quiz', body: (error as Error).message });
         // A cancel started a newer screen already only if another generation replaced this one.
         if (aiAbort.current === null || aiAbort.current === controller) showHome();
       } finally {

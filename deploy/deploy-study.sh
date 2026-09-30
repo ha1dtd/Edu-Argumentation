@@ -487,7 +487,7 @@ Environment=EDU_PROGRESS_PATH=/home/ubuntu/foxai-data/edu-argumentation/progress
 Environment=EDU_ASSET_ROOT=/home/ubuntu/foxai-data/edu-argumentation/assets
 Environment=EDU_LIBRARY_ROOT=/home/ubuntu/foxai-data/edu-argumentation/library
 Environment=EDU_LIBRARY_META_PATH=/home/ubuntu/foxai-data/edu-argumentation/library-meta.json
-ExecStart=${VENV}/bin/uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 1 --app-dir ${REMOTE_DIR}/backend
+ExecStart=${VENV}/bin/uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 1 --app-dir ${REMOTE_DIR}/backend --ws-max-size 65536 --ws-per-message-deflate false --ws-ping-interval 25
 MemoryHigh=384M
 MemoryMax=512M
 CPUQuota=200%
@@ -502,6 +502,12 @@ WantedBy=multi-user.target
 UNIT
   ssh "$HOST" "sudo -n systemctl daemon-reload && sudo -n systemctl enable '$SERVICE'"
   log "unit installed and enabled"
+  # ⚑ study-rooms-qna P3 (30-09-26): live rooms need a WebSocket implementation. Without it uvicorn
+  #   serves HTTP fine and every /api/rooms/*/ws handshake fails — so the deploy FAILS here, BEFORE
+  #   the restart, rather than shipping a room screen that can never connect.
+  ssh "$HOST" "'$VENV/bin/python' -c 'import websockets; print(\"websockets\", websockets.__version__)'" \
+    || fail "websockets is not importable from ${VENV} after the install -- the live rooms cannot connect"
+  log "websockets importable"
 }
 
 # ---------------------------------------------------------------------------

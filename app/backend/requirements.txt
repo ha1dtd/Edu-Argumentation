@@ -15,3 +15,9 @@ pydantic==2.13.5
 #   /home/ubuntu/edu-study-venv on 23-09-26 and measured: psycopg 3.2.12, impl "binary".
 psycopg==3.2.12
 psycopg-binary==3.2.12
+# ⚑ study-rooms-qna P3 (30-09-26): live quiz rooms over WebSocket. uvicorn 0.52 needs
+#   websockets>=13.0 and auto-selects its sans-I/O implementation, which honours the unit's
+#   --ws-max-size / --ws-per-message-deflate / --ws-ping-interval (measured, M20). 16.1.1 is the
+#   newest for nn's Python 3.10. Installed ONLY by deploy-study.sh --install-unit, which then
+#   asserts `import websockets` before the restart.
+websockets==16.1.1

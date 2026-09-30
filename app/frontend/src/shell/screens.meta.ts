@@ -30,7 +30,9 @@ export interface AddonMeta {
 
 export const ADDON_META = [
   // P2 (29-09-26): Q&A examiner.
-  { id: 'qna', navId: 'nav-qna', label: 'Q&A', segment: 'qna', domId: 'qna-screen', writeRoutes: ['/api/qna/question', '/api/qna/grade', '/api/qna/ask'] },
+  { id: 'qna', navId: 'nav-qna', label: 'Q&A', segment: 'qna', domId: 'qna-screen', writeRoutes: ['/api/qna/question', '/api/qna/grade', '/api/qna/ask', '/api/qna/hint'] },
+  // P3 (30-09-26): live quiz rooms (WebSocket /api/rooms/{code}/ws; the socket is not a write route).
+  { id: 'live', navId: 'nav-live', label: 'LIVE', segment: 'live', domId: 'live-screen', writeRoutes: ['/api/rooms'] },
 ] as const satisfies ReadonlyArray<AddonMeta>;
 
 type AddonEntry = (typeof ADDON_META)[number];

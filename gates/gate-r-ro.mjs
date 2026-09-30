@@ -11,6 +11,8 @@
  *            queue key is gone afterwards (flushPendingProgress, app.js:1167 — legacy behaviour);
  *            (b) an UNSEEDED full browse sends ZERO non-GET requests, with the positive control.
  *     R-RO3  the store is BYTE-IDENTICAL across that unseeded browse (reading never writes).
+ *     R-RO4  (30-09-26) ZERO native browser dialogs (confirm / alert / prompt) in app/frontend/src —
+ *            every dialog is the in-app shell/dialog.tsx (user, defect D). Red-first on the old tree.
  *   ⛔ Each was fault-proved red on the Phase-04 build — see the P4 report.
  *
  * (Phase 03's original header follows.) PHASE 03 IS READ-ONLY, PROVED THREE WAYS.
@@ -101,6 +103,31 @@ check(`R-RO1 the built bundle contains EXACTLY ONE non-GET WRITE SHAPE — the d
   `scanned=${jsFiles.join(',')} bytes=${bundle.length} writeShapeHits=${totalWriteShapes} ${JSON.stringify(hits)}`
   + ' (0 = the write path is gone; 2+ = a second, un-reviewed write primitive)'
   + ` | REPORTED-NOT-ASSERTED ${JSON.stringify(rejectedHits)}`);
+
+/* ═════════ R-RO4 (30-09-26, study-rooms-qna P2 defect D): NO NATIVE BROWSER DIALOG ═════════
+   User: "why using this browser's popup bruh. It should use its own popup model of the page".
+   Every confirm / notice / text prompt goes through shell/dialog.tsx (askConfirm / showNotice /
+   askText, rendered by <DialogHost/>). fails when: any file under app/frontend/src calls the
+   browser's confirm, alert or prompt — bare, or through window / globalThis / self.
+   Comments are stripped first, so a comment NAMING the ban does not trip it; a call does. */
+{
+  const SRC = path.join(REPO, 'app/frontend/src');
+  const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(path.join(dir, e.name)) : /\.(tsx?|jsx?|mjs)$/.test(e.name) ? [path.join(dir, e.name)] : []);
+  const files = walk(SRC);
+  const NATIVE = /(^|[^\w.$])(?:(?:window|globalThis|self)\s*\.\s*)?(confirm|alert|prompt)\s*\(/g;
+  const found = [];
+  for (const file of files) {
+    const code = fs.readFileSync(file, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+    code.split('\n').forEach((line, i) => {
+      for (const m of line.matchAll(NATIVE)) found.push(`${path.relative(SRC, file)}:${i + 1} ${m[2]}(`);
+    });
+  }
+  check(`R-RO4 zero native browser dialogs (confirm / alert / prompt) in app/frontend/src — every dialog is the in-app one (${files.length} files scanned)`,
+    files.length > 50 && found.length === 0, `hits=${found.length} ${JSON.stringify(found)}`);
+}
 
 /* ═════════ R-RO2(a): a SEEDED queue flushes exactly once ═════════ */
 const browser = await chromium.launch({ executablePath: process.env.GATE_CHROME || chromium.executablePath() });
