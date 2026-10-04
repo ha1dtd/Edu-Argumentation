@@ -189,8 +189,9 @@ export function LibrarySection({ hidden = false }: { hidden?: boolean } = {}) {
   const { activeBookFile, openBook, closeBook, data } = useBookContext();
   const { overall } = useProgressContext();
   const live = overall();
-  // loadBundledModule (app.js:3325): the importer is the separate :8769 service on this host.
-  const importHref = typeof location === 'undefined' ? '#' : `${location.protocol}//${location.hostname}:8769/`;
+  // The importer is the separate :8769 service. /importer/ works on both doors (27-09-26): the public
+  // nginx proxies it; on the direct VPN door the study app bounces /importer/ to http://<host>:8769/.
+  const importHref = '/importer/';
 
   return (
     <section id="services-section" className={hidden ? 'hidden-view mt-10' : 'mt-10'} aria-labelledby="library-heading">
