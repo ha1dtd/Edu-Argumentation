@@ -14,6 +14,8 @@
 // PROGRESS_PENDING_KEY, generationToken, adminToken, rememberAdminToken.
 
 import { bounceToLogin } from './client';
+import { askText } from '../shell/dialog';
+import type { AddonWriteRoute } from '../shell/screens.meta';
 
 export type WriteRoute =
   | '/api/progress'
@@ -31,7 +33,9 @@ export type WriteRoute =
   | '/api/accounts'
   // ⚑ 23-09-26: owner-only per-account Claude access (which 9router combos the account's AI uses).
   | '/api/accounts/claude-access'
-  | '/api/wrong-answers';
+  | '/api/wrong-answers'
+  // Add-on screens' own POST routes (study-rooms-qna P1 registry; empty in P1).
+  | AddonWriteRoute;
 // ⚑ Ruling R24 (23-09-26): /api/run, /api/run/stop, /api/run/reset-kernel are GONE — the code
 //   runner was removed. Seven write routes remain.
 
@@ -159,9 +163,10 @@ export async function flushPendingProgress(): Promise<ProgressReply[]> {
  * generationToken (app.js:3024). `null` means the reader cancelled the prompt — abort.
  * `''` means no token is needed. The provider's token_required flag decides.
  */
-export function generationToken(tokenRequired: boolean): string | null {
+// ⚑ 30-09-26 (defect D): asked through the IN-APP dialog (shell/dialog.tsx askText) — async now.
+export async function generationToken(tokenRequired: boolean): Promise<string | null> {
   if (!tokenRequired) return '';
-  return window.prompt('Generation access token') || null;
+  return (await askText({ title: 'Generation access token', label: 'Token', confirmLabel: 'Continue', secret: true })) || null;
 }
 
 /** The admin token lives in sessionStorage only: it dies with the tab (app.js:3426). */

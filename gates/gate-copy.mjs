@@ -5,13 +5,15 @@
 // Gates (each prints one PASS/FAIL line; the runner counts '^(PASS|FAIL)  '):
 //   R24-1  static: no runner code left in app.js or the server (fails when: any of
 //          '/api/run', RUN_ROUTES, runCell, proxy_run, data-not-runnable reappears)
-//   R24-2  every fenced listing in a Full-script lesson has a Copy button, found by
-//          PIERCING the rich-text-viewer shadow roots (fails when: a shadow <pre> has no
-//          sibling button.copy-btn, or the Full script card has no listing at all)
-//   R24-3  Copy works in an INSECURE (plain-HTTP, non-loopback) context — the context the
-//          user is actually in on :8767 — and the clipboard then holds the EXACT script
-//          text from module.json (fails when: the page is secure after all [the test would
-//          be vacuous], navigator.clipboard exists there, or the read-back differs)
+//   ⚑ RESCOPED 29-09-26 (user, ch02 v3): the rich-text viewer no longer adds ANY Copy
+//     button — the reader is explanation only, code lives in the Lab. R24-2/R24-3 used to
+//     assert one Copy per listing and a working clipboard; they now assert the opposite.
+//   R24-2  a Full-script lesson's shadow-DOM listings carry ZERO Copy buttons, found by
+//          PIERCING the rich-text-viewer shadow roots (fails when: any shadow root holds a
+//          button.copy-btn / [data-copy], or the lesson rendered no listing at all [vacuous])
+//   R24-3  no copy affordance exists anywhere in the lesson's shadow DOM, and nothing writes
+//          the clipboard during the browse (fails when: any shadow [data-copy] element exists,
+//          or the clipboard sentinel was overwritten)
 //   R24-4  a code_cells lesson (ch01-b08) renders static code + Copy: one button per cell,
 //          no textarea, and Copy puts cell.source on the clipboard (fails when: a cell has
 //          any other control, an editor, or the copied text differs from the data)
@@ -104,44 +106,25 @@ const page = await ctx.newPage();
 await openGeron(page, INSECURE || BASE);
 await go(page, fsLoc.ci, fsLoc.bi);
 const listing = await page.evaluate(() => {
-  let pres = 0, withButton = 0, fullScriptPres = 0;
+  let pres = 0, copyButtons = 0, copyMarks = 0;
   document.querySelectorAll('#tutorial-content rich-text-viewer').forEach(v => {
     const root = v.shadowRoot; if (!root) return;
-    root.querySelectorAll('pre').forEach(pre => {
-      pres++;
-      const btn = pre.parentElement && pre.parentElement.querySelector(':scope > button.copy-btn');
-      if (btn && btn.textContent.trim() === 'Copy') withButton++;
-    });
+    pres += root.querySelectorAll('pre').length;
+    copyButtons += root.querySelectorAll('button.copy-btn').length;
+    copyMarks += root.querySelectorAll('[data-copy]').length;
   });
-  document.querySelectorAll('#tutorial-content section').forEach(sec => {
-    const h = sec.querySelector('h3');
-    if (h && h.textContent.startsWith('Full script')) sec.querySelectorAll('rich-text-viewer').forEach(v => { fullScriptPres += v.shadowRoot ? v.shadowRoot.querySelectorAll('pre').length : 0; });
-  });
-  return { pres, withButton, fullScriptPres, secure: window.isSecureContext, clip: typeof navigator.clipboard };
+  return { pres, copyButtons, copyMarks };
 });
-check('R24-2 every shadow-DOM code listing has a Copy button (ch02 Full-script lesson)',
-  listing.pres > 0 && listing.pres === listing.withButton && listing.fullScriptPres >= 1,
-  `lesson ch${fsLoc.ci + 1} block ${fsLoc.bi + 1}: ${listing.withButton}/${listing.pres} listings with Copy, full-script listings ${listing.fullScriptPres}`);
+check('R24-2 zero Copy buttons on shadow-DOM code listings (ch02 Full-script lesson)',
+  listing.pres > 0 && listing.copyButtons === 0,
+  `lesson ch${fsLoc.ci + 1} block ${fsLoc.bi + 1}: ${listing.pres} listings, ${listing.copyButtons} Copy buttons`);
 
 await primeClipboard();
-await page.evaluate(() => {
-  for (const sec of document.querySelectorAll('#tutorial-content section')) {
-    const h = sec.querySelector('h3');
-    if (h && h.textContent.startsWith('Full script')) { sec.querySelector('rich-text-viewer')?.shadowRoot?.querySelector('button.copy-btn')?.click(); return; }
-  }
-});
 await page.waitForTimeout(400);
-const copied3 = await readClipboard();
-const label3 = await page.evaluate(() => {
-  for (const sec of document.querySelectorAll('#tutorial-content section')) {
-    const h = sec.querySelector('h3');
-    if (h && h.textContent.startsWith('Full script')) return sec.querySelector('rich-text-viewer')?.shadowRoot?.querySelector('button.copy-btn')?.textContent.trim() || '';
-  }
-  return '';
-});
-check('R24-3 Copy works over plain HTTP (insecure context, textarea fallback) and copies the exact script',
-  Boolean(INSECURE) && listing.secure === false && listing.clip === 'undefined' && fsLoc.text && copied3 === fsLoc.text && label3 === 'Copied',
-  `origin=${INSECURE || 'NONE'} isSecureContext=${listing.secure} navigator.clipboard=${listing.clip} copied=${copied3.length} chars expected=${(fsLoc.text || '').length} equal=${copied3 === fsLoc.text} label=${label3}`);
+const clip3 = await readClipboard();
+check('R24-3 no copy affordance in any shadow root, and the clipboard is untouched',
+  listing.copyMarks === 0 && clip3 === '__R24_SENTINEL__',
+  `[data-copy] elements=${listing.copyMarks} clipboardUntouched=${clip3 === '__R24_SENTINEL__'}`);
 
 // ---------- R24-4 ch01-b08 code_cells ----------
 await go(page, b08.ci, b08.bi);

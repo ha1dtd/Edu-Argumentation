@@ -66,6 +66,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import ai
+import bookctx
 import auth
 import content
 import db
@@ -223,6 +224,13 @@ def _lab_redirect(request: Request) -> Response | None:
     return RedirectResponse(target, status_code=302, headers={"Cache-Control": "no-store"})
 
 
+async def session_lookup(token: str | None) -> tuple[auth.Account | None, bool]:
+    """THE session lookup — shared by require_session (HTTP) and the live-rooms WebSocket
+    (study-rooms-qna P3; the middleware never runs for a WS scope). Off the event loop. May raise
+    db.StoreUnavailable; each caller maps it (HTTP 503 / WS close 1011)."""
+    return await run_in_threadpool(auth.session_account, token)
+
+
 @app.middleware("http")
 async def require_session(request: Request, call_next):
     path = request.url.path
@@ -233,7 +241,7 @@ async def require_session(request: Request, call_next):
         return await call_next(request)
     token = request.cookies.get(auth.COOKIE_NAME)
     try:
-        account, refreshed = await run_in_threadpool(auth.session_account, token)
+        account, refreshed = await session_lookup(token)
     except db.StoreUnavailable:
         return JSONResponse({"error": "The account store is unavailable. Try again shortly."},
                             status_code=503, headers={"Cache-Control": "no-store"})
@@ -432,9 +440,16 @@ async def posted(request: Request) -> Posted:
                   _via_https(request.url.scheme, request.headers, peer))
 
 
+def origin_ok(headers: Any) -> bool:
+    """THE same-origin rule, headers only — shared by _gate (every POST) and the live-rooms
+    WebSocket (study-rooms-qna P3), which the HTTP middleware never sees. A MISSING Origin passes
+    (browsers always send one on these requests; the session cookie is still required)."""
+    origin = headers.get("Origin")
+    return not origin or origin.split("//", 1)[-1].rstrip("/") == headers.get("Host", "")
+
+
 def _same_origin(req: Posted) -> bool:
-    origin = req.headers.get("Origin")
-    return not origin or origin.split("//", 1)[-1].rstrip("/") == req.headers.get("Host", "")
+    return origin_ok(req.headers)
 
 
 def _bucket_prune(name: str, client: str, now: float) -> deque[float]:
@@ -657,7 +672,9 @@ def api_ask(req: Posted = Depends(posted)) -> Response:
         module = ai.load_module(None, book)
         term = module["tutorialData"]["sections"][chapter - 1]["items"][block - 1].get("term", "")
         module_id = store.module_id_for(module)
-        excerpts = ai.book_search(module_id, f"{question} {term}", chapter=chapter)
+        # tutor-book-index (30-09-26): the whole chapter + other-chapter index hits, or -- kill
+        # switch EDU_ASK_CONTEXT=legacy, or no usable index -- exactly today's book_search.
+        context = bookctx.ask_context(module_id, question, term, chapter)
         visuals = ai.block_visuals(module, chapter, block)
     except (ValueError, TypeError, IndexError, KeyError, AttributeError, json.JSONDecodeError) as error:
         return _json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
@@ -678,8 +695,8 @@ def api_ask(req: Posted = Depends(posted)) -> Response:
                 asked.append(moment)
     config = _routed(config, req.account, "tutor")
     try:
-        reply = ai.ask_tutor(config, chapter_title, term, lesson, question, turns, excerpts,
-                             visuals=visuals, images=images)
+        reply = bookctx.tutor_reply(config, context, chapter_title, term, lesson, question, turns,
+                                    visuals, images, block=block)
     except ValueError as error:
         return _json(HTTPStatus.BAD_GATEWAY, {"error": str(error)})
     reply["visionReason"] = vision_reason
@@ -697,6 +714,8 @@ def api_ask(req: Posted = Depends(posted)) -> Response:
         # ⚑ Phase 06a: whose question it was. The log file itself is unchanged and shared.
         "account": req.account.id, "username": req.account.username,
         "model": config.model,             # ⚑ 23-09-26: the combo this account's ask was routed to
+        "context": context[0],             # ⚑ 30-09-26 tutor-book-index: "index" | "legacy"
+        "chapterTokens": context[1]["tokens"] if context[0] == "index" else 0,
     })
     return _json(HTTPStatus.OK, reply)
 
@@ -1024,6 +1043,13 @@ def api_wrong_answer(req: Posted = Depends(posted)) -> Response:
     return _json(HTTPStatus.CREATED, {"recorded": True})
 
 
+# ⚑ study-rooms-qna P1 (29-09-26): add-on routers. After every core API route, before the
+#   exception handler and the SPA catch-all `/{full_path:path}` (so it never shadows them).
+from addons import ADDON_ROUTERS  # noqa: E402
+for _addon_router in ADDON_ROUTERS:
+    app.include_router(_addon_router)
+
+
 @app.exception_handler(StarletteHTTPException)
 async def _unknown_route(request: Request, exc: StarletteHTTPException) -> Response:
     """A POST to anything outside the ten is the legacy's flat 404 JSON, never a 405 that
@@ -1056,7 +1082,9 @@ def book_file(rest: str) -> Response:
         target, ctype = content.resolve_book_file([p for p in rest.split("/") if p != ""])
     except content.NotAFile:
         return _NOT_FOUND_BOOK
-    return FileResponse(target, media_type=ctype, headers={"Cache-Control": "public, max-age=3600"})
+    # module.json changes on re-import: revalidate every time (ETag -> cheap 304); assets stay cached.
+    cache = "no-cache" if target.name == "module.json" else "public, max-age=3600"
+    return FileResponse(target, media_type=ctype, headers={"Cache-Control": cache})
 
 
 @app.get("/favicon.svg")

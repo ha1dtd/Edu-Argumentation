@@ -179,7 +179,7 @@ export function ExercisePanel({ spec, blockId = '', recordProgress }: ExercisePa
       setStatus({ className: 'mb-4 text-sm text-amber-400', text: 'Write an answer first.' });
       return;
     }
-    const token = generationToken(provider.tokenRequired);
+    const token = await generationToken(provider.tokenRequired);
     if (token === null) return;
     setBusy(true);
     setStatus({

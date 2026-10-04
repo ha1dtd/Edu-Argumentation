@@ -46,7 +46,18 @@ export interface PanelBlockProps {
   theme: string;
 }
 
+/** Title prefix of a lesson's runnable-script card. Same prefix the Lab keys on
+ *  (lab/backend/library.py FULL_SCRIPT_PREFIX) — the Lab sources a lesson's code from it. */
+const FULL_SCRIPT_PREFIX = 'Full script';
+
 export function PanelBlock({ block, theme }: PanelBlockProps) {
+  // 29-09-26 (user, ch02 v3): the reader is explanation only; runnable code lives in the Lab.
+  // A "Full script" card is a copiable code listing, so the READER renders nothing for it.
+  // ⛔ The card STAYS in module.json — the Lab reads it first (D5 rule). This is a render-null
+  //    for one block, like CodeCellsBlock with no code; BlockRenderer's order is untouched (R6).
+  if (block.type === 'card' && typeof block.title === 'string' && block.title.startsWith(FULL_SCRIPT_PREFIX)) {
+    return null;
+  }
   const isCallout = block.type === 'callout';
   const known = Object.prototype.hasOwnProperty.call(THEME_TITLE_CLASS, theme);
   const bullets = Array.isArray(block.items)

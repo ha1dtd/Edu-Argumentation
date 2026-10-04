@@ -70,6 +70,10 @@ import { chromium } from 'playwright';
 
 const BASE = process.env.GATE_BASE || process.env.R_REMOTE || 'http://192.168.100.66:8767';  // P6b 24-09-26: was :8792 (retired)
 const MODULE_ID = process.env.GATE_MODULE || 'geron-homl3';
+/** ⚑ 29-09-26 (study-rooms-qna P1, V1): since Phase 06a the two derivation reads need a session
+ *  (live /book/<id>/module.json and /api/progress answer 401 without one). Optional: when set,
+ *  both fetches and the browser context carry `edu_session=<token>`. Unset = the old behaviour. */
+const GATE_COOKIE = process.env.GATE_COOKIE || '';
 
 /** The deep link the probe arrives on. Its whole job is to be SOMETHING OTHER THAN the
  *  next lesson, which the fence below verifies rather than assumes. */
@@ -92,7 +96,7 @@ const check = (id, pass, detail) => {
 // ── DERIVE the expectation from the LIVE stack ────────────────────────────────
 // ⛔ Two reads, both live, neither pinned. This is the whole point of the rewrite.
 const jsonAt = async (path) => {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetch(`${BASE}${path}`, GATE_COOKIE ? { headers: { Cookie: `edu_session=${GATE_COOKIE}` } } : undefined);
   if (!res.ok) throw new Error(`derivation read failed: GET ${path} -> ${res.status}`);
   return res.json();
 };
@@ -153,6 +157,9 @@ if (DEEP_BLOCK > blockCountOf(DEEP_CHAPTER - 1)) {
 // ── Drive the browser ─────────────────────────────────────────────────────────
 const browser = await chromium.launch({ executablePath: process.env.GATE_CHROME || chromium.executablePath() });
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+if (GATE_COOKIE) {
+  await ctx.addCookies([{ name: 'edu_session', value: GATE_COOKIE, url: BASE, httpOnly: true }]);
+}
 const page = await ctx.newPage();
 
 const snap = () => page.evaluate(() => ({

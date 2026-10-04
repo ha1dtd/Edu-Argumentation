@@ -21,6 +21,9 @@ import { useQuiz } from '../state/QuizProvider';
 import type { QuizQuestion } from '../data/types';
 import type { StudyActions } from '../shell/useStudyActions';
 import { AI_ONLY_ON_LIBRARY_BOOKS } from '../shell/useStudyActions';
+// study-rooms-qna P2 (29-09-26): the chapter/block tree moved to scope/ScopePicker.tsx, verbatim;
+// this dialog renders it bound to the active book (allowBookPick={false}).
+import { ScopePicker } from '../scope/ScopePicker';
 
 /** setupMode (app.js:3091). PRACTICE and GENERATE QUIZ open this same dialog. */
 export type SetupMode = 'practice' | 'generate';
@@ -44,35 +47,11 @@ export function practiceQuestionsFor(bank: QuizQuestion[], ids: string[]): QuizQ
   return bank.filter((question) => question?.source?.block && wanted.has(question.source.block));
 }
 
-/** chapterName (app.js:3115): titles already read "Chapter 3: X"; numbering them again gave "3. Chapter 3: X". */
-function chapterName(title: string | undefined, chapterIndex: number): string {
-  return String(title || '').replace(/^chapter\s+\d+\s*[:.\-–—]\s*/i, '') || `Chapter ${chapterIndex + 1}`;
-}
-
-const CHECKBOX_CLASS = 'h-5 w-5 shrink-0 cursor-pointer rounded accent-brand-600';
 const GHOST_BTN =
   'min-h-[44px] px-4 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white text-sm font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600';
 
-/** A checkbox whose `indeterminate` is a DOM property, not an attribute (syncSetupTree). */
-function ChapterBox(props: { checked: boolean; indeterminate: boolean; chapterIndex: number; onChange: (on: boolean) => void }) {
-  const ref = useRef<HTMLInputElement | null>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = props.indeterminate;
-  }, [props.indeterminate]);
-  return (
-    <input
-      ref={ref}
-      type="checkbox"
-      className={CHECKBOX_CLASS}
-      data-chapter={String(props.chapterIndex)}
-      checked={props.checked}
-      onChange={(event) => props.onChange(event.target.checked)}
-    />
-  );
-}
-
 export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: QuizSetupScreenProps) {
-  const { chapters, blocksOf, quizBank, data, moduleId } = useBookContext();
+  const { chapters, blocksOf, quizBank, data, moduleId, activeBookFile } = useBookContext();
   const { blockIdOf } = useProgressContext();
   const { dispatch } = useQuiz();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -172,13 +151,6 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
     onStart();
   };
 
-  const setMany = (list: string[], on: boolean) =>
-    setSelected((current) => {
-      const next = new Set(current);
-      list.forEach((id) => (on ? next.add(id) : next.delete(id)));
-      return next;
-    });
-
   return (
     <>
       {/* ⛔ The backdrop is the dismiss affordance (D-8). */}
@@ -233,85 +205,15 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
             or use <span className="text-gray-200 font-semibold">&times;</span> / Cancel, to go back.
           </p>
 
-          {/* min-w-0: a fieldset will not shrink below its widest line by default. */}
-          <fieldset className="min-w-0">
-            <legend className="sr-only">Chapters and blocks</legend>
-            {/* renderSetupTree (app.js:3126), element for element. */}
-            <div
-              id="setup-tree"
-              className="max-h-[55vh] overflow-y-auto overscroll-contain rounded-xl border border-gray-700 bg-gray-900/60 divide-y divide-gray-700/70"
-            >
-              {chapters.map((chapter, ci) => {
-                const blockIds = blocksOf(ci).map((_b, bi) => blockIdOf(ci, bi));
-                const picked = blockIds.filter((id) => selected.has(id)).length;
-                const isOpen = expanded.has(ci);
-                return (
-                  <div key={ci} data-chapter-group={String(ci)}>
-                    {/* Sticky, so a long chapter's blocks never scroll away from their chapter. */}
-                    <div className="sticky top-0 z-10 flex items-center gap-1 pr-3 bg-gray-900">
-                      <button
-                        type="button"
-                        data-toggle={String(ci)}
-                        aria-expanded={isOpen ? 'true' : 'false'}
-                        aria-controls={`setup-blocks-${ci}`}
-                        aria-label={`Blocks of chapter ${ci + 1}`}
-                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-gray-400 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
-                        onClick={() =>
-                          setExpanded((current) => {
-                            const next = new Set(current);
-                            if (next.has(ci)) next.delete(ci);
-                            else next.add(ci);
-                            return next;
-                          })
-                        }
-                      >
-                        <svg
-                          className={`w-4 h-4 transition-transform${isOpen ? ' rotate-90' : ''}`}
-                          aria-hidden="true"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
-                        </svg>
-                      </button>
-                      <label className="flex flex-1 min-w-0 items-center gap-3 min-h-[44px] cursor-pointer">
-                        <ChapterBox
-                          chapterIndex={ci}
-                          checked={picked > 0 && picked === blockIds.length}
-                          indeterminate={picked > 0 && picked < blockIds.length}
-                          onChange={(on) => setMany(blockIds, on)}
-                        />
-                        <span className="truncate text-white">{`${ci + 1}. ${chapterName(chapter.title, ci)}`}</span>
-                        <span className="ml-auto shrink-0 pl-2 text-xs text-gray-400 tabular-nums" data-tally={String(ci)}>
-                          {picked ? `${picked}/${blockIds.length}` : `${blockIds.length}`}
-                        </span>
-                      </label>
-                    </div>
-                    <ul id={`setup-blocks-${ci}`} className={isOpen ? 'pb-2' : 'hidden-view pb-2'}>
-                      {blocksOf(ci).map((block, bi) => {
-                        const id = blockIdOf(ci, bi);
-                        return (
-                          <li key={id}>
-                            <label className="flex items-center gap-3 min-h-[44px] pl-14 pr-3 cursor-pointer hover:bg-gray-800/60">
-                              <input
-                                type="checkbox"
-                                className={CHECKBOX_CLASS}
-                                data-block={id}
-                                checked={selected.has(id)}
-                                onChange={(event) => setMany([id], event.target.checked)}
-                              />
-                              <span className="min-w-0 text-sm text-gray-300">{`${bi + 1}. ${(block && block.term) || `Block ${bi + 1}`}`}</span>
-                            </label>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                );
-              })}
-            </div>
-          </fieldset>
+          <ScopePicker
+            books={[]}
+            value={{ bookId: activeBookFile ?? '', blocks: [...selected] }}
+            onChange={(next) => setSelected(new Set(next.blocks))}
+            allowBookPick={false}
+            chapters={chapters}
+            expanded={expanded}
+            onExpandedChange={setExpanded}
+          />
 
           <p id="setup-count" className="mt-4 text-sm text-gray-400" role="status" aria-live="polite">
             {countText}

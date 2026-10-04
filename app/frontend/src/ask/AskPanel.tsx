@@ -162,7 +162,7 @@ export function AskPanel({ reading }: AskPanelProps) {
     if (busy) return;
     const asked = question.trim();
     if (!asked) return;
-    const token = generationToken(provider.tokenRequired);
+    const token = await generationToken(provider.tokenRequired);
     if (token === null) return;
     setBusy(true);
     setQuestion('');

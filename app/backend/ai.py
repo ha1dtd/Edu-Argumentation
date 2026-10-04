@@ -8,8 +8,9 @@
        data/<name>.json) through content.py's guarded resolvers — ``root`` is ignored, it was
        the legacy's web directory and :8792 has its own;
      · BOOK_ROOT / LIBRARY_ROOT / MODULE_ID come from the one accessor (settings.store_path).
-   If a behaviour here needs to change, change it in BOTH places or not at all — until Phase
-   06 retires :8767, the two servers must answer the same question the same way.
+   The "change it in BOTH places" rule EXPIRED when the legacy :8767 server was retired (P6b,
+   24-09-26): this file is the only tutor now. Tutor-book-index (30-09-26) added ASK_SYSTEM_INDEX
+   and the chapter_block/hits path of ask_tutor; ASK_SYSTEM and the legacy path are unchanged.
 
 ⛔ Every function that calls a provider (provider_questions, fresh_questions, ask_tutor,
    grade_exercises) BLOCKS on urlopen for up to PROVIDER_TIMEOUT_SECONDS. They are called only
@@ -113,6 +114,36 @@ ASK_SYSTEM = (
     "2. THE BOOK EXCERPTS supplied. Use these when the lesson does not cover it. It is fine to reach "
     "ahead of where they are; say so plainly when you do.\n"
     "3. YOUR OWN KNOWLEDGE, when neither covers it. Say that is what you are doing.\n\n"
+    "FIRST LINE OF YOUR REPLY must be exactly one of:\n"
+    "SOURCE: lesson\n"
+    "SOURCE: book p.<page number>\n"
+    "SOURCE: general\n"
+    "Then a blank line, then the answer. Never invent a page number, a paper, an author or a URL. "
+    "If you are unsure, say you are unsure - that is more useful to them than a confident guess."
+)
+# The index path's system prompt (tutor-book-index, 30-09-26). ASK_SYSTEM above is deliberately
+# NOT edited: the legacy path must keep sending byte-identical requests (gate G6). This is its
+# text plus the whole-chapter source and the citation rule. p. here is the 1-based PDF page.
+ASK_SYSTEM_INDEX = (
+    "You are the learner's tutor inside a study app. They are a junior data engineer: strong on SQL, "
+    "tables, Spark and ETL, new to machine learning, and weak on Python, pandas and NumPy.\n\n"
+    "HOW TO TALK. Like a person explaining to a colleague at a desk, not like a textbook. Short "
+    "sentences. One idea at a time. Answer the actual question in the first sentence, then explain. "
+    "Gloss every piece of jargon the first time you use it. Use an analogy from their world - a table, "
+    "a SELECT, a GROUP BY, a full refresh versus an incremental load - whenever it is genuinely "
+    "accurate, and skip it when it is not. Plain words over precise-sounding ones. No preamble, no "
+    "'great question', no bullet-point dumps, no emoji. If they ask something short, answer short.\n\n"
+    "WHERE ANSWERS COME FROM, in this order:\n"
+    "1. THE LESSON they are reading. Use it first - it is on their screen.\n"
+    "2. THE WHOLE CHAPTER they are in, supplied as the book's own pages. Use it when the lesson does "
+    "not cover it.\n"
+    "3. THE BOOK EXCERPTS from other chapters supplied. Use these when the chapter does not cover it. "
+    "It is fine to reach ahead of where they are; say so plainly when you do.\n"
+    "4. YOUR OWN KNOWLEDGE, when none of these covers it. Say that is what you are doing.\n\n"
+    "CITE WHERE IT CAME FROM. The lesson, every chapter page and every excerpt starts with a bracket "
+    "label such as [ch4, p.142] or [ch4, lesson 3 \"Gradient Descent\"]. Whenever you use one - the "
+    "lesson included - cite its label in your answer, e.g. (ch4, p.142) or (ch4, lesson 3). Cite only "
+    "labels that were supplied; never make one up.\n\n"
     "FIRST LINE OF YOUR REPLY must be exactly one of:\n"
     "SOURCE: lesson\n"
     "SOURCE: book p.<page number>\n"
@@ -689,8 +720,15 @@ def figure_bytes(module_id: str, asset: str) -> bytes | None:
 def ask_tutor(config: "ProviderConfig", chapter_title: str, lesson_term: str, lesson: str,
               question: str, history: list[dict[str, str]], excerpts: list[dict[str, Any]],
               visuals: list[dict[str, Any]] | None = None,
-              images: list[tuple[str, bytes]] | None = None) -> dict[str, Any]:
+              images: list[tuple[str, bytes]] | None = None,
+              chapter_block: dict[str, Any] | None = None,
+              hits: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    # chapter_block/hits (tutor-book-index): the index path. Both None = the legacy path, whose
+    # request body is byte-identical to what it has always sent (gate G6).
     context = [f"THE LESSON THEY ARE READING\nChapter: {chapter_title}\nLesson: {lesson_term}\n\n{lesson}"]
+    if chapter_block is not None and chapter_block.get("lesson_label"):
+        # Index path only: the lesson carries a citable label like every other chunk (D4).
+        context[0] = f"THE LESSON THEY ARE READING {chapter_block['lesson_label']}\n" + context[0].split("\n", 1)[1]
     # LAYER 1. The page's figures and equations as text. source_for_block() drops
     # those blocks when it builds `lesson`, so without this the tutor cannot even
     # name a figure that is on the reader's screen.
@@ -700,6 +738,11 @@ def ask_tutor(config: "ProviderConfig", chapter_title: str, lesson_term: str, le
     if excerpts:
         joined = "\n\n".join(f"[book page {e['page']}]\n{e['text']}" for e in excerpts)
         context.append("BOOK EXCERPTS THAT MAY BE RELEVANT\n\n" + joined)
+    if chapter_block is not None:
+        context.append(f"{chapter_block['header']}\n\n{chapter_block['text']}")
+        if hits:
+            context.append("BOOK EXCERPTS FROM OTHER CHAPTERS THAT MAY BE RELEVANT\n\n"
+                           + "\n\n".join(f"{h['label']}\n{h['text']}" for h in hits))
     if images:
         # LAYER 2. An attached crop is the book's own figure, printed in the lesson
         # in front of them -- so it is the LESSON, and the existing SOURCE: contract
@@ -710,7 +753,8 @@ def ask_tutor(config: "ProviderConfig", chapter_title: str, lesson_term: str, le
                        "actually in the picture -- the axes and their units, what the shapes or bars do, "
                        "where the mass sits, which parts stand out -- and answer from that, not from what "
                        "a figure with this caption usually looks like.")
-    messages: list[dict[str, Any]] = [{"role": "system", "content": ASK_SYSTEM},
+    system = ASK_SYSTEM if chapter_block is None else ASK_SYSTEM_INDEX
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system},
                                       {"role": "system", "content": "\n\n".join(context)}]
     messages.extend(history[-ASK_HISTORY_TURNS:])
     if images:
@@ -746,7 +790,8 @@ def ask_tutor(config: "ProviderConfig", chapter_title: str, lesson_term: str, le
         page = int(found.group(1)) if found else None
         content = content[match.end():].lstrip("\n").strip()
     return {"answer": content, "source": source, "page": page,
-            "pages": [e["page"] for e in excerpts],
+            "pages": ([e["page"] for e in excerpts] if chapter_block is None
+                      else [h["page"] for h in hits or [] if h.get("page") is not None]),
             # Extra keys only -- the page ignores what it does not know. They exist
             # so a vision ask is never silent: it shows up here and in the ask log.
             "vision": bool(images),

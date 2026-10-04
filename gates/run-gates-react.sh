@@ -280,7 +280,10 @@ run_suite () {   # $1 = suite file, $2 = transcript basename, $3 = expected resu
   echo "== $f =="
   # ⚑ Phase 06a: every suite runs signed in through lib/auth-preload.mjs (R_SESSION), except a suite
   #   that is ABOUT sign-in (R_NO_PRELOAD=1 for that call).
-  if [ "${R_NO_PRELOAD:-0}" = 1 ]; then
+  if [ "${f##*.}" = py ]; then
+    # ⚑ 30-09-26 (study-rooms-qna P3): a PYTHON suite (gate-r-ws.py) — test venv, gate DB, repo backend.
+    ( cd "$GATES_DIR" && EDU_DB_ENV_PATH="$GATE_DB_ENV" R_BACKEND="$BACKEND_DIR" R_SMOKE_LIB="$SMOKE_DIR/lib" "$PYBIN" "$f" ) > "$t" 2>&1; e=$?
+  elif [ "${R_NO_PRELOAD:-0}" = 1 ]; then
     ( cd "$GATES_DIR" && node "$f" ) > "$t" 2>&1; e=$?
   else
     ( cd "$GATES_DIR" && node --import ./lib/auth-preload.mjs "$f" ) > "$t" 2>&1; e=$?
@@ -341,7 +344,7 @@ for spec in \
   "gate-r-read.mjs:rread:${R_READ_COUNT:-12}" \
   "gate-r-contract.mjs:rcontract:${R_CONTRACT_COUNT:-7}" \
   "gate-r-dom.mjs:rdom:${R_DOM_COUNT:-9}" \
-  "gate-r-ro.mjs:rro:${R_RO_COUNT:-3}" \
+  "gate-r-ro.mjs:rro:${R_RO_COUNT:-4}" \
   "gate-r-trap.mjs:rtrap:${R_TRAP_COUNT:-8}" \
   "gate-r-journey.mjs:rjourney:${R_JOURNEY_COUNT:-6}" \
   "gate-r-theme.mjs:rtheme:${R_THEME_COUNT:-6}" \
@@ -402,9 +405,28 @@ else RC=1; fi
 #   ⛔ Its row in gate-r-self.mjs's RS-COUNT table moves WITH this line, always.
 echo "== write harness, fresh process (for gate-r-route.mjs) =="
 if start_write_harness; then
-  R_STUB_PORT="$SPORT" run_suite gate-r-route.mjs rroute "${R_ROUTE_COUNT:-10}"; RTOTAL=$(( RTOTAL + ${COUNT[rroute]} ))
+  # ⚑ 10 -> 12 on 29-09-26 (study-rooms-qna P2): M-QNA-NORMAL / M-QNA-CLAUDE.
+  R_STUB_PORT="$SPORT" run_suite gate-r-route.mjs rroute "${R_ROUTE_COUNT:-12}"; RTOTAL=$(( RTOTAL + ${COUNT[rroute]} ))
+else RC=1; fi
+# ⚑ 29-09-26 (study-rooms-qna P2) — THE Q&A EXAMINER API. A FOURTH fresh write harness, and the ONLY
+#   process anywhere that sets QNA_TEST_DEADLINE_S / QNA_TEST_RETRY_MIN_S (the budget case needs a
+#   10 s deadline; the live unit never carries them). The assignments are scoped to this one call.
+#   R_NO_PRELOAD=1: the suite sends its own cookie (and none, for its 401 case).
+#   28 -> 30 on 30-09-26: QNA-UI-NOLOOP + QNA-UI-LOADING (browser; defects B and C).
+#   30 -> 39 on 30-09-26: P2b — setup options, pass mark, hint, redo (API + browser).
+#   ⛔ Its row in gate-r-self.mjs's RS-COUNT table moves WITH this line, always.
+echo "== write harness, fresh process, Q&A test budget (for gate-r-qna.mjs) =="
+if QNA_TEST_DEADLINE_S=10 QNA_TEST_RETRY_MIN_S=5 start_write_harness; then
+  R_NO_PRELOAD=1 R_STUB_PORT="$SPORT" run_suite gate-r-qna.mjs rqna "${R_QNA_COUNT:-39}"; RTOTAL=$(( RTOTAL + ${COUNT[rqna]} ))
 else RC=1; fi
 kill_on_port "$WPORT"; kill_stub
+
+# ⚑ 30-09-26 (study-rooms-qna P3) — LIVE ROOMS OVER WEBSOCKET. A Python suite: its OWN in-process
+#   uvicorn on :${R_WS_PORT:-8788} with the unit's WS flags, the `websockets` client from the test
+#   venv, and the room caps / timers lowered IN THAT PROCESS ONLY (never through a unit env, F21).
+#   Accounts gate-ws-1..4 live in the gate DB only and are deleted by the suite.
+#   ⛔ Its row in gate-r-self.mjs's RS-COUNT table moves WITH this line, always.
+run_suite gate-r-ws.py rws "${R_WS_COUNT:-27}"; RTOTAL=$(( RTOTAL + ${COUNT[rws]} ))
 
 # gate-r-self.mjs parses the transcripts above, so it MUST run last.
 if [ -f "$GATES_DIR/gate-r-self.mjs" ]; then
@@ -416,13 +438,15 @@ if [ -f "$GATES_DIR/gate-r-self.mjs" ]; then
   # 18 -> 19 on 23-09-26 (model routing per account): the gate-r-route.mjs row.
   # 19 -> 20 on 23-09-26 (style parity): the gate-r-style.mjs row.
   # 20 -> 21 on 23-09-26 (public access via nginx): the gate-r-proxy.mjs row.
-  run_suite gate-r-self.mjs rself "${R_SELF_COUNT:-21}"; RTOTAL=$(( RTOTAL + ${COUNT[rself]} ))
+  # 21 -> 22 on 29-09-26 (study-rooms-qna P2): the gate-r-qna.mjs row.
+  # 22 -> 23 on 30-09-26 (study-rooms-qna P3): the gate-r-ws.py row.
+  run_suite gate-r-self.mjs rself "${R_SELF_COUNT:-23}"; RTOTAL=$(( RTOTAL + ${COUNT[rself]} ))
 fi
 
 echo
 echo "===================== R- SUMMARY ====================="
 echo " R- vector     : $RTOTAL"
-echo " transcripts   : $OUT_DIR/{rsep,rread,rcontract,rdom,rro,rtrap,rjourney,rtheme,rmodal,rr6,rstyle,rauth,rwriteui,rparity,rwrite,rroute,rself}.txt"
+echo " transcripts   : $OUT_DIR/{rsep,rread,rcontract,rdom,rro,rtrap,rjourney,rtheme,rmodal,rr6,rstyle,rauth,rwriteui,rparity,rwrite,rroute,rqna,rws,rself}.txt"
 echo " local preview : $R_BASE    remote: $R_REMOTE"
 [ "$RC" -eq 0 ] && echo " RESULT        : ALL GREEN" || echo " RESULT        : FAILED"
 echo "======================================================"

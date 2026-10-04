@@ -12,9 +12,12 @@
  * stub LOGS the model each call SENT, so every routing check reads the wire, not configuration.
  * The combo names below are harness stand-ins (stub-*) so a pass cannot come from live values.
  *
- * Ten result lines (RS-COUNT in gate-r-self.mjs moves with this number, always):
- *   M-DEFAULT M-TOGGLE M-NORMAL M-CLAUDE M-SPOOF M-FALLBACK M-SETTINGS-KEEP M-CLI
- *   M-LEGACY-TUTOR M-LEGACY-SETTINGS-KEEP
+ * Twelve result lines (RS-COUNT in gate-r-self.mjs moves with this number, always):
+ *   M-DEFAULT M-TOGGLE M-NORMAL M-CLAUDE M-SPOOF M-QNA-NORMAL M-QNA-CLAUDE M-FALLBACK
+ *   M-SETTINGS-KEEP M-CLI M-LEGACY-TUTOR M-LEGACY-SETTINGS-KEEP
+ * ⚑ 10 -> 12 on 29-09-26 (study-rooms-qna P2): M-QNA-NORMAL / M-QNA-CLAUDE — the Q&A examiner's
+ *   three calls (question, grade, ask) use the `tutor` job: EDU_MODEL_TUTOR_NORMAL / _CLAUDE (live:
+ *   edu-tutor-normal / edu-tutor-claude; here the stub-* stand-ins, read off the wire).
  *
  * ⛔ NEVER the user's stores: R_WRITE_STORES and the legacy scratch dir must be under /var/tmp.
  */
@@ -152,6 +155,30 @@ try {
   const spoof = await fourJobs(readerSession, { claudeAccess: true, claude_access: true, model: 'evil-model' });
   check('M-SPOOF an OFF account sending {claudeAccess:true, model:"evil-model"} still gets the normal combos (server-side resolution)',
     expect(spoof, COMBOS.EDU_MODEL_TUTOR_NORMAL, COMBOS.EDU_MODEL_ARG_NORMAL), show(spoof));
+
+  /* ---- M-QNA-NORMAL / M-QNA-CLAUDE: the Q&A examiner routes as job `tutor` (P2, 29-09-26) ---- */
+  async function qnaJobs(cookie) {
+    const out = [];
+    for (const [job, route, body] of [
+      ['qna-question', '/api/qna/question', { bookId: MODULE, blocks: ['ch02-b07'], index: 0 }],
+      ['qna-grade', '/api/qna/grade', { bookId: MODULE, block: 'ch02-b07', question: 'Explain it.', answer: 'my own words [probe routing gate]' }],
+      ['qna-ask', '/api/qna/ask', { bookId: MODULE, block: 'ch02-b07', question: 'what is a stratum? [probe routing gate]' }],
+    ]) {
+      const before = stubLog().length;
+      const r = await post(route, body, cookie);
+      const models = [...new Set(stubLog().slice(before).map((e) => e.model))];
+      out.push({ job, status: r.status, model: models.join('|') || 'NONE' });
+    }
+    return out;
+  }
+  const qnaOff = await qnaJobs(readerSession);
+  check('M-QNA-NORMAL access OFF: Q&A question, grade and ask SENT EDU_MODEL_TUTOR_NORMAL (job tutor)',
+    qnaOff.every((r) => r.status === 200 && r.model === COMBOS.EDU_MODEL_TUTOR_NORMAL), show(qnaOff));
+  await post('/api/accounts/claude-access', { username: READER, on: true }, OWNER_SESSION);
+  const qnaOn = await qnaJobs(readerSession);
+  await post('/api/accounts/claude-access', { username: READER, on: false }, OWNER_SESSION);
+  check('M-QNA-CLAUDE access ON: Q&A question, grade and ask SENT EDU_MODEL_TUTOR_CLAUDE (job tutor)',
+    qnaOn.every((r) => r.status === 200 && r.model === COMBOS.EDU_MODEL_TUTOR_CLAUDE), show(qnaOn));
 
   /* ---- M-FALLBACK: an older provider.env keeps working ---- */
   setEnv({});

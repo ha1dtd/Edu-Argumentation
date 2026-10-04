@@ -41,6 +41,11 @@ import { QuizProvider, useQuiz } from '../state/QuizProvider';
 import { ReaderCursorProvider, useReaderCursor } from '../state/ReaderCursorProvider';
 import { Header, isWideMenu } from './Header';
 import { Screen } from './Screen';
+import { LoadingPanel } from './LoadingPanel';
+import { ADDON_LIST, addonById, isAddonId } from './screens.meta';
+import type { AddonId } from './screens.meta';
+import type { ComponentType } from 'react';
+import { ADDON_SCREENS, ADDON_SCREEN_CLASS } from './screens';
 import { HomeKpis, LibrarySection, WelcomeCard } from '../library/LibraryScreen';
 import { ReaderScreen } from '../reader/ReaderScreen';
 import { QuizScreen } from '../quiz/QuizScreen';
@@ -51,7 +56,7 @@ import { AskPanel } from '../ask/AskPanel';
 import { useStudyActions } from './useStudyActions';
 import type { SetupMode } from '../quiz/QuizSetupScreen';
 
-export type NavTab = 'home' | 'learn' | 'quiz' | 'generated' | 'settings' | 'account';
+export type NavTab = 'home' | 'learn' | 'quiz' | 'generated' | 'settings' | 'account' | AddonId;
 
 export type ScreenName =
   | 'loading'
@@ -61,7 +66,8 @@ export type ScreenName =
   | 'quiz'
   | 'result'
   | 'quiz-setup'
-  | 'account';
+  | 'account'
+  | AddonId;
 
 export function AppShell() {
   const { enterReader, select, cursor, ready } = useReaderCursor();
@@ -75,6 +81,7 @@ export function AppShell() {
   */
   const [initialRoute] = useState<Route>(() => parseRoute());
   const [screen, setScreen] = useState<ScreenName>(() => {
+    if (initialRoute.kind === 'addon') return initialRoute.id;
     if (initialRoute.kind === 'lesson') return 'tutorial';
     if (initialRoute.kind === 'account') return 'account';
     if (initialRoute.kind === 'settings') return 'settings';
@@ -122,7 +129,7 @@ export function AppShell() {
   };
   const closeQuizSetup = () => setScreen(returnTo);
   const [activeTab, setActiveTab] = useState<NavTab>(() =>
-    screen === 'tutorial' ? 'learn' : screen === 'account' ? 'account' : screen === 'settings' ? 'settings' : 'home',
+    isAddonId(screen) ? screen : screen === 'tutorial' ? 'learn' : screen === 'account' ? 'account' : screen === 'settings' ? 'settings' : 'home',
   );
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -244,6 +251,7 @@ export function AppShell() {
     let desired: string | null = null;
     if (screen === 'account') desired = '/account';
     else if (screen === 'settings') desired = '/settings';
+    else if (isAddonId(screen)) desired = '/' + addonById(screen).segment;
     else if (!slugResolved || !activeBookFile || !data || !ready) return;
     else if (screen === 'tutorial') desired = lessonPath(activeBookFile, cursor, names);
     else if (screen === 'welcome') desired = homeIsBook ? bookPath(activeBookFile) : '/';
@@ -267,6 +275,11 @@ export function AppShell() {
       if (route.kind === 'account' || route.kind === 'settings') {
         setActiveTab(route.kind);
         setScreen(route.kind);
+        return;
+      }
+      if (route.kind === 'addon') {
+        setActiveTab(route.id);
+        setScreen(route.id);
         return;
       }
       const file = route.kind === 'book' || route.kind === 'lesson' ? fileForSlug(route.slug, knownFiles) : null;
@@ -362,6 +375,7 @@ export function AppShell() {
           if (tab === 'generated') openQuizSetup('generate');
           if (tab === 'settings') setScreen('settings');
           if (tab === 'account') setScreen('account');
+          if (isAddonId(tab)) setScreen(tab);
           // ⛔ THE NARROW-VIEWPORT menu closes on a nav choice — `if (!isWideMenu())` is the
           //    legacy's own guard (app.js:3487-3490) and dropping it is D-8. See
           //    shell/Header.tsx:isWideMenu for the measurement.
@@ -431,26 +445,15 @@ export function AppShell() {
           visible={screen === 'loading'}
           className="flex flex-col items-center justify-center text-center py-24 animate-fade-in"
         >
-          <div className="relative w-16 h-16 mb-6 mx-auto">
-            <div className="absolute inset-0 border-4 border-gray-700 rounded-full" />
-            <div className="absolute inset-0 border-4 border-brand-600 rounded-full border-t-transparent animate-spin" />
-          </div>
-          <h2 className="text-3xl text-white font-light mb-2">
-            Writing a <span className="font-bold">fresh quiz</span>
-          </h2>
-          <p id="loading-scope" className="text-brand-600 uppercase tracking-widest text-sm font-semibold">
-            {actions.loading.scope || 'AI is reading random book sections · up to a minute'}
-          </p>
-          <p id="loading-model" className="mt-2 text-gray-500 text-xs">{actions.loading.model}</p>
-          {/* ⚑ 25-09-26 (user): stop writing this quiz and go back. */}
-          <button
-            id="loading-cancel-btn"
-            type="button"
-            onClick={actions.cancelAiQuiz}
-            className="mt-8 inline-flex items-center justify-center min-h-[44px] px-5 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white font-semibold uppercase tracking-wider text-sm transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
-          >
-            Cancel
-          </button>
+          {/* ⚑ 30-09-26: the markup lives in shell/LoadingPanel.tsx (moved verbatim) so the Q&A
+                add-on reuses the SAME panel (user: "not the same as the AI-Quiz"). DOM unchanged. */}
+          <LoadingPanel
+            idBase="loading"
+            title={<>Writing a <span className="font-bold">fresh quiz</span></>}
+            scope={actions.loading.scope || 'AI is reading random book sections · up to a minute'}
+            model={actions.loading.model}
+            onCancel={actions.cancelAiQuiz}
+          />
         </Screen>
 
         {/*
@@ -545,6 +548,18 @@ export function AppShell() {
         <Screen id="settings-screen" visible={screen === 'settings'} className="w-full max-w-5xl mx-auto space-y-6">
           <SettingsScreen open={screen === 'settings'} />
         </Screen>
+
+        {/* Add-on screens (study-rooms-qna P1). Registry: shell/screens.meta.ts + shell/screens.tsx. Empty in P1. */}
+        {ADDON_LIST.map((m) => {
+          const id = m.id as AddonId;
+          const C = (ADDON_SCREENS as Readonly<Record<string, ComponentType<{ open: boolean }> | undefined>>)[m.id];
+          if (!C) return null;
+          return (
+            <Screen key={id} id={m.domId} visible={screen === id} className={ADDON_SCREEN_CLASS}>
+              <C open={screen === id} />
+            </Screen>
+          );
+        })}
 
         {/*
           ⛔ B6 — `pb-32` IS ON #quiz-screen ITSELF, exactly as the legacy has it

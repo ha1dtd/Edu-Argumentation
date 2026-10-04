@@ -304,7 +304,10 @@ index_structure_check() {
 #       build  (identical)
 #   The duplicated t-sagemaker-clarify-bias-mastery is REAL and is the legacy's too: two files
 #   (SageMaker_Clarify.json, SageMakerClarifyBiasMastery.json) carry the same title.
-EDU_STUDY_EXPECT_MODULES="${EDU_STUDY_EXPECT_MODULES:-5 ['geron-homl3', 'openintro-statistics-2019-1045f2f5', 't-domain-4-deep-dive-deployment-mlops', 't-sagemaker-clarify-bias-mastery', 't-sagemaker-clarify-bias-mastery']}"  # 25-09-26: openintro-statistics-pdf-1045f2f5 deleted (user; test upload, soft-deleted to deleted/)
+# ⚑ RE-MEASURED 29-09-26: 5 -> 6 (python-for-data-analysis-pdf-78763858 added). Measured on
+#   live :8767 with this file's own parse_modules(), authenticated (minted + revoked session):
+#       :8767  6 ['geron-homl3', 'openintro-statistics-2019-1045f2f5', 'python-for-data-analysis-pdf-78763858', 't-domain-4-deep-dive-deployment-mlops', 't-sagemaker-clarify-bias-mastery', 't-sagemaker-clarify-bias-mastery']
+EDU_STUDY_EXPECT_MODULES="${EDU_STUDY_EXPECT_MODULES:-6 ['geron-homl3', 'openintro-statistics-2019-1045f2f5', 'python-for-data-analysis-pdf-78763858', 't-domain-4-deep-dive-deployment-mlops', 't-sagemaker-clarify-bias-mastery', 't-sagemaker-clarify-bias-mastery']}"  # 25-09-26: openintro-statistics-pdf-1045f2f5 deleted (user; test upload, soft-deleted to deleted/)
 
 # Parse a /api/modules payload on stdin into the canonical "<count> <sorted list>" form.
 # Exits non-zero on malformed JSON or a missing `books` key -- a 200 that is not the
@@ -484,7 +487,7 @@ Environment=EDU_PROGRESS_PATH=/home/ubuntu/foxai-data/edu-argumentation/progress
 Environment=EDU_ASSET_ROOT=/home/ubuntu/foxai-data/edu-argumentation/assets
 Environment=EDU_LIBRARY_ROOT=/home/ubuntu/foxai-data/edu-argumentation/library
 Environment=EDU_LIBRARY_META_PATH=/home/ubuntu/foxai-data/edu-argumentation/library-meta.json
-ExecStart=${VENV}/bin/uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 1 --app-dir ${REMOTE_DIR}/backend
+ExecStart=${VENV}/bin/uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 1 --app-dir ${REMOTE_DIR}/backend --ws-max-size 65536 --ws-per-message-deflate false --ws-ping-interval 25
 MemoryHigh=384M
 MemoryMax=512M
 CPUQuota=200%
@@ -499,6 +502,12 @@ WantedBy=multi-user.target
 UNIT
   ssh "$HOST" "sudo -n systemctl daemon-reload && sudo -n systemctl enable '$SERVICE'"
   log "unit installed and enabled"
+  # ⚑ study-rooms-qna P3 (30-09-26): live rooms need a WebSocket implementation. Without it uvicorn
+  #   serves HTTP fine and every /api/rooms/*/ws handshake fails — so the deploy FAILS here, BEFORE
+  #   the restart, rather than shipping a room screen that can never connect.
+  ssh "$HOST" "'$VENV/bin/python' -c 'import websockets; print(\"websockets\", websockets.__version__)'" \
+    || fail "websockets is not importable from ${VENV} after the install -- the live rooms cannot connect"
+  log "websockets importable"
 }
 
 # ---------------------------------------------------------------------------
