@@ -173,7 +173,8 @@ export function App() {
     if (ok) window.setTimeout(() => setCopied(false), 1500);
   };
 
-  const run = async () => {
+  // `selection` = only the highlighted lines (Run selection); omitted = the whole editor.
+  const run = async (selection?: string) => {
     if (!bookId || !lessonId || running) return;
     const id = ++runId.current;
     const started = Date.now();
@@ -182,7 +183,7 @@ export function App() {
       if (runId.current === id) setResult({ kind: 'running', seconds: Math.floor((Date.now() - started) / 1000) });
     }, 1000);
     try {
-      const outcome = await api.run(bookId, lessonId, code);
+      const outcome = await api.run(bookId, lessonId, selection ?? code);
       if (runId.current === id) setResult({ kind: 'done', result: outcome });
     } catch (error) {
       if (runId.current === id) {

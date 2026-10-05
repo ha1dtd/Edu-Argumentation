@@ -5,6 +5,21 @@ import { MAX_CODE_BYTES, byteLength } from '../api';
 // A plain monospace <textarea> — no editor dependency (plan F4). Tab inserts four spaces.
 // ⚑ 25-09-26 (user): exactly four buttons — Run, Stop, Reset, Copy. Reset = start over: original
 //   code AND a fresh kernel (the old separate "Reset to original" + "Reset kernel" pair, merged).
+// ⚑ 05-10-26 (user): Run selection. Highlight lines and Run (or Ctrl+Enter) sends only those lines to
+//   the same kernel, so a long lesson runs one part at a time under the 60 s limit. The selection
+//   widens to whole lines and is dedented, so a half-selected or indented block still runs.
+//   Nothing highlighted = the whole editor, as before. Still exactly four buttons.
+export function selectedLines(value: string, start: number, end: number): string | null {
+  if (start === end) return null;
+  const from = value.lastIndexOf('\n', start - 1) + 1;
+  const lastChar = value[end - 1] === '\n' ? end - 1 : end;
+  const stop = value.indexOf('\n', lastChar);
+  const lines = value.slice(from, stop === -1 ? value.length : stop).split('\n');
+  if (!lines.some((line) => line.trim())) return null;
+  const indent = Math.min(...lines.filter((line) => line.trim()).map((line) => line.length - line.trimStart().length));
+  return lines.map((line) => line.slice(Math.min(indent, line.length - line.trimStart().length))).join('\n');
+}
+
 const BTN =
   'min-h-[36px] px-3 rounded-lg border text-xs font-semibold uppercase tracking-wider whitespace-nowrap transition-colors active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed';
 
@@ -13,7 +28,7 @@ export function CodeEditor(props: {
   edited: boolean;
   running: boolean;
   onChange: (code: string) => void;
-  onRun: () => void;
+  onRun: (selection?: string) => void;
   onStop: () => void;
   onReset: () => void;
   onCopy: () => void;
@@ -37,11 +52,26 @@ export function CodeEditor(props: {
     return () => observer.disconnect();
   }, [props.code]);
   const tooBig = size > MAX_CODE_BYTES;
+  const [hasSelection, setHasSelection] = useState(false);
+  const selection = () => {
+    const area = areaRef.current;
+    return area ? selectedLines(area.value, area.selectionStart, area.selectionEnd) ?? undefined : undefined;
+  };
+  const trackSelection = () => setHasSelection(selection() !== undefined);
+  useEffect(trackSelection, [props.code]);
+  useEffect(() => {
+    // selectionchange also covers selections made by keyboard, double-click and select-all
+    const onChange = () => {
+      if (document.activeElement === areaRef.current) trackSelection();
+    };
+    document.addEventListener('selectionchange', onChange);
+    return () => document.removeEventListener('selectionchange', onChange);
+  }, []);
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
-      if (!props.running && !tooBig) props.onRun();
+      if (!props.running && !tooBig) props.onRun(selection());
       return;
     }
     if (event.key !== 'Tab' || event.shiftKey) return;
@@ -65,11 +95,12 @@ export function CodeEditor(props: {
         <button
           id="lab-run-btn"
           type="button"
-          onClick={props.onRun}
+          onClick={() => props.onRun(selection())}
           disabled={props.running || tooBig}
+          title="Highlight lines to run only them; nothing highlighted runs everything"
           className={`${BTN} border-brand-600 bg-brand-600 text-white hover:bg-brand-500`}
         >
-          Run
+          {hasSelection ? 'Run selection' : 'Run'}
         </button>
         <button id="lab-stop-btn" type="button" onClick={props.onStop} disabled={!props.running} className={`${BTN} border-gray-600 text-gray-200 hover:bg-gray-700`}>
           Stop
@@ -99,6 +130,9 @@ export function CodeEditor(props: {
           value={props.code}
           onChange={(e) => props.onChange(e.target.value)}
           onKeyDown={onKeyDown}
+          onSelect={trackSelection}
+          onKeyUp={trackSelection}
+          onMouseUp={trackSelection}
           onScroll={measure}
           aria-label="Lesson code"
           className="absolute inset-0 w-full h-full resize-none bg-gray-950 border-0 text-gray-100 p-4 font-mono text-sm leading-6 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-brand-600"
