@@ -95,6 +95,43 @@ export function isWideMenu(): boolean {
   return typeof window !== 'undefined' && window.matchMedia(MENU_WIDE).matches;
 }
 
+// ⚑ 12-10-26 (user, relayed by rag 3b): every top-bar tab carries a GLYPH. User: "not the CoreX and its
+//   page family style, but based on the actual look of the ml page" — so the glyph follows THIS app's own
+//   icon+text pattern (#account-signout-btn: outline, `w-4 h-4`, `gap-2`, currentColor), inheriting the
+//   tab's gray-400 -> white and brand underline; no CoreX token. Lucide (ISC) paths copied VERBATIM from
+//   lucide-react 1.52 and inlined, same as #nav-logout: lucide-react is not a dependency here. The glyph is
+//   aria-hidden, so each tab's accessible name and textContent stay its label; the label shows at every
+//   width (below md the nav is a labelled dropdown).
+type Glyph = ReadonlyArray<readonly ['path', string] | readonly ['circle', number, number, number]>;
+const NAV_GLYPHS: Readonly<Record<string, Glyph>> = {
+  // House
+  'nav-tutorial': [['path', 'M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8'], ['path', 'M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z']],
+  // BookOpen
+  'nav-learn': [['path', 'M12 5v16'], ['path', 'M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z']],
+  // ListChecks
+  'nav-quiz': [['path', 'M13 5h8'], ['path', 'M13 12h8'], ['path', 'M13 19h8'], ['path', 'm3 17 2 2 4-4'], ['path', 'm3 7 2 2 4-4']],
+  // Sparkles
+  'nav-generated-quiz': [['path', 'M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z'], ['path', 'M20 2v4'], ['path', 'M22 4h-4'], ['circle', 4, 20, 2]],
+  // Settings
+  'nav-settings': [['path', 'M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915'], ['circle', 12, 12, 3]],
+  // CircleUser
+  'nav-account': [['circle', 12, 12, 10], ['circle', 12, 10, 3], ['path', 'M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662']],
+  // MessagesSquare
+  'nav-qna': [['path', 'M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z'], ['path', 'M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1']],
+  // Radio
+  'nav-live': [['path', 'M16.247 7.761a6 6 0 0 1 0 8.478'], ['path', 'M19.075 4.933a10 10 0 0 1 0 14.134'], ['path', 'M4.925 19.067a10 10 0 0 1 0-14.134'], ['path', 'M7.753 16.239a6 6 0 0 1 0-8.478'], ['circle', 12, 12, 2]],
+};
+
+function NavGlyph({ id }: { id: string }) {
+  const glyph = NAV_GLYPHS[id];
+  if (!glyph) return null;
+  return (
+    <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+      {glyph.map((el, i) => (el[0] === 'path' ? <path key={i} d={el[1]} /> : <circle key={i} cx={el[1]} cy={el[2]} r={el[3]} />))}
+    </svg>
+  );
+}
+
 /** The five nav tabs, in the legacy's document order. `null` == HOME, which is brand-home's
  *  target: app.js maps #nav-tutorial to showLandingDashboard + updateNavUI('tutorial'). */
 const NAV_TABS: ReadonlyArray<{ id: string; label: string; tab: NavTab }> = [
@@ -220,7 +257,10 @@ export function Header(props: HeaderProps) {
                 else onSelectTab(tab);
               }}
             >
-              {label}
+              <span className="inline-flex items-center gap-2">
+                <NavGlyph id={id} />
+                {label}
+              </span>
             </button>
           );
         })}
