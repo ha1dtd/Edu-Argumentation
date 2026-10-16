@@ -1,8 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { MAX_CODE_BYTES, byteLength } from '../api';
+import { CODE_COLOURS_CSS, highlightPython } from '../codeColours';
 
 // A plain monospace <textarea> — no editor dependency (plan F4). Tab inserts four spaces.
+// ⚑ 16-10-26 (user): VS Code-style syntax colours. The <textarea> stays the real editor (typing, caret,
+//   selection, Run selection, gates all unchanged); its text is made transparent and a coloured <pre>
+//   with the SAME font, padding and scroll position sits behind it. Same trick as any "textarea + overlay"
+//   editor — no editor library.
 // ⚑ 25-09-26 (user): exactly four buttons — Run, Stop, Reset, Copy. Reset = start over: original
 //   code AND a fresh kernel (the old separate "Reset to original" + "Reset kernel" pair, merged).
 // ⚑ 05-10-26 (user): Run selection. Highlight lines and Run (or Ctrl+Enter) sends only those lines to
@@ -18,6 +23,15 @@ export function selectedLines(value: string, start: number, end: number): string
   if (!lines.some((line) => line.trim())) return null;
   const indent = Math.min(...lines.filter((line) => line.trim()).map((line) => line.length - line.trimStart().length));
   return lines.map((line) => line.slice(Math.min(indent, line.length - line.trimStart().length))).join('\n');
+}
+
+let coloursInjected = false;
+function injectColours() {
+  if (coloursInjected || typeof document === 'undefined') return;
+  coloursInjected = true;
+  const style = document.createElement('style');
+  style.textContent = CODE_COLOURS_CSS;
+  document.head.appendChild(style);
 }
 
 const BTN =
@@ -38,10 +52,19 @@ export function CodeEditor(props: {
   // Long lines never wrap; when some line is wider than the box, a fade on the right edge says
   // "there is more — scroll sideways" (a headless or overlay scrollbar alone is easy to miss).
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const paintRef = useRef<HTMLPreElement>(null);
+  injectColours();
+  // a trailing newline keeps the last (empty) line's height, so both layers scroll the same distance
+  const painted = useMemo(() => highlightPython(props.code) + '\n', [props.code]);
   const [moreRight, setMoreRight] = useState(false);
   const measure = () => {
     const area = areaRef.current;
     if (area) setMoreRight(area.scrollWidth - area.clientWidth - area.scrollLeft > 2);
+    const paint = paintRef.current;
+    if (area && paint) {
+      paint.scrollTop = area.scrollTop;
+      paint.scrollLeft = area.scrollLeft;
+    }
   };
   useEffect(() => {
     measure();
@@ -120,6 +143,14 @@ export function CodeEditor(props: {
         </button>
       </div>
       <div className="relative flex-1 min-h-[12rem] bg-gray-950">
+        <pre
+          ref={paintRef}
+          id="lab-editor-paint"
+          aria-hidden="true"
+          className="absolute inset-0 m-0 overflow-hidden whitespace-pre pointer-events-none p-4 font-mono text-sm leading-6 text-gray-100"
+          style={{ tabSize: 4 }}
+          dangerouslySetInnerHTML={{ __html: painted }}
+        />
         <textarea
           id="lab-editor"
           ref={areaRef}
@@ -135,7 +166,8 @@ export function CodeEditor(props: {
           onMouseUp={trackSelection}
           onScroll={measure}
           aria-label="Lesson code"
-          className="absolute inset-0 w-full h-full resize-none bg-gray-950 border-0 text-gray-100 p-4 font-mono text-sm leading-6 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-brand-600"
+          style={{ tabSize: 4, caretColor: '#f3f4f6' }}
+          className="absolute inset-0 w-full h-full resize-none bg-transparent border-0 text-transparent p-4 font-mono text-sm leading-6 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-brand-600"
         />
         {moreRight ? (
           <div

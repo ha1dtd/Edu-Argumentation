@@ -23,6 +23,7 @@
 // ⚠ KaTeX CSS stays CDN-@import-ed inside the shadow style. ONLY the Tailwind CDN drops
 //   in this phase; offline KaTeX is a Phase 05 item.
 import { useEffect, useRef } from 'react';
+import { CODE_COLOURS_CSS, highlightPython } from './codeColours';
 
 // ── A3c — THE IMPORT, DECIDED AND WRITTEN ─────────────────────────────────────
 // A PLAIN RELATIVE SIDE-EFFECT IMPORT. No alias, no copy, no shim.
@@ -81,6 +82,20 @@ export function RichTextViewer({ content, className }: RichTextViewerProps) {
     if (!element) return;
     // ⛔ setAttribute, not a prop. See the header.
     element.setAttribute('content', encodeURIComponent(content ?? ''));
+    // 16-10-26 (user): VS Code-style colours on ```python fences. The element above is sha-pinned and
+    // rebuilds its shadow root on every `content` change, so the colours are applied here, AFTER the
+    // setAttribute (its callback is synchronous), never inside the pinned file. Text is unchanged —
+    // only <span class="tok-…"> wrappers are added — so gates that read the shadow root's text still hold.
+    const root = element.shadowRoot;
+    if (!root) return;
+    const blocks = root.querySelectorAll('pre code.language-python');
+    if (!blocks.length) return;
+    const style = document.createElement('style');
+    style.textContent = CODE_COLOURS_CSS;
+    root.appendChild(style);
+    blocks.forEach((block) => {
+      block.innerHTML = highlightPython(block.textContent ?? '');
+    });
   }, [content]);
 
   return <rich-text-viewer ref={ref} className={className} />;

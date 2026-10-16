@@ -9,6 +9,8 @@
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
+    "@lezer/highlight": "1.2.5",
+    "@lezer/python": "1.1.19",
     "react": "19.2.7",
     "react-dom": "19.2.7"
   },
