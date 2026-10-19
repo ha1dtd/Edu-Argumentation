@@ -23,11 +23,24 @@ const escapeHtml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '
 export function highlightPython(code: string): string {
   let out = '';
   let at = 0;
+  let removeRun = false; // inside the comment lines a "# >>> REMOVE" marker introduces
   highlightTree(parser.parse(code), highlighter, (from, to, classes) => {
-    if (from > at) out += escapeHtml(code.slice(at, from));
+    if (from > at) {
+      const gap = code.slice(at, from);
+      if (gap.includes('\n\n')) removeRun = false;
+      out += escapeHtml(gap);
+    }
     const text = code.slice(from, to);
-    // the build-along's own "# >>> ADD / CHANGE" instruction lines stand out from ordinary comments
-    const cls = classes === 'tok-cmt' && text.startsWith('# >>>') ? 'tok-cmt tok-marker' : classes;
+    let cls = classes;
+    if (classes === 'tok-cmt') {
+      // the build-along's own "# >>> ADD / CHANGE / REMOVE" instruction lines stand out from ordinary
+      // comments, each in its own colour; the commented-out lines under a REMOVE are red too
+      const kind = /^# >>> (ADD|CHANGE|REMOVE)\b/.exec(text)?.[1];
+      if (kind) {
+        cls = `tok-cmt tok-marker tok-marker-${kind.toLowerCase()}`;
+        removeRun = kind === 'REMOVE';
+      } else if (removeRun) cls = 'tok-cmt tok-rm';
+    } else removeRun = false;
     out += `<span class="${cls}">${escapeHtml(text)}</span>`;
     at = to;
   });
@@ -37,5 +50,6 @@ export function highlightPython(code: string): string {
 export const CODE_COLOURS_CSS = `
 .tok-ctl{color:#c586c0}.tok-kw{color:#569cd6}.tok-fn{color:#dcdcaa}.tok-cls{color:#4ec9b0}
 .tok-var{color:#9cdcfe}.tok-str{color:#ce9178}.tok-num{color:#b5cea8}.tok-cmt{color:#6a9955}
-.tok-marker{color:#f0b429;font-weight:600}
+.tok-marker{color:#f0b429;font-weight:600}.tok-marker-add{color:#3be8b0}.tok-marker-change{color:#f0b429}
+.tok-marker-remove{color:#ff5555}.tok-rm{color:#ff5555}
 `;
