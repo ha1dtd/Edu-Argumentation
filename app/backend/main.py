@@ -1027,20 +1027,85 @@ def api_wrong_answer(req: Posted = Depends(posted)) -> Response:
         if not isinstance(options, list) or not 2 <= len(options) <= 12:
             raise ValueError("options must be a list of 2-12 strings.")
         options = [str(o)[:4_000] for o in options]
-        chosen, correct = int(payload.get("chosen")), int(payload.get("correct"))
-        if not (0 <= chosen < len(options) and 0 <= correct < len(options)) or chosen == correct:
-            raise ValueError("chosen and correct must be different option positions.")
+        chosen, correct, chosen_set, correct_set = store.wrong_answer_positions(payload, len(options))
         attempt = str(payload.get("attempt") or "")[:64] or None
         db.execute(
-            "INSERT INTO wrong_answers (account_id, module_id, block_id, quiz_kind, question, options, chosen, correct, attempt)"
-            " VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)",
-            (req.account.id, module, block, kind, question, json.dumps(options, ensure_ascii=False), chosen, correct, attempt),
+            "INSERT INTO wrong_answers (account_id, module_id, block_id, quiz_kind, question, options, chosen, correct,"
+            " chosen_set, correct_set, attempt)"
+            " VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s::jsonb, %s::jsonb, %s)",
+            (req.account.id, module, block, kind, question, json.dumps(options, ensure_ascii=False), chosen, correct,
+             json.dumps(chosen_set) if chosen_set is not None else None,
+             json.dumps(correct_set) if correct_set is not None else None, attempt),
         )
     except db.StoreUnavailable as error:
         return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
     except (ValueError, TypeError, json.JSONDecodeError) as error:
         return _json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
     return _json(HTTPStatus.CREATED, {"recorded": True})
+
+
+# ---------------------------------------------------------------------------
+# Spaced repetition (21-10-26). One card per account x module x question key; the question text lives
+# in the book's quizData, never here. Scheduling is store.srs_next (pure, gated).
+# ---------------------------------------------------------------------------
+RATE["review"] = (1200, 600)           # generous: one call per answered question
+_BUCKETS["review"] = defaultdict(deque)
+MAX_REVIEW_BYTES = 4 * 1024
+
+
+def _review_rate(req: Posted) -> JSONResponse | None:
+    moment = time.monotonic()
+    with _BUCKET_LOCK:
+        recent = _bucket_prune("review", req.client, moment)
+        if len(recent) >= RATE["review"][0]:
+            return _json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "Too many review calls just now."})
+        recent.append(moment)
+    return None
+
+
+@app.post("/api/review/seen")
+def api_review_seen(req: Posted = Depends(posted)) -> Response:
+    """Enrol a question after an ORDINARY quiz answer ({module, question, correct})."""
+    blocked = _gate(req) or _review_rate(req)
+    if blocked:
+        return blocked
+    try:
+        payload = req.read_json(MAX_REVIEW_BYTES)
+        if not isinstance(payload.get("correct"), bool):
+            raise ValueError("correct must be true or false.")
+        outcome = store.review_seen(req.account.id, store.module_key(payload.get("module")),
+                                    store.review_key(payload.get("question")), payload["correct"])
+    except db.StoreUnavailable as error:
+        return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+    except (ValueError, TypeError, json.JSONDecodeError) as error:
+        return _json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+    return _json(HTTPStatus.OK, {"outcome": outcome})
+
+
+@app.post("/api/review/grade")
+def api_review_grade(req: Posted = Depends(posted)) -> Response:
+    """Grade one card in a review run ({module, question, grade: again|hard|good|easy})."""
+    blocked = _gate(req) or _review_rate(req)
+    if blocked:
+        return blocked
+    try:
+        payload = req.read_json(MAX_REVIEW_BYTES)
+        reply = store.review_grade(req.account.id, store.module_key(payload.get("module")),
+                                   store.review_key(payload.get("question")), str(payload.get("grade") or ""))
+    except db.StoreUnavailable as error:
+        return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+    except (ValueError, TypeError, json.JSONDecodeError) as error:
+        return _json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+    return _json(HTTPStatus.OK, reply)
+
+
+@app.get("/api/review/due")
+def api_review_due(request: Request, module: str = Query(default=""), limit: int = Query(default=20)) -> Response:
+    """The cards due now for the signed-in account in one module (oldest first)."""
+    try:
+        return _json(HTTPStatus.OK, store.review_due(_account(request).id, store.module_key(module), limit))
+    except db.StoreUnavailable as error:
+        return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
 
 
 # ⚑ study-rooms-qna P1 (29-09-26): add-on routers. After every core API route, before the

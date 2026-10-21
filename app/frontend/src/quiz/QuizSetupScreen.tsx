@@ -19,6 +19,7 @@ import { useBookContext } from '../state/BookProvider';
 import { useProgressContext } from '../state/ProgressProvider';
 import { useQuiz } from '../state/QuizProvider';
 import type { QuizQuestion } from '../data/types';
+import { useReviewDue } from '../data/queries';
 import type { StudyActions } from '../shell/useStudyActions';
 import { AI_ONLY_ON_LIBRARY_BOOKS } from '../shell/useStudyActions';
 // study-rooms-qna P2 (29-09-26): the chapter/block tree moved to scope/ScopePicker.tsx, verbatim;
@@ -57,6 +58,10 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const startRef = useRef<HTMLButtonElement | null>(null);
+  // 21-10-26 spaced repetition: cards due for review in THIS book. Shown only in Practice. If the call
+  // fails (or the server predates it) the button and the line simply do not appear.
+  const review = useReviewDue(moduleId, open && mode === 'practice');
+  const dueCount = review.data?.dueCount ?? 0;
 
   const catalog = chapters.flatMap((chapter, chapterIndex) =>
     blocksOf(chapterIndex).map((block, blockIndex) => ({
@@ -151,6 +156,19 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
     onStart();
   };
 
+  /** Start a spaced-repetition run: the due cards that exist in this book's bank, oldest due first. */
+  const startReview = () => {
+    const byKey = new Map<string, QuizQuestion>();
+    for (const question of quizBank) if (question?.source?.question) byKey.set(question.source.question, question);
+    const questions = (review.data?.due ?? [])
+      .map((card) => byKey.get(card.question))
+      .filter((question): question is QuizQuestion => Boolean(question));
+    if (!questions.length) return;
+    dispatch({ type: 'run/reset', questions });
+    dispatch({ type: 'scope/set', scope: 'review', label: 'Review', blockId: null });
+    onStart();
+  };
+
   return (
     <>
       {/* ⛔ The backdrop is the dismiss affordance (D-8). */}
@@ -219,6 +237,16 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
             {countText}
           </p>
 
+          {mode === 'practice' && review.data && (
+            <p id="review-status" className="mt-1 text-sm text-gray-400" role="status">
+              {dueCount > 0
+                ? `${dueCount} question${dueCount === 1 ? '' : 's'} due for review`
+                : review.data.total > 0
+                  ? 'Nothing due for review right now'
+                  : 'Questions you answer here come back for review later'}
+            </p>
+          )}
+
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <button
               ref={startRef}
@@ -230,6 +258,16 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
             >
               Start
             </button>
+            {mode === 'practice' && dueCount > 0 && (
+              <button
+                id="setup-review-btn"
+                type="button"
+                onClick={startReview}
+                className="min-h-[44px] px-6 rounded-lg border border-brand-600 text-white hover:bg-brand-600 text-sm font-bold uppercase tracking-wider transition-colors"
+              >
+                Review due ({dueCount})
+              </button>
+            )}
             {/* ⚠ Quiz sessions (resume) were not ported in Phase 03, so there is never one to
                   resume: the button stays in its legacy initial state, hidden. */}
             <button id="setup-resume-btn" type="button" className={`hidden-view min-h-[44px] px-6 rounded-lg border border-gray-600 text-gray-200 hover:border-brand-600 hover:text-white text-sm font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600`}>

@@ -82,6 +82,23 @@ export function useModules() {
   });
 }
 
+/** /api/review/due — the cards due now for this account in one module (spaced repetition, 21-10-26). */
+export interface ReviewDue {
+  due: { question: string; dueAt: string; reps: number; lapses: number }[];
+  dueCount: number;
+  total: number;
+}
+
+export function useReviewDue(moduleId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['review-due', moduleId] as const,
+    enabled: enabled && Boolean(moduleId),
+    staleTime: 0,
+    retry: 0,
+    queryFn: ({ signal }) => getJson<ReviewDue>(`/api/review/due?module=${encodeURIComponent(moduleId)}&limit=20`, signal),
+  });
+}
+
 export function useGeneralSettings() {
   return useQuery({
     queryKey: queryKeys.general,

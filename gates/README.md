@@ -39,6 +39,10 @@ and asserts both the exit code and the result-line count of each.
 | **frozen vector total** | **49** | **must never change** |
 | `gate-b456.mjs` | 6 | new in P0, asserted separately |
 | `gate-self.mjs` | 6 | new in P0, asserted separately |
+| `gate-multi-answer.mjs` | 24 | 21-10-26, choose-N questions in a real browser on the built `dist/`; run by hand (needs `vite build` + a playwright install), NOT in the frozen vector |
+| `gate-srs.mjs` | 27 | 21-10-26, active recall + spaced repetition in a real browser on the built `dist/` (red 25/27 when recall-first is disabled); run by hand like the multi-answer one |
+| `gate-srs-backend.py` | 32 | 21-10-26, the schedule (SM-2-lite), validators, migration 004 additive, the three routes; `python3`, no service. ⚠ clear `app/backend/__pycache__` between a mutation and its restore (same-second edits reuse stale bytecode) |
+| `gate-multi-answer-backend.py` | 17 | 21-10-26, the server half (wrong-answer validation, rooms skip choose-N, migration 003 is additive); `python3`, no service |
 
 > ⛔ **The 49-line vector is frozen.** It is a *no-regression* gate: it proves the suites
 > still assert the same things, **not** that those assertions are right. A different vector

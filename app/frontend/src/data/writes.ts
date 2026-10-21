@@ -34,6 +34,9 @@ export type WriteRoute =
   // ⚑ 23-09-26: owner-only per-account Claude access (which 9router combos the account's AI uses).
   | '/api/accounts/claude-access'
   | '/api/wrong-answers'
+  // Spaced repetition (21-10-26).
+  | '/api/review/seen'
+  | '/api/review/grade'
   // Add-on screens' own POST routes (study-rooms-qna P1 registry; empty in P1).
   | AddonWriteRoute;
 // ⚑ Ruling R24 (23-09-26): /api/run, /api/run/stop, /api/run/reset-kernel are GONE — the code
@@ -68,6 +71,9 @@ export interface WrongAnswerBody {
   options: string[];
   chosen: number;
   correct: number;
+  /** Choose-N questions only (21-10-26): the sorted positions picked / the sorted right positions. */
+  chosenSet?: number[];
+  correctSet?: number[];
   attempt?: string;
 }
 
@@ -76,8 +82,28 @@ export interface WrongAnswerBody {
  * Fire-and-forget: a failed record must never interrupt the quiz the reader is in the middle of.
  */
 export function recordWrongAnswer(body: WrongAnswerBody): void {
-  if (!body.question || !Array.isArray(body.options) || body.chosen === body.correct) return;
+  const sameSingle = !body.correctSet && body.chosen === body.correct;   // a choose-N miss can share its first position
+  if (!body.question || !Array.isArray(body.options) || sameSingle) return;
   void postJson('/api/wrong-answers', body).catch(() => undefined);
+}
+
+// ---------------------------------------------------------------- spaced repetition (21-10-26)
+export type ReviewGrade = 'again' | 'hard' | 'good' | 'easy';
+
+/**
+ * Enrol a question after an ORDINARY quiz answer, so it comes back for review. Fire-and-forget:
+ * a failed call must never interrupt the quiz. Only questions with a `source.question` key can be
+ * reviewed; AI-written ones have none and are never sent.
+ */
+export function recordReviewSeen(body: { module: string; question: string | undefined; correct: boolean }): void {
+  if (!body.question) return;
+  void postJson('/api/review/seen', body).catch(() => undefined);
+}
+
+/** Grade one card in a review run (wrong = again; right = hard / good / easy, his choice). */
+export function gradeReview(body: { module: string; question: string | undefined; grade: ReviewGrade }): void {
+  if (!body.question) return;
+  void postJson('/api/review/grade', body).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------- progress

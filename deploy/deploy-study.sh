@@ -307,7 +307,9 @@ index_structure_check() {
 # ⚑ RE-MEASURED 29-09-26: 5 -> 6 (python-for-data-analysis-pdf-78763858 added). Measured on
 #   live :8767 with this file's own parse_modules(), authenticated (minted + revoked session):
 #       :8767  6 ['geron-homl3', 'openintro-statistics-2019-1045f2f5', 'python-for-data-analysis-pdf-78763858', 't-domain-4-deep-dive-deployment-mlops', 't-sagemaker-clarify-bias-mastery', 't-sagemaker-clarify-bias-mastery']
-EDU_STUDY_EXPECT_MODULES="${EDU_STUDY_EXPECT_MODULES:-6 ['geron-homl3', 'openintro-statistics-2019-1045f2f5', 'python-for-data-analysis-pdf-78763858', 't-domain-4-deep-dive-deployment-mlops', 't-sagemaker-clarify-bias-mastery', 't-sagemaker-clarify-bias-mastery']}"  # 25-09-26: openintro-statistics-pdf-1045f2f5 deleted (user; test upload, soft-deleted to deleted/)
+# ⚑ RE-MEASURED 21-10-26: 6 -> 7 (t-clf-c02-cloud-practitioner added: the AWS CLF-C02 book, placed on nn by the user's go;
+#   data only, never committed). Expected from the library listing; the deploy's own gate measures the real value.
+EDU_STUDY_EXPECT_MODULES="${EDU_STUDY_EXPECT_MODULES:-7 ['geron-homl3', 'openintro-statistics-2019-1045f2f5', 'python-for-data-analysis-pdf-78763858', 't-clf-c02-cloud-practitioner', 't-domain-4-deep-dive-deployment-mlops', 't-sagemaker-clarify-bias-mastery', 't-sagemaker-clarify-bias-mastery']}"  # 25-09-26: openintro-statistics-pdf-1045f2f5 deleted (user; test upload, soft-deleted to deleted/)
 
 # Parse a /api/modules payload on stdin into the canonical "<count> <sorted list>" form.
 # Exits non-zero on malformed JSON or a missing `books` key -- a 200 that is not the

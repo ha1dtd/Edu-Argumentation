@@ -311,3 +311,177 @@ def mtime(path: Path) -> float:
         return path.stat().st_mtime
     except OSError:
         return 0.0
+
+
+def wrong_answer_positions(payload: dict[str, Any], option_count: int) -> tuple[int, int, list[int] | None, list[int] | None]:
+    """Validate the positions of ONE wrong answer -> (chosen, correct, chosen_set, correct_set).
+
+    Single answer (the usual): ``chosen`` and ``correct`` are different option positions and both sets are None.
+    Choose-N (21-10-26): ``correctSet`` is >= 2 distinct positions and ``chosenSet`` is 1..len(correctSet)
+    distinct positions, and the two sets differ. Both are returned SORTED, and the two INTEGER columns
+    are filled with each set's first position, so every existing reader of wrong_answers keeps working.
+    Raises ValueError (the route answers 400) on anything else.
+    """
+    def positions(raw: Any, name: str, low: int, high: int) -> list[int]:
+        if not isinstance(raw, list) or isinstance(raw, bool) or not low <= len(raw) <= high:
+            raise ValueError(f"{name} must be a list of {low}-{high} option positions.")
+        out = []
+        for value in raw:
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < option_count:
+                raise ValueError(f"{name} holds a position outside the options.")
+            out.append(value)
+        if len(set(out)) != len(out):
+            raise ValueError(f"{name} repeats a position.")
+        return sorted(out)
+
+    if payload.get("correctSet") is not None or payload.get("chosenSet") is not None:
+        correct_set = positions(payload.get("correctSet"), "correctSet", 2, option_count)
+        chosen_set = positions(payload.get("chosenSet"), "chosenSet", 1, len(correct_set))
+        if chosen_set == correct_set:
+            raise ValueError("chosenSet and correctSet must differ.")
+        return chosen_set[0], correct_set[0], chosen_set, correct_set
+    chosen, correct = int(payload.get("chosen")), int(payload.get("correct"))
+    if not (0 <= chosen < option_count and 0 <= correct < option_count) or chosen == correct:
+        raise ValueError("chosen and correct must be different option positions.")
+    return chosen, correct, None, None
+
+
+# --------------------------------------------------------------------------- spaced repetition (21-10-26)
+# SM-2-lite. One pure function decides the next schedule; the SQL helpers below only load and save.
+SRS_GRADES = ("again", "hard", "good", "easy")
+SRS_START_EASE = 2.5
+SRS_MIN_EASE = 1.3
+SRS_MAX_DAYS = 365.0
+SRS_AGAIN_MINUTES = 10
+REVIEW_KEY = re.compile(r"^[A-Za-z0-9._-]{3,64}$")
+
+
+def srs_next(card: dict[str, Any] | None, grade: str, now: datetime) -> dict[str, Any]:
+    """The next state of one card after one grade. ``card`` is None for a card never seen.
+
+    again: back to step 0, one more lapse, ease -0.2 (not below 1.3), due in 10 minutes.
+    hard : ease -0.15, interval x1.2 (at least 1 day), reps +1.
+    good : 1 day, then 3 days, then interval x ease; reps +1.
+    easy : ease +0.15, 4 days at first, then interval x ease x 1.3 (at least 4 days); reps +1.
+    Interval is capped at one year. Returns ease, interval_days, reps, lapses, due_at (UTC).
+    """
+    from datetime import timedelta
+
+    if grade not in SRS_GRADES:
+        raise ValueError(f"grade must be one of {', '.join(SRS_GRADES)}.")
+    ease = float(card["ease"]) if card else SRS_START_EASE
+    interval = float(card["interval_days"]) if card else 0.0
+    reps = int(card["reps"]) if card else 0
+    lapses = int(card["lapses"]) if card else 0
+    if grade == "again":
+        reps, interval = 0, 0.0
+        lapses += 1
+        ease = max(SRS_MIN_EASE, ease - 0.2)
+        due = now + timedelta(minutes=SRS_AGAIN_MINUTES)
+    else:
+        if grade == "hard":
+            ease = max(SRS_MIN_EASE, ease - 0.15)
+            interval = max(1.0, interval * 1.2) if reps else 1.0
+        elif grade == "good":
+            interval = 1.0 if reps == 0 else 3.0 if reps == 1 else interval * ease
+        else:  # easy
+            ease += 0.15
+            interval = 4.0 if reps == 0 else max(4.0, interval * ease * 1.3)
+        reps += 1
+        interval = min(interval, SRS_MAX_DAYS)
+        due = now + timedelta(days=interval)
+    return {"ease": round(ease, 3), "interval_days": round(interval, 3), "reps": reps, "lapses": lapses, "due_at": due}
+
+
+def review_first_seen(correct: bool, now: datetime) -> dict[str, Any]:
+    """A card created by answering a question in an ordinary quiz: right -> first review in a day;
+    wrong -> back in ten minutes WITHOUT counting a lapse (he had not learned it yet)."""
+    state = srs_next(None, "good" if correct else "again", now)
+    if not correct:
+        state["lapses"] = 0
+        state["ease"] = SRS_START_EASE
+    return state
+
+
+def review_key(value: Any) -> str:
+    key = str(value or "").strip()
+    if not REVIEW_KEY.match(key):
+        raise ValueError("question must be a quiz question key such as ch03-b05-q2.")
+    return key
+
+
+def review_seen(account_id: int, module: str, key: str, correct: bool) -> str:
+    """Enrol a question after an ordinary quiz answer. An existing card changes ONLY on a wrong answer
+    (a lapse); a right answer in a practice quiz must not push the interval out (that is cramming)."""
+    import db
+
+    now = datetime.now(timezone.utc)
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT ease, interval_days, reps, lapses FROM review_cards"
+            " WHERE account_id = %s AND module_id = %s AND question_key = %s FOR UPDATE",
+            (account_id, module, key),
+        ).fetchone()
+        if row is None:
+            s = review_first_seen(correct, now)
+            conn.execute(
+                "INSERT INTO review_cards (account_id, module_id, question_key, ease, interval_days, reps, lapses, due_at)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (account_id, module, key, s["ease"], s["interval_days"], s["reps"], s["lapses"], s["due_at"]),
+            )
+            return "created"
+        if correct:
+            return "unchanged"
+        s = srs_next(row, "again", now)
+        conn.execute(
+            "UPDATE review_cards SET ease = %s, interval_days = %s, reps = %s, lapses = %s, due_at = %s, last_reviewed_at = %s"
+            " WHERE account_id = %s AND module_id = %s AND question_key = %s",
+            (s["ease"], s["interval_days"], s["reps"], s["lapses"], s["due_at"], now, account_id, module, key),
+        )
+        return "lapsed"
+
+
+def review_grade(account_id: int, module: str, key: str, grade: str) -> dict[str, Any]:
+    """Apply one review grade (creates the card if the question was never enrolled)."""
+    import db
+
+    now = datetime.now(timezone.utc)
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT ease, interval_days, reps, lapses FROM review_cards"
+            " WHERE account_id = %s AND module_id = %s AND question_key = %s FOR UPDATE",
+            (account_id, module, key),
+        ).fetchone()
+        s = srs_next(row, grade, now)
+        conn.execute(
+            "INSERT INTO review_cards (account_id, module_id, question_key, ease, interval_days, reps, lapses, due_at, last_reviewed_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            " ON CONFLICT (account_id, module_id, question_key) DO UPDATE SET ease = EXCLUDED.ease,"
+            " interval_days = EXCLUDED.interval_days, reps = EXCLUDED.reps, lapses = EXCLUDED.lapses,"
+            " due_at = EXCLUDED.due_at, last_reviewed_at = EXCLUDED.last_reviewed_at",
+            (account_id, module, key, s["ease"], s["interval_days"], s["reps"], s["lapses"], s["due_at"], now),
+        )
+    return {"question": key, "intervalDays": s["interval_days"], "reps": s["reps"], "lapses": s["lapses"],
+            "dueAt": _stamp(s["due_at"])}
+
+
+def review_due(account_id: int, module: str, limit: int = 20) -> dict[str, Any]:
+    """Cards due now (oldest first, at most `limit`), plus the total due and the number of cards."""
+    import db
+
+    limit = max(1, min(int(limit), 100))
+    rows = db.fetch_all(
+        "SELECT question_key, due_at, reps, lapses FROM review_cards"
+        " WHERE account_id = %s AND module_id = %s AND due_at <= now() ORDER BY due_at LIMIT %s",
+        (account_id, module, limit),
+    )
+    counts = db.fetch_one(
+        "SELECT count(*) FILTER (WHERE due_at <= now()) AS due, count(*) AS total FROM review_cards"
+        " WHERE account_id = %s AND module_id = %s",
+        (account_id, module),
+    ) or {"due": 0, "total": 0}
+    return {
+        "due": [{"question": r["question_key"], "dueAt": _stamp(r["due_at"]), "reps": r["reps"], "lapses": r["lapses"]} for r in rows],
+        "dueCount": int(counts["due"]), "total": int(counts["total"]),
+    }
+

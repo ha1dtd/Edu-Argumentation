@@ -125,3 +125,42 @@ the gate. There is nothing to configure.
 
 ⛔ It is a **separate script** from `deploy/deploy.sh` (which serves `:8767`) and that one is
 **never edited by this phase**.
+
+## Multi-answer (choose-N) questions — 21-10-26
+
+A quiz question's `correct` is an integer (one right option — every book so far) OR a strictly
+ascending list of 2+ option positions (choose-N, e.g. the AWS CLF-C02 "choose TWO").
+
+- **Reader:** shows "Choose N · k selected"; a click ticks or unticks (never more than N); **Check Answer**
+  (`#check-btn`, enabled at exactly N ticks) scores the set as ONE answer, **exact set, no partial credit**.
+  Every option then gets its verdict and its own `explanations[i]`. Single-answer questions are unchanged.
+  Code: `app/frontend/src/quiz/multiAnswer.ts` (the rule), `QuizScreen.tsx`, `OptionCard.tsx` (ticked look).
+- **Options:** importer-built books stay at 4; a hand-built module may use 4-6.
+- **Wrong answers:** `POST /api/wrong-answers` takes `chosenSet` + `correctSet` for a choose-N miss
+  (`store.wrong_answer_positions` validates); the INTEGER `chosen`/`correct` columns hold each set's
+  first position. Migration `003_multi_answer.sql` adds nullable JSONB `chosen_set` / `correct_set`.
+- **Live rooms:** choose-N questions are NOT drawn (`rooms_store.pick_questions` already skips any
+  non-integer `correct`). A timed multi-select room is a separate piece of work.
+- **Importer / AI questions:** unchanged, single-answer only (`gates.py` G-QUIZ still wants an int 0-3).
+- **Gates:** `gates/gate-multi-answer.mjs`, `gates/gate-multi-answer-backend.py`.
+
+## Active recall + spaced repetition — 21-10-26
+
+Review cards schedule quiz questions so they come back just before he would forget them.
+
+- **Cards:** one per account x module x question key (`source.question`, e.g. `ch03-b05-q2`), table `review_cards`
+  (migration `004_review_cards.sql`; the question TEXT stays in the book's quizData). AI-written questions have no
+  key and are never reviewed.
+- **Enrolment:** answering a keyed question in an ordinary quiz posts `POST /api/review/seen`: first time right =
+  due in a day; first time wrong = due in 10 minutes; an existing card changes only on a wrong answer (a lapse), so
+  repeating a quiz never pushes the interval out.
+- **Review run:** Practice dialog -> "Review due (N)" (`#setup-review-btn`, with a `#review-status` line). It starts a
+  normal quiz run with scope `review` (up to 20 due cards, oldest first). **Active recall:** the question shows alone
+  with a "type your answer from memory" box (`#recall-input`, nothing is saved); options appear after "Show options".
+  A wrong answer is graded `again` automatically; a right one waits for Hard / Good / Easy (`#grade-*-btn`), which grades
+  and moves on. Works for choose-N questions too. A review run never ticks a lesson.
+- **Schedule** (`store.srs_next`, SM-2-lite): again = 10 min, lapse +1, ease -0.2 (min 1.3); hard = interval x1.2 (min 1 d),
+  ease -0.15; good = 1 d, 3 d, then interval x ease; easy = 4 d, then interval x ease x1.3, ease +0.15; capped at 365 d.
+- **API:** `POST /api/review/seen`, `POST /api/review/grade`, `GET /api/review/due?module=&limit=`. If the server does not
+  answer, the dialog shows no review UI at all.
+- **Gates:** `gates/gate-srs.mjs`, `gates/gate-srs-backend.py`.

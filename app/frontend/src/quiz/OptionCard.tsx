@@ -129,6 +129,11 @@ const WRONG_FILL = 'rgba(239, 68, 68, 0.1)';
 const BADGE_TEXT = '#ffffff';
 // app.js:2981 — `setTimeout(() => explContainer.classList.add('expanded'), 50 * index)`.
 const STAGGER_MS = 50;
+// 21-10-26 (choose-N questions): an option the learner has TICKED but not yet checked. A
+// single-answer click answers at once, so `selected && reveal === null` never occurs there and
+// this changes nothing for existing books. Inline colours, like the verdicts above.
+const TICKED_BORDER = '#6366f1';
+const TICKED_FILL = 'rgba(99, 102, 241, 0.12)';
 
 export function OptionCard(props: OptionCardProps) {
   const { index, children, selected, reveal, explanation, disabled, onSelect } = props;
@@ -142,6 +147,7 @@ export function OptionCard(props: OptionCardProps) {
   // choose are merely dimmed (app.js:2969-2978). Both are `reveal === 'incorrect'`.
   const pickedWrong = reveal === 'incorrect' && selected;
   const dimmed = reveal === 'incorrect' && !selected;
+  const ticked = selected && reveal === null;
 
   // ⛔ THE STAGGER IS THE LEGACY'S, and it is state rather than a class-toggle-on-a-ref
   //    because React owns this DOM. `50 * index` matches app.js:2981 exactly; at four
@@ -168,10 +174,12 @@ export function OptionCard(props: OptionCardProps) {
     ? { borderColor: CORRECT_BORDER, backgroundColor: CORRECT_FILL }
     : pickedWrong
       ? { borderColor: WRONG_BORDER, backgroundColor: WRONG_FILL }
-      : undefined;
-  const badgeColoured = isCorrect || pickedWrong;
+      : ticked
+        ? { borderColor: TICKED_BORDER, backgroundColor: TICKED_FILL }
+        : undefined;
+  const badgeColoured = isCorrect || pickedWrong || ticked;
   const badgeStyle = badgeColoured
-    ? { backgroundColor: isCorrect ? CORRECT_BORDER : WRONG_BORDER, color: BADGE_TEXT }
+    ? { backgroundColor: isCorrect ? CORRECT_BORDER : ticked ? TICKED_BORDER : WRONG_BORDER, color: BADGE_TEXT }
     : undefined;
 
   return (

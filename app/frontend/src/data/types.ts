@@ -102,7 +102,11 @@ export interface Chapter {
 export interface QuizQuestion {
   question: string;
   options: string[];
-  correct: number;
+  /**
+   * An option position (single answer — every existing book) OR a strictly ascending list of
+   * >= 2 positions (choose-N, graded as an exact set; see quiz/multiAnswer.ts). 21-10-26.
+   */
+  correct: number | number[];
   /**
    * ⛔ PER-OPTION, one entry per option — not one string for the question.
    * Measured: handleAnswerSelect reads `currentQ.explanations[index]`, and

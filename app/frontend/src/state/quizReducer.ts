@@ -30,7 +30,7 @@ import type { QuizQuestion } from '../data/types';
  *    decision into Phase 04. Nothing reads `scope` today except ResultScreen's `=== 'ai'` test,
  *    so adding the member changes no current behaviour — it stops the fix having to lie.
  */
-export type QuizScope = 'module' | 'block' | 'selection' | 'ai';
+export type QuizScope = 'module' | 'block' | 'selection' | 'ai' | 'review';   // 'review' = spaced-repetition run (21-10-26)
 
 export interface QuizState {
   /** 1 */ currentQuestionIndex: number;

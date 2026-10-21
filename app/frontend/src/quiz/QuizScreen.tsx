@@ -25,11 +25,12 @@
 //   .explanation-inner, .explanation-text) · #action-container ·
 //   `#action-container .action-bar-inner` · #next-btn · #quiz-new-btn · #restart-btn
 import { useBookContext } from '../state/BookProvider';
-import { useEffect, useMemo } from 'react';
-import { recordWrongAnswer } from '../data/writes';
+import { useEffect, useMemo, useState } from 'react';
+import { gradeReview, recordReviewSeen, recordWrongAnswer } from '../data/writes';
 import type { QuizKind } from '../data/writes';
 import { RichTextViewer } from '../reader/RichTextViewer';
 import { OptionCard } from './OptionCard';
+import { correctSetOf, isRightOption, sameSet } from './multiAnswer';
 import { useQuiz } from '../state/QuizProvider';
 
 export interface QuizScreenProps {
@@ -53,6 +54,37 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
   const book = useBookContext();
   const bookTitle = (book.data?.title as string | undefined) ?? '';
   const question = state.active[state.currentQuestionIndex];
+  // 21-10-26 choose-N questions: `correctSet` is the list of right positions, or null for the
+  // usual single-answer question. The ticks are LOCAL until Check (nothing is scored or stored
+  // before it), then the normal `run/answer` action scores the whole set at once.
+  const correctSet = correctSetOf(question);
+  const [picked, setPicked] = useState<number[]>([]);
+  useEffect(() => {
+    setPicked([]);
+  }, [state.currentQuestionIndex, state.active]);
+  // 21-10-26 spaced repetition. A REVIEW run (scope 'review') is a normal quiz run with two additions:
+  // ACTIVE RECALL — the question shows alone first (type or say the answer from memory), the options
+  // appear only after "Show options"; and GRADING — a wrong answer is graded `again` at once, a right
+  // one is graded by his Hard / Good / Easy click, which also moves on. Ordinary runs enrol the
+  // question instead (recordReviewSeen) so it comes back later. Nothing here touches single-answer or
+  // choose-N behaviour.
+  const isReview = state.scope === 'review';
+  const [recalled, setRecalled] = useState(false);
+  const [recallText, setRecallText] = useState('');
+  useEffect(() => {
+    setRecalled(false);
+    setRecallText('');
+  }, [state.currentQuestionIndex, state.active]);
+  const optionsShown = !isReview || recalled || state.isAnswered;
+  const answeredWrong = state.wrongIndices.includes(state.currentQuestionIndex);
+  const reviewKey = question?.source?.question;
+  useEffect(() => {
+    if (isReview && state.isAnswered && answeredWrong) {
+      gradeReview({ module: book.moduleId, question: reviewKey, grade: 'again' });
+    }
+    // one grade per answered question: keyed on the answer event, not on every render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.isAnswered, state.currentQuestionIndex]);
   // ⚑ Phase 06a: one id per RUN (a restart or retry is a new run), so wrong answers can be grouped
   //   later (P7). crypto.randomUUID needs a secure context and :8792 is plain HTTP — hence the fallback.
   const attemptId = useMemo(
@@ -69,7 +101,7 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
   //    `hidden-view` is display:none, and that is the half `position: fixed` does not
   //    escape. This is why the bar must stay a DESCENDANT of #quiz-screen (B6b): hiding
   //    the screen must hide the bar, and only containment gives that for free.
-  const barVisible = state.isAnswered;
+  const barVisible = state.isAnswered || (correctSet !== null && optionsShown);   // a choose-N question needs its Check button first
 
   /*
     ⛔⛔ D-10 — THE FINISH. THIS IS THE DEFECT THAT LET THE QUIZ WALK OFF THE END.
@@ -116,6 +148,8 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
   const activeCount = state.active.length;
   const scopeCaption = state.carriedTotal
     ? `${state.scopeLabel || bookTitle || 'Assessment'} · retrying ${activeCount} of ${state.carriedTotal} · ${state.carriedCorrect} already correct`
+    : state.scope === 'review'
+      ? `Review · ${activeCount} due`
     : state.scope === 'module'
       ? `Whole module · ${activeCount} questions`
       : state.scope === 'block' || state.scope === 'selection'
@@ -124,6 +158,31 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
   useEffect(() => {
     if (isVisible && finished) onFinish();
   }, [isVisible, finished, onFinish]);
+
+  /** Check (choose-N only): score the ticked set as one answer. Exact set, no partial credit. */
+  const checkPicked = () => {
+    if (!question || !correctSet || state.isAnswered || picked.length !== correctSet.length) return;
+    const chosen = [...picked].sort((x, y) => x - y);
+    const right = sameSet(chosen, correctSet);
+    if (!right) {
+      recordWrongAnswer({
+        module: book.moduleId,
+        block: question.source?.block || state.scopeBlockId,
+        kind: quizKind,
+        question: question.question,
+        options: question.options,
+        chosen: chosen[0],
+        correct: correctSet[0],
+        chosenSet: chosen,
+        correctSet,
+        attempt: attemptId,
+      });
+    }
+    setPicked(chosen);
+    if (!isReview) recordReviewSeen({ module: book.moduleId, question: question.source?.question, correct: right });
+    dispatch({ type: 'run/answer', index: chosen[0], correct: right });
+  };
+  const needMore = correctSet ? correctSet.length - picked.length : 0;
 
   return (
     // ⚠ NO wrapper padding here. `pb-32` belongs ON #quiz-screen itself (shell/AppShell),
@@ -228,12 +287,50 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
           `align-items: stretch` is what keeps a short answer level with a long one, so a row
           never reads ragged (user, 21-09-26).
       */}
-      <div id="options-container" className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8">
+      {/*
+        21-10-26 — choose-N: the "Choose N" hint lives in the pinned bar (#next-hint), NOT in a line above the
+        options. That line cost ~50px and, with FIVE options, pushed the last card behind the bar on a
+        1366x768 laptop. For FIVE OR MORE options the grid goes to three columns from `xl` (1280px), so
+        five cards are two rows, not three. Four options (every existing question) keep the legacy
+        `grid-cols-1 lg:grid-cols-2` exactly — that width is what D-2's reveal geometry was measured at.
+      */}
+      {isReview && !recalled && !state.isAnswered && (
+        <div id="recall-panel" className="mb-8 max-w-3xl">
+          <p className="mb-3 text-sm font-semibold uppercase tracking-widest text-gray-400">
+            Recall first — say or type your answer from memory, then show the options
+          </p>
+          <textarea
+            id="recall-input"
+            rows={3}
+            value={recallText}
+            onChange={(event) => setRecallText(event.target.value)}
+            placeholder="Your answer from memory (optional — nothing is saved)"
+            className="w-full rounded-lg border border-gray-600 bg-gray-800 p-3 text-gray-200 placeholder-gray-500 focus:border-brand-600 focus:outline-none"
+          />
+          <button
+            id="recall-show-btn"
+            type="button"
+            onClick={() => setRecalled(true)}
+            className="mt-3 min-h-[44px] rounded-lg bg-brand-600 hover:bg-brand-900 px-8 text-sm font-bold uppercase tracking-wider text-white transition-colors"
+          >
+            Show options
+          </button>
+        </div>
+      )}
+      {optionsShown && (
+      <div
+        id="options-container"
+        className={
+          (question?.options?.length ?? 0) >= 5
+            ? 'grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 mb-8'
+            : 'grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8'
+        }
+      >
         {(question?.options ?? []).map((text, index) => (
           <OptionCard
             key={index}
             index={index}
-            selected={state.selectedAnswer === index}
+            selected={correctSet ? picked.includes(index) : state.selectedAnswer === index}
             /*
               ⛔⛔ D-12 — EVERY CARD CARRIES A VERDICT ONCE ANSWERED. CORRECTED 22-09-26
                   (EVL fix 005). This used to fall through to `null` for the wrong options
@@ -247,7 +344,7 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
                  reds the moment they disagree.
             */
             reveal={
-              state.isAnswered ? (index === question?.correct ? 'correct' : 'incorrect') : null
+              state.isAnswered ? (isRightOption(question, index) ? 'correct' : 'incorrect') : null
             }
             /*
               ⛔⛔ `explanations[index]`, PER OPTION — NOT the singular `explanation`.
@@ -269,6 +366,18 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
             explanation={question?.explanations?.[index] ?? undefined}
             disabled={state.isAnswered}
             onSelect={() => {
+              // 21-10-26 choose-N: a click TICKS or unticks (at most N ticks); Check scores.
+              if (correctSet) {
+                if (state.isAnswered) return;
+                setPicked((prev) =>
+                  prev.includes(index)
+                    ? prev.filter((i) => i !== index)
+                    : prev.length >= correctSet.length
+                      ? prev
+                      : [...prev, index],
+                );
+                return;
+              }
               const correct = index === question?.correct;
               // ⚑ Phase 06a (ruling R25): a WRONG first answer is recorded with the full question and
               //   options — an AI question exists nowhere else once this screen closes. The same
@@ -281,9 +390,12 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
                   question: question.question,
                   options: question.options,
                   chosen: index,
-                  correct: question.correct,
+                  correct: question.correct as number,
                   attempt: attemptId,
                 });
+              }
+              if (!isReview && question && !state.isAnswered) {
+                recordReviewSeen({ module: book.moduleId, question: question.source?.question, correct });
               }
               dispatch({ type: 'run/answer', index, correct });
             }}
@@ -292,6 +404,7 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
           </OptionCard>
         ))}
       </div>
+      )}
 
       {/*
         ⛔⛔ INSIDE #quiz-screen. See B6 / B6b in the header. NO PORTAL — not for z-index,
@@ -324,16 +437,57 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
             id="next-hint"
             className="min-w-0 truncate text-xs font-semibold uppercase tracking-widest text-gray-500"
           >
-            {count
+            {isReview && state.isAnswered && !answeredWrong
+              ? 'How well did you know it?'
+              : count && correctSet && !state.isAnswered
+              ? `Choose ${correctSet.length} · ${picked.length} selected · ${needMore > 0 ? `${needMore} more to pick` : 'ready to check'}`
+              : count
               ? state.carriedTotal
                 ? `${Math.min(state.currentQuestionIndex + 1, count)} of ${count} left to redo`
                 : `Question ${Math.min(state.currentQuestionIndex + 1, count)} of ${count}`
               : ''}
           </p>
+          {isReview && state.isAnswered && !answeredWrong && (
+            <div id="grade-buttons" className="flex shrink-0 items-center gap-2">
+              {(['hard', 'good', 'easy'] as const).map((grade) => (
+                <button
+                  key={grade}
+                  id={`grade-${grade}-btn`}
+                  type="button"
+                  className={
+                    grade === 'good'
+                      ? 'min-h-[44px] rounded-lg bg-brand-600 hover:bg-brand-900 px-5 text-sm font-bold uppercase tracking-wider text-white transition-colors'
+                      : 'min-h-[44px] rounded-lg border border-gray-600 px-5 text-sm font-bold uppercase tracking-wider text-gray-200 hover:border-brand-600 transition-colors'
+                  }
+                  onClick={() => {
+                    gradeReview({ module: book.moduleId, question: reviewKey, grade });
+                    dispatch({ type: 'run/advance' });
+                  }}
+                >
+                  {grade}
+                </button>
+              ))}
+            </div>
+          )}
+          {correctSet && !state.isAnswered && (
+            <button
+              id="check-btn"
+              type="button"
+              disabled={needMore !== 0}
+              className="min-h-[44px] shrink-0 bg-brand-600 hover:bg-brand-900 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold uppercase tracking-wider py-3 px-8 transition-colors rounded-lg"
+              onClick={checkPicked}
+            >
+              Check Answer
+            </button>
+          )}
           <button
             id="next-btn"
             type="button"
-            className="min-h-[44px] shrink-0 bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider py-3 px-8 transition-colors rounded-lg"
+            className={
+              (correctSet && !state.isAnswered) || (isReview && state.isAnswered && !answeredWrong)
+                ? 'hidden-view min-h-[44px] shrink-0 bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider py-3 px-8 transition-colors rounded-lg'
+                : 'min-h-[44px] shrink-0 bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider py-3 px-8 transition-colors rounded-lg'
+            }
             onClick={() => dispatch({ type: 'run/advance' })}
           >
             {/* loadQuestion (app.js:2880-2884): the last question says so. */}
