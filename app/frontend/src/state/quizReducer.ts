@@ -18,6 +18,7 @@
 //    server-cache state that belongs to the loaded book, not to a run.
 
 import type { QuizQuestion } from '../data/types';
+import type { ExamChoice, ExamResultData, ExamRun } from '../quiz/examMode';
 
 /**
  * Which slice of the bank `active` currently holds.
@@ -30,7 +31,7 @@ import type { QuizQuestion } from '../data/types';
  *    decision into Phase 04. Nothing reads `scope` today except ResultScreen's `=== 'ai'` test,
  *    so adding the member changes no current behaviour — it stops the fix having to lie.
  */
-export type QuizScope = 'module' | 'block' | 'selection' | 'ai' | 'review';   // 'review' = spaced-repetition run (21-10-26)
+export type QuizScope = 'module' | 'block' | 'selection' | 'ai' | 'review' | 'exam';   // 'review' = spaced-repetition run (21-10-26); 'exam' = timed mock (22-10-26)
 
 export interface QuizState {
   /** 1 */ currentQuestionIndex: number;
@@ -51,6 +52,14 @@ export interface QuizState {
   /** 12 */ scopeLabel: string;
   /** 13 — captured at start, read at finish, so navigating cannot credit the wrong block. */
   scopeBlockId: string | null;
+  /**
+   * 14 — exam-recall-suite P3 (22-10-26): the open (or just finished) timed exam run, mirrored from
+   * the SERVER (exam_runs). Non-null only while scope === 'exam'. An exam answer is not scored here:
+   * `answers` is the server's map (key -> choice) and the result comes back from /api/exam/finish.
+   * ⛔ Every run start (run/reset) and every narrowing (retry) clears it, so a retry of the missed
+   *    questions is an ordinary run with the carried denominator, never an exam.
+   */
+  exam: ExamRun | null;
 }
 
 export const initialQuizState: QuizState = {
@@ -67,6 +76,7 @@ export const initialQuizState: QuizState = {
   scope: 'module',
   scopeLabel: '',
   scopeBlockId: null,
+  exam: null,
 };
 
 export type QuizAction =
@@ -77,7 +87,23 @@ export type QuizAction =
   | { type: 'run/advance' }
   | { type: 'run/restart' }
   | { type: 'run/retryWrong' }
+  /**
+   * exam-recall-suite P2 (22-10-26): "Retry wrong" from the History list — a PAST run. `full` is
+   * that run's questions (as many as can be rebuilt), `wrong` its missed ones, `originalTotal` the
+   * number of questions the run ASKED. Same carry as run/retryWrong (narrowTo): 17/20 fixed → 20/20.
+   */
+  | { type: 'run/retryFrom'; full: QuizQuestion[]; wrong: QuizQuestion[]; originalTotal: number; originalWrong: number }
   | { type: 'scope/set'; scope: QuizScope; label: string; blockId: string | null }
+  /**
+   * exam-recall-suite P3 (22-10-26). `exam/load` starts OR resumes a run: `questions` are the bank
+   * questions for run.questionKeys, in exam order. Resuming the SAME run keeps the position.
+   */
+  | { type: 'exam/load'; run: ExamRun; questions: QuizQuestion[]; label: string }
+  | { type: 'exam/answer'; key: string; choice: ExamChoice | null }
+  | { type: 'exam/flag'; key: string; flagged: boolean }
+  /** Jump to a question (navigator, Back / Next). Clamped to the run. */
+  | { type: 'exam/goto'; index: number }
+  | { type: 'exam/finished'; result: ExamResultData }
   | { type: 'generated/set'; questions: QuizQuestion[] | null };
 
 export function quizReducer(state: QuizState, action: QuizAction): QuizState {
@@ -96,6 +122,7 @@ export function quizReducer(state: QuizState, action: QuizAction): QuizState {
         score: 0,
         isAnswered: false,
         selectedAnswer: null,
+        exam: null,
       };
     case 'scope/set':
       return { ...state, scope: action.scope, scopeLabel: action.label, scopeBlockId: action.blockId };
@@ -165,23 +192,88 @@ export function quizReducer(state: QuizState, action: QuizAction): QuizState {
         .filter((question): question is QuizQuestion => Boolean(question));
       if (!wrong.length) return state;
       const originalTotal = tallyTotal(state);
+      return narrowTo(state, wrong, state.full.length ? state.full : state.active, originalTotal, wrong.length);
+    }
+
+    /**
+     * Retry wrong from History. ⛔ The denominator is the PAST run's total (memory
+     * redo-only-what-was-missed): fixing all 3 misses of a 20-question run reads 20/20, never 3/3.
+     * ⛔ `originalWrong` counts every miss of that run, including one that can no longer be rebuilt
+     *    (an AI question without a stored body): it stays wrong, so the carry never over-credits.
+     * ⛔ `full` = the past run's questions, so owningBlockId() asks the same set the run asked.
+     */
+    case 'run/retryFrom': {
+      if (!action.wrong.length) return state;
+      const originalTotal = Math.max(action.originalTotal, action.wrong.length);
+      const originalWrong = Math.min(originalTotal, Math.max(action.originalWrong, action.wrong.length));
+      return narrowTo(state, action.wrong, action.full.length ? action.full : action.wrong, originalTotal, originalWrong);
+    }
+
+    // ---------------------------------------------------------------- exam (P3, 22-10-26)
+    case 'exam/load': {
+      const same = state.scope === 'exam' && state.exam?.id === action.run.id;
+      const index = same ? Math.min(state.currentQuestionIndex, Math.max(0, action.questions.length - 1)) : 0;
       return {
         ...state,
-        active: wrong,
-        full: state.full.length ? state.full : state.active,
-        carriedCorrect: originalTotal - wrong.length,
-        carriedTotal: originalTotal,
+        active: action.questions,
+        full: action.questions,
         wrongIndices: [],
-        currentQuestionIndex: 0,
+        carriedCorrect: 0,
+        carriedTotal: 0,
+        currentQuestionIndex: index,
         score: 0,
         isAnswered: false,
         selectedAnswer: null,
+        scope: 'exam',
+        scopeLabel: action.label,
+        scopeBlockId: null,
+        exam: action.run,
       };
     }
+    case 'exam/answer': {
+      if (!state.exam || state.exam.finished) return state;
+      const answers = { ...state.exam.answers };
+      if (action.choice === null) delete answers[action.key];
+      else answers[action.key] = action.choice;
+      return { ...state, exam: { ...state.exam, answers } };
+    }
+    case 'exam/flag': {
+      if (!state.exam || state.exam.finished) return state;
+      const rest = state.exam.flags.filter((k) => k !== action.key);
+      return { ...state, exam: { ...state.exam, flags: action.flagged ? [...rest, action.key] : rest } };
+    }
+    case 'exam/goto': {
+      if (!state.exam || !state.active.length) return state;
+      const index = Math.min(state.active.length - 1, Math.max(0, Math.trunc(action.index)));
+      return { ...state, currentQuestionIndex: index, isAnswered: false, selectedAnswer: null };
+    }
+    case 'exam/finished':
+      if (!state.exam) return state;
+      return { ...state, exam: { ...state.exam, finished: true, result: action.result } };
 
     default:
       return state;
   }
+}
+
+/**
+ * THE CARRY, in one place (run/retryWrong and run/retryFrom both end here). `active` becomes the
+ * missed set; carriedTotal = the run's total BEFORE narrowing; carriedCorrect = total − misses.
+ */
+function narrowTo(state: QuizState, wrong: QuizQuestion[], full: QuizQuestion[], originalTotal: number, missed: number): QuizState {
+  return {
+    ...state,
+    active: wrong,
+    full,
+    carriedCorrect: originalTotal - missed,
+    carriedTotal: originalTotal,
+    exam: null,   // P3: a retry of an exam's misses is an ordinary run (the carry above is its denominator)
+    wrongIndices: [],
+    currentQuestionIndex: 0,
+    score: 0,
+    isAnswered: false,
+    selectedAnswer: null,
+  };
 }
 
 /** Derived. Computed during render, never stored — see the header. */

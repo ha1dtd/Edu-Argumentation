@@ -30,7 +30,7 @@ import { theoryBlockId } from '../state/ProgressProvider';
 import { useQuiz } from '../state/QuizProvider';
 import { owningBlockId, tallyScore, tallyTotal } from '../state/quizReducer';
 import { useReaderCursor } from '../state/ReaderCursorProvider';
-import { showNotice } from './dialog';
+import { askConfirm, showNotice } from './dialog';
 
 /** What the result screen says about the save, beyond the score (app.js:745-750 + 1097). */
 export interface SaveNote {
@@ -295,7 +295,27 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
     void startGeneratedQuiz();
   }, [startGeneratedQuiz, startBlockAiQuiz, showReaderAt]);
 
+  /**
+   * exam-recall-suite P3 (22-10-26): leaving a RUNNING exam from the header asks first, in the app's own
+   * dialog (never window.confirm, never a beforeunload prompt — a reload loses nothing, the run is on the
+   * server). `onExamScreen` = the exam is what is on screen now; elsewhere nothing is asked.
+   */
+  const examRunning = state.scope === 'exam' && Boolean(state.exam) && !state.exam?.finished;
+  const guardExamLeave = useCallback(
+    (onExamScreen: boolean, go: () => void) => {
+      if (!onExamScreen || !examRunning) {
+        go();
+        return;
+      }
+      void askConfirm({ title: 'Leave exam?', body: 'Timer keeps running. Resume from Practice.', confirmLabel: 'Leave', cancelLabel: 'Stay' }).then((ok) => {
+        if (ok) go();
+      });
+    },
+    [examRunning],
+  );
+
   return {
+    guardExamLeave,
     aiReady,
     providerReady: provider.ready,
     providerStatusUnknown: provider.statusUnknown,

@@ -20,6 +20,7 @@ import { postJson, signOut } from '../data/writes';
 import { moduleIdFor } from '../data/bookPaths';
 import { useModules } from '../data/queries';
 import { useAccount } from './AccountContext';
+import { ProgressPanel } from './ProgressPanel';
 import {
   BODY_MUTED, CAPTION, CARD, EYEBROW, FIELD, LABEL, OUTLINE_BTN, PAGE_TITLE, PRIMARY_BTN, SECTION_TITLE,
 } from '../shell/ui';
@@ -235,7 +236,8 @@ function AccountsAdmin() {
   );
 }
 
-export function AccountScreen({ open }: { open: boolean }) {
+/** `onStartRun` (exam-recall-suite P2): switch to the quiz screen after the Progress panel seeded a run. */
+export function AccountScreen({ open, onStartRun }: { open: boolean; onStartRun?: () => void }) {
   const account = useAccount();
   const modules = useModules();
   const stats = useQuery({
@@ -310,6 +312,7 @@ export function AccountScreen({ open }: { open: boolean }) {
             </li>
           ))}
         </ul>
+        {onStartRun ? <ProgressPanel open={open} onStartRun={onStartRun} /> : null}
       </section>
 
       <PasswordCard />

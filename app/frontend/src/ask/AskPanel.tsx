@@ -32,6 +32,8 @@
 //        those would eventually be missed" — and a single owning prop is the same argument
 //        answered better. The BEHAVIOUR is identical; only the plumbing is React's.
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { setChatMode, useChatDock } from './chatDock';
 import { useBookContext } from '../state/BookProvider';
 import { useReaderCursor } from '../state/ReaderCursorProvider';
 import { useProviderReadiness } from '../data/queries';
@@ -115,6 +117,10 @@ export function AskPanel({ reading }: AskPanelProps) {
   const { activeBookFile, chapters, blocksOf } = useBookContext();
   const { cursor } = useReaderCursor();
   const provider = useProviderReadiness();
+  // ⚑ 22-10-26 (user): the panel can dock into Lab's side slot (ReaderScreen offers the slot).
+  const dock = useChatDock();
+  const side = dock.mode === 'side';
+  const slot = side ? dock.slot : null;
 
   // askSetOpen(false) on the way OUT of the reader (app.js:3715).
   useEffect(() => {
@@ -122,14 +128,14 @@ export function AskPanel({ reading }: AskPanelProps) {
   }, [reading]);
 
   useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
+    if (open || slot) inputRef.current?.focus();
+  }, [open, slot]);
 
   // ⚑ 25-09-26 (user): a click OUTSIDE the panel closes it (Escape too). The FAB is excluded — it
   //   toggles on its own click. Nothing is lost: the conversation is saved, and an answer still in
   //   flight lands in the log and is there when the panel is reopened.
   useEffect(() => {
-    if (!open) return;
+    if (!open || side) return;
     const onPointer = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (!target || panelRef.current?.contains(target) || fabRef.current?.contains(target)) return;
@@ -144,13 +150,13 @@ export function AskPanel({ reading }: AskPanelProps) {
       document.removeEventListener('pointerdown', onPointer);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open]);
+  }, [open, side]);
 
   // Keep the log scrolled to the newest bubble (askBubble / the finally in askSubmit).
   useEffect(() => {
     const log = logRef.current;
     if (log) log.scrollTop = log.scrollHeight;
-  }, [turns, open]);
+  }, [turns, open, slot]);
 
   // askLessonLabel (app.js:3568): which lesson the next answer is grounded in.
   const chapter = chapters[cursor.chapterIndex];
@@ -210,28 +216,17 @@ export function AskPanel({ reading }: AskPanelProps) {
     }
   };
 
-  return (
-    <>
-      <button
-        id="ask-fab"
-        ref={fabRef}
-        type="button"
-        aria-label="Ask about this lesson"
-        aria-expanded={open}
-        aria-controls="ask-panel"
-        className={`${reading ? '' : 'hidden-view '}fixed bottom-6 right-6 z-40 h-14 w-14 rounded-full bg-brand-600 text-white shadow-xl flex items-center justify-center transition-transform hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white`}
-        onClick={() => setOpen((on) => !on)}
-      >
-        <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8M8 14h5M21 12a8 8 0 0 1-8 8H7l-4 3v-6.5A8 8 0 1 1 21 12z" />
-        </svg>
-      </button>
-
+  const panel = (
       <section
         id="ask-panel"
         ref={panelRef}
         aria-label="Ask about this lesson"
-        className={`${open ? '' : 'hidden-view '}fixed bottom-24 right-6 z-40 flex flex-col w-[44rem] max-w-[calc(100vw-3rem)] h-[80vh] max-h-[calc(100vh-8rem)] rounded-2xl border border-gray-700 bg-gray-800 shadow-2xl`}
+        data-mode={side ? 'side' : 'popup'}
+        className={
+          side
+            ? 'flex flex-col flex-1 min-h-0 bg-gray-800 lg:border lg:border-gray-700 lg:rounded-xl'
+            : `${open ? '' : 'hidden-view '}fixed bottom-24 right-6 z-40 flex flex-col w-[44rem] max-w-[calc(100vw-3rem)] h-[80vh] max-h-[calc(100vh-8rem)] rounded-2xl border border-gray-700 bg-gray-800 shadow-2xl`
+        }
         data-max-turns={ASK_MAX_TURNS}
       >
         <header className="flex items-start justify-between gap-3 px-4 py-3 border-b border-gray-700 shrink-0">
@@ -244,7 +239,7 @@ export function AskPanel({ reading }: AskPanelProps) {
               id="ask-new"
               type="button"
               title="Start a new conversation and delete this one"
-              className="min-h-[36px] px-3 rounded-lg border border-gray-600 text-gray-300 text-xs font-semibold uppercase tracking-wider hover:text-white hover:bg-gray-700 transition-colors"
+              className="min-h-[44px] px-3 rounded-lg border border-gray-600 text-gray-300 text-xs font-semibold uppercase tracking-wider hover:text-white hover:bg-gray-700 transition-colors"
               onClick={() => {
                 // askNewConversation (app.js:3619) — the ONLY place a conversation is cleared.
                 setTurns([]);
@@ -260,11 +255,38 @@ export function AskPanel({ reading }: AskPanelProps) {
               New
             </button>
             <button
+              id="ask-dock"
+              type="button"
+              aria-label={side ? 'Popup' : 'Dock'}
+              title={side ? 'Back to a popup (Lab works again)' : 'Dock to the side (replaces Lab)'}
+              className="min-h-[44px] px-3 rounded-lg border border-gray-600 text-gray-300 text-xs font-semibold uppercase tracking-wider hover:text-white hover:bg-gray-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 inline-flex items-center gap-1.5"
+              onClick={() => {
+                if (side) {
+                  setChatMode('popup');
+                  setOpen(true);
+                } else {
+                  setChatMode('side');
+                }
+              }}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                {side ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 5h16v14H4zM13 14h4v3h-4z" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 5h16v14H4zM14 5v14" />
+                )}
+              </svg>
+              {side ? 'Popup' : 'Dock'}
+            </button>
+            <button
               id="ask-close"
               type="button"
               aria-label="Close"
               className="min-h-[44px] min-w-[44px] -mr-2 -mt-1 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                if (side) setChatMode('popup');
+                setOpen(false);
+              }}
             >
               <svg className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -348,6 +370,26 @@ export function AskPanel({ reading }: AskPanelProps) {
           </button>
         </form>
       </section>
+  );
+
+  return (
+    <>
+      <button
+        id="ask-fab"
+        ref={fabRef}
+        type="button"
+        aria-label="Ask about this lesson"
+        aria-expanded={open}
+        aria-controls="ask-panel"
+        className={`${reading && !side ? '' : 'hidden-view '}fixed bottom-6 right-6 z-40 h-14 w-14 rounded-full bg-brand-600 text-white shadow-xl flex items-center justify-center transition-transform hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white`}
+        onClick={() => setOpen((on) => !on)}
+      >
+        <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8M8 14h5M21 12a8 8 0 0 1-8 8H7l-4 3v-6.5A8 8 0 1 1 21 12z" />
+        </svg>
+      </button>
+
+      {slot ? createPortal(panel, slot) : side ? null : panel}
     </>
   );
 }

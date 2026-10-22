@@ -13,7 +13,8 @@
 //   header carries the glyphs (close / open in a new tab), which post a message up to us
 //   (see labMessages below; ReaderScreen handles them).
 import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
+import { setChatSlot } from '../ask/chatDock';
 
 const WIDTH_KEY = 'reader:labWidth';
 const MIN_LAB = 360;
@@ -29,7 +30,8 @@ function storedWidth(): number | null {
   }
 }
 
-export function LabDock({ src }: { src: string }) {
+/** ⚑ 22-10-26: the side slot, shared by Lab and the docked chat (same width, divider and snap). */
+function SideDock({ kind, children }: { kind: 'lab' | 'chat'; children: ReactNode }) {
   const paneRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState<number | null>(storedWidth);
   const [dragging, setDragging] = useState(false);
@@ -84,10 +86,10 @@ export function LabDock({ src }: { src: string }) {
   return (
     <>
       <div
-        id="lab-dock-divider"
+        id={`${kind}-dock-divider`}
         role="separator"
         aria-orientation="vertical"
-        aria-label="Drag to resize the Lab panel"
+        aria-label={kind === 'lab' ? 'Drag to resize the Lab panel' : 'Drag to resize the chat panel'}
         title="Drag to resize"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -112,25 +114,42 @@ export function LabDock({ src }: { src: string }) {
       </div>
       {dragging && middle ? (
         <div
-          id="lab-dock-middle"
+          id={`${kind}-dock-middle`}
           aria-hidden="true"
           className={`pointer-events-none fixed z-[60] w-0 border-l-2 border-dashed ${snapped ? 'border-white' : 'border-brand-600/70'}`}
           style={{ left: middle.x - 1, top: middle.top, height: middle.height }}
         />
       ) : null}
       <div
-        id="lab-dock"
+        id={`${kind}-dock`}
         ref={paneRef}
         style={width ? ({ '--lab-dock-w': `${width}px` } as CSSProperties) : undefined}
         className="fixed inset-0 z-50 flex flex-col bg-gray-900 lg:static lg:inset-auto lg:z-auto lg:shrink-0 lg:min-h-0 lg:w-[var(--lab-dock-w,50%)] lg:rounded-xl lg:overflow-hidden"
       >
         {/* While dragging, the iframe would swallow the pointer; a transparent sheet keeps it here. */}
         <div className="relative flex-1 min-h-0">
-          <iframe id="lab-dock-frame" title="Lab" src={src} className="absolute inset-0 w-full h-full border-0 bg-gray-900" />
+          {children}
           {dragging ? <div className="absolute inset-0 cursor-col-resize" aria-hidden="true" /> : null}
         </div>
       </div>
     </>
+  );
+}
+
+export function LabDock({ src }: { src: string }) {
+  return (
+    <SideDock kind="lab">
+      <iframe id="lab-dock-frame" title="Lab" src={src} className="absolute inset-0 w-full h-full border-0 bg-gray-900" />
+    </SideDock>
+  );
+}
+
+/** ⚑ 22-10-26: the tutor chat docked in Lab's slot; AskPanel portals its panel into the slot div. */
+export function ChatDock() {
+  return (
+    <SideDock kind="chat">
+      <div ref={setChatSlot} id="chat-dock-slot" className="absolute inset-0 flex flex-col" />
+    </SideDock>
   );
 }
 

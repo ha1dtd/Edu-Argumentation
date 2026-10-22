@@ -360,7 +360,7 @@ export function AppShell() {
     <>
       <Header
         activeTab={activeTab}
-        onSelectTab={(tab) => {
+        onSelectTab={(tab) => actions.guardExamLeave(screen === 'quiz', () => {   // P3: leaving a running exam asks first
           if (tab !== 'quiz' && tab !== 'generated') setActiveTab(tab);
           // The tab -> screen map, ported from the four nav listeners (app.js:1232, 1360,
           // 3487, 3488) and updateNavUI (296-310).
@@ -380,13 +380,13 @@ export function AppShell() {
           //    legacy's own guard (app.js:3487-3490) and dropping it is D-8. See
           //    shell/Header.tsx:isWideMenu for the measurement.
           if (!isWideMenu()) setMenuOpen(false);
-        }}
-        onBrandHome={() => {
+        })}
+        onBrandHome={() => actions.guardExamLeave(screen === 'quiz', () => {
           setHomeIsBook(false);
           // showLandingDashboard -> updateNavUI('tutorial') (app.js:322): HOME is underlined.
           setActiveTab('home');
           setScreen('welcome');
-        }}
+        })}
         menuOpen={menuOpen}
         onToggleMenu={() => setMenuOpen((open) => !open)}
         /* syncMenuToViewport (app.js:3491 + :3500). ⛔ `setMenuOpen` is passed DIRECTLY,
@@ -542,7 +542,7 @@ export function AppShell() {
 
         {/* ⚑ Phase 06a — the Account page (ruling R25). Same frame as Settings. */}
         <Screen id="account-screen" visible={screen === 'account'} className="w-full max-w-5xl mx-auto space-y-6">
-          <AccountScreen open={screen === 'account'} />
+          <AccountScreen open={screen === 'account'} onStartRun={() => showQuizFor('other')} />
         </Screen>
 
         <Screen id="settings-screen" visible={screen === 'settings'} className="w-full max-w-5xl mx-auto space-y-6">

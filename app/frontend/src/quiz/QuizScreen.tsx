@@ -26,10 +26,14 @@
 //   `#action-container .action-bar-inner` · #next-btn · #quiz-new-btn · #restart-btn
 import { useBookContext } from '../state/BookProvider';
 import { useEffect, useMemo, useState } from 'react';
-import { gradeReview, recordReviewSeen, recordWrongAnswer } from '../data/writes';
+import { gradeReview, logAnswer, recordReviewSeen, recordWrongAnswer, reviewKeyOf, storedBodyOf } from '../data/writes';
 import type { QuizKind } from '../data/writes';
+import type { Confidence, RunKind } from '../data/types';
 import { RichTextViewer } from '../reader/RichTextViewer';
 import { OptionCard } from './OptionCard';
+import { ConfidenceRow } from './ConfidenceRow';
+import { FlagButton } from './FlagButton';
+import { ExamRunView } from './ExamRunView';
 import { correctSetOf, isRightOption, sameSet } from './multiAnswer';
 import { useQuiz } from '../state/QuizProvider';
 
@@ -71,13 +75,19 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
   const isReview = state.scope === 'review';
   const [recalled, setRecalled] = useState(false);
   const [recallText, setRecallText] = useState('');
+  // exam-recall-suite A6 (22-10-26): how sure he was BEFORE the options showed (review runs only).
+  const [confidence, setConfidence] = useState<Confidence | null>(null);
   useEffect(() => {
     setRecalled(false);
     setRecallText('');
+    setConfidence(null);
   }, [state.currentQuestionIndex, state.active]);
   const optionsShown = !isReview || recalled || state.isAnswered;
   const answeredWrong = state.wrongIndices.includes(state.currentQuestionIndex);
-  const reviewKey = question?.source?.question;
+  // 22-10-26 (A3): a book question's own key, or an AI question's content key (`ai-…`).
+  const reviewKey = reviewKeyOf(question);
+  // A5: a review card missed 6+ times is a leech — tagged, still scheduled.
+  const isLeech = isReview && (question?.reviewLapses ?? 0) >= 6;
   useEffect(() => {
     if (isReview && state.isAnswered && answeredWrong) {
       gradeReview({ module: book.moduleId, question: reviewKey, grade: 'again' });
@@ -94,6 +104,26 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
   );
   /** bank = the book's written questions; ai = generated for one lesson; fresh = a generated mix. */
   const quizKind: QuizKind = state.scope === 'ai' ? (state.scopeBlockId ? 'ai' : 'fresh') : 'bank';
+  // exam-recall-suite P1 (22-10-26): every first answer goes to answer_log (stats / history / mastery).
+  const runKind: RunKind = isReview ? 'review' : state.carriedTotal ? 'retry' : state.scope === 'ai' ? 'quiz' : 'practice';
+  const logThis = (correct: boolean, chosen: number | number[]) => {
+    if (!question || !reviewKey) return;
+    logAnswer({
+      module: book.moduleId,
+      question: reviewKey,
+      chapter: question.source?.chapter ?? null,
+      runKind,
+      runId: attemptId,
+      correct,
+      confidence: isReview ? confidence : null,
+      chosen,
+    });
+  };
+  /** Enrol after an ordinary answer — with the stored body when it is an AI-written question. */
+  const enrol = (correct: boolean) => {
+    if (!question) return;
+    recordReviewSeen({ module: book.moduleId, question: reviewKey, correct, body: storedBodyOf(question) });
+  };
   const count = state.active.length;
   const isLast = count > 0 && state.currentQuestionIndex === count - 1;
 
@@ -140,7 +170,10 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
       HERE, on this branch only, and it must read owningBlockId(state) — which asks `full`,
       not the narrowed `active`. See state/quizReducer.ts:owningBlockId.
   */
-  const finished = count === 0 || state.currentQuestionIndex >= count;
+  // exam-recall-suite P3 (22-10-26): a timed exam never "walks off the end" — it ends by Submit / time up on
+  // the server and shows its result on this screen (ExamRunView), so the finish switch must not fire.
+  const isExam = state.scope === 'exam' && state.exam !== null;
+  const finished = !isExam && (count === 0 || state.currentQuestionIndex >= count);
 
   // renderQuizScope (app.js:1214) — ⚑ Phase 04 parity: the caption carries the COUNT, and a
   // retry run says so plainly ("retrying 3 of 20"), or the caption reads "3 questions" on an
@@ -158,6 +191,11 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
   useEffect(() => {
     if (isVisible && finished) onFinish();
   }, [isVisible, finished, onFinish]);
+
+  // P3 — the exam branch (every hook above has run). Leaving it opens the Practice dialog (Resume / New exam).
+  if (isExam && state.exam) {
+    return <ExamRunView run={state.exam} moduleId={book.moduleId} onLeave={onNewQuiz} />;
+  }
 
   /** Check (choose-N only): score the ticked set as one answer. Exact set, no partial credit. */
   const checkPicked = () => {
@@ -179,7 +217,8 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
       });
     }
     setPicked(chosen);
-    if (!isReview) recordReviewSeen({ module: book.moduleId, question: question.source?.question, correct: right });
+    if (!isReview) enrol(right);
+    logThis(right, chosen);
     dispatch({ type: 'run/answer', index: chosen[0], correct: right });
   };
   const needMore = correctSet ? correctSet.length - picked.length : 0;
@@ -226,6 +265,21 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
           >
             {scopeCaption}
           </p>
+          {/* exam-recall-suite B (22-10-26): flag this question for a later "Flagged" run; A5 leech tag.
+              Own row under the number, NOT in the right-hand cluster: there it squeezed this column at
+              390 px ("Question" / "1" wrapped, the scope label clipped — P1c browser check). */}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <FlagButton moduleId={book.moduleId} question={question} />
+            {isLeech && (
+              <span
+                id="leech-tag"
+                title="Missed 6+ times. Still scheduled."
+                className="inline-block rounded border border-brand-600 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-brand-400"
+              >
+                Leech
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-3 sm:gap-6">
           {/*
@@ -315,6 +369,13 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
           >
             Show options
           </button>
+          {/* A6: or say how sure first — one tap records it and shows the options. */}
+          <ConfidenceRow
+            onPick={(value) => {
+              setConfidence(value);
+              setRecalled(true);
+            }}
+          />
         </div>
       )}
       {optionsShown && (
@@ -394,8 +455,9 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
                   attempt: attemptId,
                 });
               }
-              if (!isReview && question && !state.isAnswered) {
-                recordReviewSeen({ module: book.moduleId, question: question.source?.question, correct });
+              if (question && !state.isAnswered) {
+                if (!isReview) enrol(correct);
+                logThis(correct, index);
               }
               dispatch({ type: 'run/answer', index, correct });
             }}

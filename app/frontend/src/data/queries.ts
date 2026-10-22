@@ -27,9 +27,10 @@
 //    cursor on every refetch — and `staleTime: Infinity` is NOT the fix, it just hides
 //    the reshuffle and blocks the Phase 04 refetch. ⛔ There is no staleTime in this file.
 
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
 import { getJson } from './client';
-import type { LibraryBook, ModulePayload, ProgressPayload } from './types';
+import type { ExamAreaResult, ExamChoice, ExamPreview, ExamResultData, ExamRun } from '../quiz/examMode';
+import type { FlaggedQuestion, HistoryFilter, HistoryItem, HistoryPage, MasteryArea, MasteryPayload, LibraryBook, ModulePayload, ProgressPayload, ReviewStats, StoredQuestionBody, StudyPrefs } from './types';
 
 /** /api/general, verbatim on the wire. Globals #22 GENERATED_QUIZ_SIZE and #23 aiQuestionCount. */
 export interface GeneralSettings {
@@ -84,18 +85,372 @@ export function useModules() {
 
 /** /api/review/due — the cards due now for this account in one module (spaced repetition, 21-10-26). */
 export interface ReviewDue {
-  due: { question: string; dueAt: string; reps: number; lapses: number }[];
+  /** `body` (22-10-26): present only on an AI-written card — the question itself, stored with it. */
+  due: { question: string; dueAt: string; reps: number; lapses: number; body?: StoredQuestionBody | null }[];
   dueCount: number;
   total: number;
 }
 
-export function useReviewDue(moduleId: string, enabled: boolean) {
+/** Session size bounds (exam-recall-suite A4): 10..50, step 5, default 20. */
+export const SESSION_SIZE = { min: 10, max: 50, step: 5, fallback: 20 } as const;
+/** New cards per day per book (A2/D2): 0..200, default 20. */
+export const NEW_PER_DAY = { min: 0, max: 200, step: 5, fallback: 20 } as const;
+
+export function clampStep(value: unknown, bounds: { min: number; max: number; step: number; fallback: number }): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return bounds.fallback;
+  const stepped = bounds.min + Math.round((n - bounds.min) / bounds.step) * bounds.step;
+  return Math.min(bounds.max, Math.max(bounds.min, stepped));
+}
+
+export function useReviewDue(moduleId: string, enabled: boolean, limit: number = SESSION_SIZE.fallback) {
+  const size = clampStep(limit, SESSION_SIZE);
   return useQuery({
-    queryKey: ['review-due', moduleId] as const,
+    queryKey: ['review-due', moduleId, size] as const,
     enabled: enabled && Boolean(moduleId),
     staleTime: 0,
     retry: 0,
-    queryFn: ({ signal }) => getJson<ReviewDue>(`/api/review/due?module=${encodeURIComponent(moduleId)}&limit=20`, signal),
+    queryFn: ({ signal }) => getJson<ReviewDue>(`/api/review/due?module=${encodeURIComponent(moduleId)}&limit=${size}`, signal),
+  });
+}
+
+// ---------------------------------------------------------------- exam-recall-suite P1 (22-10-26)
+// Each read below is OPTIONAL to the screen that uses it: a failed call (or a server that predates
+// it) hides the panel — it never blocks Practice. retry: 0 for the same reason as useReviewDue.
+
+/** GET /api/review/stats — due today, the next 7 days, retention, cards, leeches. */
+export function useReviewStats(moduleId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['review-stats', moduleId] as const,
+    enabled: enabled && Boolean(moduleId),
+    staleTime: 0,
+    retry: 0,
+    queryFn: async ({ signal }): Promise<ReviewStats> => {
+      // Wire (addons/study_more.py -> store.review_stats): next7 = [{day, count}] x 7, retention = whole %.
+      const raw = await getJson<Omit<Partial<ReviewStats>, 'next7'> & { next7?: unknown[] }>(
+        `/api/review/stats?module=${encodeURIComponent(moduleId)}`,
+        signal,
+      );
+      const next7 = Array.isArray(raw?.next7)
+        ? raw.next7.slice(0, 7).map((d) => Math.max(0, Number(typeof d === 'object' && d ? (d as { count?: unknown }).count : d) || 0))
+        : [];
+      while (next7.length < 7) next7.push(0);
+      const r = raw?.retention;
+      const retention = r === null || r === undefined || !Number.isFinite(Number(r)) ? null : Math.min(100, Math.max(0, Math.round(Number(r))));
+      return {
+        dueToday: Math.max(0, Number(raw?.dueToday) || 0),
+        next7,
+        retention,
+        reviews30: Number(raw?.reviews30) || 0,
+        total: Math.max(0, Number(raw?.total) || 0),
+        leeches: Math.max(0, Number(raw?.leeches) || 0),
+      };
+    },
+  });
+}
+
+/** GET /api/study/prefs — new-card cap and session size for this book. Defaults stand on failure. */
+export function usePrefs(moduleId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['study-prefs', moduleId] as const,
+    enabled: enabled && Boolean(moduleId),
+    retry: 0,
+    queryFn: async ({ signal }): Promise<StudyPrefs> => {
+      const raw = await getJson<Partial<StudyPrefs>>(`/api/study/prefs?module=${encodeURIComponent(moduleId)}`, signal);
+      return { newPerDay: clampStep(raw?.newPerDay, NEW_PER_DAY), sessionSize: clampStep(raw?.sessionSize, SESSION_SIZE) };
+    },
+  });
+}
+
+export const flagsKey = (moduleId: string) => ['flags', moduleId] as const;
+
+/** GET /api/flags — this book's flagged questions (key, plus the body for an AI-written one). */
+export function useFlags(moduleId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: flagsKey(moduleId),
+    enabled: enabled && Boolean(moduleId),
+    retry: 0,
+    queryFn: async ({ signal }): Promise<FlaggedQuestion[]> => {
+      const raw = await getJson<{ flags?: FlaggedQuestion[] }>(`/api/flags?module=${encodeURIComponent(moduleId)}`, signal);
+      return Array.isArray(raw?.flags) ? raw.flags.filter((f) => f && typeof f.question === 'string') : [];
+    },
+  });
+}
+
+// ---------------------------------------------------------------- exam-recall-suite P2 (22-10-26)
+// Wire: addons/history.py (store.history_page / store.mastery). Mapped onto the client shapes in
+// data/types.ts HERE, once. A failed read shows an error line in the panel; it never blocks a screen.
+
+const num = (v: unknown, fallback = 0) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
+
+/** GET /api/mastery?module= — per-area mastery + "Next up". */
+export function useMastery(moduleId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['mastery', moduleId] as const,
+    enabled: enabled && Boolean(moduleId),
+    staleTime: 0,
+    retry: 0,
+    queryFn: async ({ signal }): Promise<MasteryPayload> => {
+      const raw = await getJson<Record<string, unknown>>(`/api/mastery?module=${encodeURIComponent(moduleId)}`, signal);
+      const minAnswers = Math.max(1, num(raw?.minAnswers, 5));
+      const areas: MasteryArea[] = (Array.isArray(raw?.areas) ? raw.areas : [])
+        .filter((a): a is Record<string, unknown> => Boolean(a) && typeof a === 'object' && a.id != null)
+        .map((a) => {
+          const answered = Math.max(0, num(a.answered));
+          const enough = a.enough === undefined ? answered >= minAnswers : Boolean(a.enough);
+          const pct = enough && a.pct !== null && a.pct !== undefined ? Math.min(100, Math.max(0, Math.round(num(a.pct)))) : null;
+          return {
+            id: String(a.id),
+            name: str(a.name) ?? String(a.id),
+            chapters: (Array.isArray(a.chapters) ? a.chapters : []).map((c) => num(c, NaN)).filter(Number.isInteger),
+            right: Math.max(0, num(a.right)),
+            answered,
+            pct,
+          };
+        });
+      const next = raw?.nextUp as { id?: unknown } | null | undefined;
+      return {
+        kind: raw?.areaKind === 'domain' ? 'domain' : 'chapter',
+        areas,
+        nextUp: next && next.id != null ? String(next.id) : null,
+        target: num(raw?.target, 80),
+        window: num(raw?.window, 200),
+        minAnswers,
+      };
+    },
+  });
+}
+
+function historyItem(r: Record<string, unknown>): HistoryItem {
+  const source = r.source === 'legacy' || r.source === 'flag' ? r.source : 'log';
+  const body = r.body && typeof r.body === 'object' ? (r.body as StoredQuestionBody) : null;
+  const key = str(r.question);
+  const correct = source === 'flag' ? (typeof r.lastCorrect === 'boolean' ? r.lastCorrect : null) : typeof r.correct === 'boolean' ? r.correct : null;
+  return {
+    id: String(r.id ?? ''),
+    source,
+    question: key,
+    label: key ?? (typeof body?.question === 'string' ? body.question : '(question)'),
+    chapter: Number.isInteger(Number(r.chapter)) && r.chapter !== null ? Number(r.chapter) : null,
+    correct,
+    runKind: source === 'flag' ? 'flag' : str(r.runKind),
+    runId: source === 'log' ? str(r.runId) : null,
+    at: str(source === 'flag' ? r.lastAt ?? r.flaggedAt : r.at),
+    body,
+  };
+}
+
+/** One History page. `area` = {chapter} or {domain}; `cursor` from the previous page's nextCursor. */
+export async function fetchHistoryPage(
+  moduleId: string,
+  filter: HistoryFilter,
+  area: { chapter?: number; domain?: string } | null,
+  cursor: string | null,
+  signal?: AbortSignal,
+): Promise<HistoryPage> {
+  const q = new URLSearchParams({ module: moduleId, filter });
+  if (area?.domain) q.set('domain', area.domain);
+  else if (area?.chapter !== undefined) q.set('chapter', String(area.chapter));
+  if (cursor) q.set('cursor', cursor);
+  const raw = await getJson<Record<string, unknown>>(`/api/history?${q.toString()}`, signal);
+  const counts = (raw?.counts ?? {}) as Record<string, unknown>;
+  const runsRaw = (raw?.runs && typeof raw.runs === 'object' ? raw.runs : {}) as Record<string, { answered?: unknown; right?: unknown }>;
+  const runs: HistoryPage['runs'] = {};
+  for (const [id, r] of Object.entries(runsRaw)) runs[id] = { answered: Math.max(0, num(r?.answered)), right: Math.max(0, num(r?.right)) };
+  return {
+    items: (Array.isArray(raw?.items) ? raw.items : [])
+      .filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === 'object')
+      .map(historyItem),
+    nextCursor: str(raw?.nextCursor),
+    counts: { all: num(counts.all), wrong: num(counts.wrong), flagged: num(counts.flagged) },
+    runs,
+  };
+}
+
+/** GET /api/history, paged ("Show more" appends the next page). */
+export function useHistory(moduleId: string, filter: HistoryFilter, area: { chapter?: number; domain?: string } | null, enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: ['history', moduleId, filter, area?.domain ?? '', area?.chapter ?? ''] as const,
+    enabled: enabled && Boolean(moduleId),
+    staleTime: 0,
+    retry: 0,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) => fetchHistoryPage(moduleId, filter, area, pageParam, signal),
+    getNextPageParam: (last) => last.nextCursor,
+  });
+}
+
+// ---------------------------------------------------------------- exam-recall-suite P3 (22-10-26)
+// Wire: addons/exam.py (header = the contract). Normalised HERE, once, onto quiz/examMode.ts shapes.
+
+const isObj = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+
+function examChoice(v: unknown): ExamChoice | undefined {
+  if (Number.isInteger(v)) return v as number;
+  if (Array.isArray(v) && v.length && v.every(Number.isInteger)) return [...(v as number[])].sort((x, y) => x - y);
+  return undefined;
+}
+
+/** Run -> ExamRun. `receivedAt` = this browser's clock when the reply arrived (the offset's other half). */
+export function normaliseExamRun(raw: unknown, receivedAt: number = Date.now()): ExamRun | null {
+  if (!isObj(raw) || typeof raw.id !== 'string') return null;
+  const deadline = Date.parse(String(raw.deadlineAt ?? ''));
+  const serverNow = Date.parse(String(raw.serverNow ?? ''));
+  const remaining = num(raw.remainingSeconds, NaN);
+  // The server is the clock: deadline vs serverNow; else remainingSeconds counted from arrival.
+  let deadlineAt: number;
+  let clockOffsetMs: number;
+  if (Number.isFinite(deadline) && Number.isFinite(serverNow)) {
+    deadlineAt = deadline;
+    clockOffsetMs = serverNow - receivedAt;
+  } else if (Number.isFinite(remaining)) {
+    deadlineAt = receivedAt + remaining * 1000;
+    clockOffsetMs = 0;
+  } else {
+    return null;
+  }
+  const keys = (Array.isArray(raw.questions) ? raw.questions : [])
+    .map((q) => (isObj(q) ? str(q.key) : null))
+    .filter((k): k is string => Boolean(k));
+  const answers: Record<string, ExamChoice> = {};
+  if (isObj(raw.answers)) {
+    for (const [key, value] of Object.entries(raw.answers)) {
+      const choice = examChoice(value);
+      if (choice !== undefined) answers[key] = choice;
+    }
+  }
+  return {
+    id: raw.id,
+    moduleId: str(raw.module) ?? '',
+    deadlineAt,
+    clockOffsetMs,
+    questionKeys: keys,
+    answers,
+    flags: (Array.isArray(raw.flags) ? raw.flags : []).filter((k): k is string => typeof k === 'string'),
+    finished: false,
+    result: null,
+    blueprint: {
+      mode: raw.mode === 'exam' ? 'exam' : 'practice',
+      name: str(raw.name),
+      questions: Math.max(0, num(raw.total, keys.length)),
+      minutes: Math.max(0, num(raw.minutes)),
+    },
+  };
+}
+
+/** Result -> ExamResultData. ⛔ `scaled` is taken ONLY from the server (never computed here). */
+export function normaliseExamResult(raw: unknown): ExamResultData | null {
+  if (!isObj(raw)) return null;
+  const total = Math.max(0, num(raw.total));
+  const questions = (Array.isArray(raw.questions) ? raw.questions : []).filter(isObj);
+  const missed: string[] = [];
+  const unanswered: string[] = [];
+  for (const q of questions) {
+    const key = str(q.key);
+    if (!key || q.right === true) continue;
+    missed.push(key);
+    if (q.chosen === null || q.chosen === undefined) unanswered.push(key);
+  }
+  const areas: ExamAreaResult[] = (Array.isArray(raw.areas) ? raw.areas : [])
+    .filter(isObj)
+    .filter((a) => a.id !== undefined && a.id !== null)
+    .map((a) => ({ id: String(a.id), name: str(a.name) ?? String(a.id), right: Math.max(0, num(a.right)), total: Math.max(0, num(a.total)) }));
+  const sc = isObj(raw.scaled) ? raw.scaled : null;
+  const estimate = sc ? num(sc.estimate, NaN) : NaN;
+  const hasScaled = sc !== null && Number.isFinite(estimate);
+  const lo = sc ? num(sc.scaleMin, NaN) : NaN;
+  const hi = sc ? num(sc.scaleMax, NaN) : NaN;
+  const pass = sc ? num(sc.passScaled, NaN) : NaN;
+  return {
+    right: Math.max(0, num(raw.right)),
+    total,
+    scaled: hasScaled ? Math.round(estimate) : null,
+    passScaled: hasScaled && Number.isFinite(pass) ? pass : null,
+    scale: hasScaled && Number.isFinite(lo) && Number.isFinite(hi) ? [lo, hi] : null,
+    passed: hasScaled && typeof sc?.passedEstimate === 'boolean' ? sc.passedEstimate : null,
+    areas,
+    missed,
+    unanswered,
+  };
+}
+
+/** A finished Result as an ExamRun (to show a past result: "Last result", a 409, Submit's reply). */
+export function examRunFromResult(raw: unknown): ExamRun | null {
+  const result = normaliseExamResult(raw);
+  if (!result || !isObj(raw) || typeof raw.id !== 'string') return null;
+  const questions = (Array.isArray(raw.questions) ? raw.questions : []).filter(isObj);
+  const answers: Record<string, ExamChoice> = {};
+  const flags: string[] = [];
+  for (const q of questions) {
+    const key = str(q.key);
+    if (!key) continue;
+    const choice = examChoice(q.chosen);
+    if (choice !== undefined) answers[key] = choice;
+    if (q.flagged === true) flags.push(key);
+  }
+  return {
+    id: raw.id,
+    moduleId: str(raw.module) ?? '',
+    deadlineAt: Date.parse(String(raw.deadlineAt ?? '')) || 0,
+    clockOffsetMs: 0,
+    questionKeys: questions.map((q) => str(q.key)).filter((k): k is string => Boolean(k)),
+    answers,
+    flags,
+    finished: true,
+    result,
+    blueprint: { mode: raw.mode === 'exam' ? 'exam' : 'practice', name: str(raw.name), questions: result.total, minutes: 0 },
+  };
+}
+
+function normaliseExamPreview(raw: unknown): ExamPreview | null {
+  if (!isObj(raw)) return null;
+  const questions = num(raw.questions, NaN);
+  const minutes = num(raw.minutes, NaN);
+  if (!Number.isFinite(questions) || !Number.isFinite(minutes)) return null;
+  const maxQ = num(raw.maxQuestions, NaN);
+  const maxM = num(raw.maxMinutes, NaN);
+  return {
+    mode: raw.mode === 'exam' ? 'exam' : 'practice',
+    name: str(raw.name),
+    questions,
+    minutes,
+    isDefault: raw.isDefault !== false,
+    poolSize: Math.max(0, num(raw.poolSize)),
+    maxQuestions: Number.isFinite(maxQ) ? maxQ : null,
+    maxMinutes: Number.isFinite(maxM) ? maxM : null,
+    hasScaled: isObj(raw.scaled),
+  };
+}
+
+export interface ExamOpenState {
+  preview: ExamPreview | null;
+  run: ExamRun | null;
+  /** The newest finished run of this book, as a finished ExamRun (result attached). */
+  last: ExamRun | null;
+  /** This read found the open run past its deadline and submitted it (`last` is that run). */
+  expiredNow: boolean;
+}
+
+export const examOpenKey = (moduleId: string) => ['exam-open', moduleId] as const;
+
+/** GET /api/exam/open — the Exam row's preview, the open run (resume) and the last result. */
+export function useExamOpen(moduleId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: examOpenKey(moduleId),
+    enabled: enabled && Boolean(moduleId),
+    staleTime: 0,
+    retry: 0,
+    queryFn: async ({ signal }): Promise<ExamOpenState> => {
+      const raw = await getJson<Record<string, unknown>>(`/api/exam/open?module=${encodeURIComponent(moduleId)}`, signal);
+      const receivedAt = Date.now();
+      return {
+        preview: normaliseExamPreview(raw?.preview),
+        run: raw?.run ? normaliseExamRun(raw.run, receivedAt) : null,
+        last: raw?.last ? examRunFromResult(raw.last) : null,
+        expiredNow: raw?.expiredNow === true,
+      };
+    },
   });
 }
 

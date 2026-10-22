@@ -43,6 +43,70 @@ and asserts both the exit code and the result-line count of each.
 | `gate-srs.mjs` | 27 | 21-10-26, active recall + spaced repetition in a real browser on the built `dist/` (red 25/27 when recall-first is disabled); run by hand like the multi-answer one |
 | `gate-srs-backend.py` | 32 | 21-10-26, the schedule (SM-2-lite), validators, migration 004 additive, the three routes; `python3`, no service. ⚠ clear `app/backend/__pycache__` between a mutation and its restore (same-second edits reuse stale bytecode) |
 | `gate-multi-answer-backend.py` | 17 | 21-10-26, the server half (wrong-answer validation, rooms skip choose-N, migration 003 is additive); `python3`, no service |
+| `gate-study-more-backend.py` | 54 (75 with `--live`) | 22-10-26, exam-recall-suite P1 (G4): AI keys, new-card cap, prefs bounds, validators, migration 005 additive + idempotent, the 6 add-on routes behind `_gate`. `--live` (test venv) adds the real routes + SQL on the ISOLATED gate DB `edu_study_gate`: migrate twice (newest version — 6 since P2 — then nothing), throwaway account (deleted at the end), local uvicorn :8786. Fails when: migration loses `IF NOT EXISTS`, the cap moves off 20, a POST skips `_gate`. |
+| `gate-study-more.mjs` | 36 | 22-10-26, exam-recall-suite P1 (G5): built `dist/`, API stubbed — Stats row, Per review 10..50 step 5 + save, New / day, Flagged (N), confidence before options (review only), leech tag, flag toggle with visible status + rollback, AI question enrolled with body under the server's sha1 key, 44 px targets, nothing outside the header sticks out at 390/834/1440, scope label not clipped. Screenshots `/var/tmp/p1c-shots`. Fails when: the confidence row is hidden, AI enrolment is skipped, the flag goes back into the crowded right cluster. |
+| `gate-routes.mjs` | exit code | 22-10-26: allow-list now carries the 3 `/api/review/*` routes of 21-10 (they were never added — the gate was RED from 21-10 until this fix) and the 6 study_more routes. |
+| `gate-history-backend.py` | 52 (99 with `--live`) | 22-10-26, exam-recall-suite P2 (G6): area rules (chapters / valid `exam` block / every invalid block ignored), mastery (newest 200 per area, retry runs and pre-v5 rows left out, < 5 answers never Next up, tie -> practised longest ago -> book order), history query validation, migration 006 (ease check `>= 1.29`) + its manual rollback. `--live` (test venv, gate DB `edu_study_gate`, uvicorn :8787, 2 throwaway accounts deleted at the end) runs every History / mastery SQL statement for real and reproduces the 21-10 ease bug (7 x "again" on one card). Fails when: 006 is missing (6th grade 500), Wrong/Flagged swapped, retry counted, the 5-answer rule or the tie-break dropped, `runs` counted over the filtered rows. |
+| `gate-history.mjs` | 28 | 22-10-26, exam-recall-suite P2 (G7): built `dist/`, API stubbed — Account Progress (bars with number text, Not enough yet, Next up + Practice), History All/Wrong/Flagged + area + Show more, shape + words per row, keyboard focus, Retry wrong keeps the ORIGINAL denominator (6 / 6 from the Wrong filter, 2 / 3 across two pages, logged as `retry`), Practice dialog Next up, Book select, 44 px, nothing sideways at 390/834/1440. Screenshots `/var/tmp/p2c-shots`. Fails when: a retry recomputes its denominator, a bar's text runs together, rows lose their words, a time stamp reads "22-1008:00". |
+
+### Red proofs — exam-recall-suite P1 (22-10-26)
+
+Every mutation was made in a COPY under `/var/tmp` (`SM_BACKEND=/var/tmp/p1c-mut/backend`,
+`SM_DIST=/var/tmp/p1c-dist-{A,B,C}`), never in the source; the source then re-ran green.
+
+| Gate | Mutation | Red result | Green after |
+|---|---|---|---|
+| `gate-routes.mjs` | (none needed — it was already red) | exit 1, 9 UNDECLARED ROUTES (3 × `/api/review/*` from 21-10 + 6 new) | exit 0, `0 missing · 0 extra` |
+| `gate-study-more-backend.py` | `CREATE TABLE answer_log` without `IF NOT EXISTS` | 52/54 (D2, D5 FAIL) | 54/54 |
+| `gate-study-more-backend.py` | `NEW_PER_DAY_DEFAULT` 20 → 21 | 52/54 (C0, C2 FAIL: the 21st card kept its own schedule) | 54/54 |
+| `gate-study-more-backend.py` | `core._gate(req)` dropped from `_limited` | static 53/54 (R3); `--live` 70/75 (L6 cross-origin flag → 200, L7 → 201, L15/L16 knock-on) | 54/54 · 75/75 |
+| `gate-study-more.mjs` | `ConfidenceRow` returns null | V1, V2 FAIL, then the run aborts (no Guess button) — exit 1 | 36/36 |
+| `gate-study-more.mjs` | `recordReviewSeen` drops every `ai-` question | 34/36 (O4 no body, O5 key ≠ server formula) | 36/36 |
+| `gate-study-more.mjs` | flag button back in the header's right cluster | 35/36 (W 390: scope label clipped) | 36/36 |
+
+### Red proofs — exam-recall-suite P2 (22-10-26)
+
+Mutations in COPIES only (`HB_BACKEND=/var/tmp/p2c-mut/<name>`, `HG_DIST=/var/tmp/p2c-mut/eroot/app/fe-<name>/dist` — a frontend
+copy must sit two levels under a dir holding `aws-quiz-app`, because vite.config reads `../../aws-quiz-app`). Source re-ran green.
+
+| Gate | Mutation | Red result | Green after |
+|---|---|---|---|
+| `gate-routes.mjs` | (none — red before the allow-list) | exit 1, 2 UNDECLARED (`GET /api/history`, `GET /api/mastery`) | exit 0 |
+| `gate-history-backend.py --live` | backend without `006_ease_floor.sql` (gate DB at v5) | 88/99 — E1 `1:200,2:200,3:200,4:200,5:200,6:500,7:500` (CheckViolation `review_cards_ease_check`), E2-E4, L1, L3, G1-G3 | 99/99 (`applied: 006_ease_floor.sql`) |
+| `gate-history-backend.py --live` | rollback drill: `rollback/006_ease_floor.down.sql` applied to the gate DB, then the no-006 backend | 88/99, same 6th-grade 500 (rollback restores v5 exactly); then the source re-applied 006 | 99/99 |
+| `gate-history-backend.py --live` | `MASTERY_RUN_KINDS` + `retry` | 97/99 (K1; Y2 ch1 = 5/9) | 99/99 |
+| `gate-history-backend.py --live` | `MASTERY_MIN_ANSWERS` 5 -> 1 | 89/99 (N1, N4, N5, K2, Y4, Y5 Next up = ch4 at 0% with 4 answers, Y8, Y10 …) | 99/99 |
+| `gate-history-backend.py --live` | tie-break without `lastAt` | 97/99 (N2; Y5 Next up = ch2) | 99/99 |
+| `gate-history-backend.py --live` | `runs` counted over the Wrong rows only | 98/99 (Z7 run 2 = 4/0, not 6/2) | 99/99 |
+| `gate-history-backend.py --live` | Wrong / Flagged filters swapped (plan's named mutation) | 95/99 (Z6, Z7, Z8, Z10) | 99/99 |
+| `gate-history.mjs` | `run/retryFrom` uses the missed count as the total (plan's named mutation) | 25/28 (R1 "retrying 2 of 2", R2 `2 / 2`, R4 `0 / 1`) | 28/28 |
+| `gate-history.mjs` | bar text without the spaces | 27/28 (P2 `92%11/12`) | 28/28 |
+| `gate-history.mjs` | row words (`sr-only` Right:/Wrong:) removed | 26/28 (H3, H6) | 28/28 |
+| `gate-history.mjs` | time stamp with a plain space | 27/28 (H9) | 28/28 |
+| `gate-study-more-backend.py --live` | P1's literal `schema version: 5` (now the newest migration file) | 74/75 on the v6 gate DB (L1) | 75/75 |
+
+### Red proofs — exam-recall-suite P3 (22-10-26)
+
+Backend mutations in COPIES (`EB_BACKEND=/var/tmp/p3c-red/<m>`); frontend in `/var/tmp/p3c-fault/app/fe-x`
+(+ `aws-quiz-app` beside `app/`), staged with `EXAM_WEB=/var/tmp/p3c-fault/dist`. Source re-ran green.
+Fixture books: `gates/stubs/exam_fixture.py` (block book 65 q, D1-D4 24/30/34/12; no-block book 30 q) — written under
+`/var/tmp` at run time, never into the real library. `gate-exam.mjs` stages itself (copy of the backend + built dist + gate DB).
+
+| Gate | Mutation | Red result | Green after |
+|---|---|---|---|
+| `gate-routes.mjs` | (none — red before the allow-list) | 5 UNDECLARED (`/api/exam/{open,start,answer,flag,finish}`) | `0 missing · 0 extra · 0 unexpected` |
+| `gate-exam-backend.py --live` | backend without `007_exam_runs.sql` (gate DB at v6) | exit 1 — M1-M4, L1 `schema version: 6`, L3, S1-S4 (`500`) | 83/83 (`applied: 007_exam_runs.sql`) |
+| `gate-exam-backend.py` | largest remainder = floor only (plan's named mutation) | 32/41 — A1 `[15, 19, 22, 7] sum 63` (plan guessed 64), A2-A4, P1, G1-G3, G9 | 41/41 |
+| `gate-exam-backend.py` | deadline `now > deadline` instead of `>=` | 39/41 (C1, C3) | 41/41 |
+| `gate-exam-backend.py` | Estimate without `passScaled` (defaults 1000 / 700) | 40/41 (G6: no-block run gets `estimate 1000`) | 41/41 |
+| `gate-exam-backend.py --live` | run lookup not scoped to the account | X1 `[400, 200, 200]` — account B could FLAG and FINISH A's exam; X2, D1 | 83/83 |
+| `gate-exam-backend.py --live` | lost-race fallback removed in `store.exam_start` | 81/83 — K1 `codes [200 x6, 201, 503] ids 2` (proves 8 parallel Starts really race) | 83/83 |
+| `gate-exam-backend.py --live` | P2's literal `schema version: 6` in `gate-history-backend.py` L1 | 98/99 on the v7 gate DB | 99/99 (L1 now = newest file) |
+| `gate-exam.mjs` | leave guard `window.confirm` instead of `askConfirm` (plan's named mutation) | see P3 report (run when nn was reachable) | 39/39 |
+
+⚠ At 834 px the WHOLE page scrolls sideways by 177 px because of the site header (`#nav-qna`,
+`#nav-live`) — measured identically on the committed pre-P1 build. `gate-study-more.mjs` prints it as
+`INFO W-hdr` and measures everything outside `<header>`; the header defect is its own open item.
 
 > ⛔ **The 49-line vector is frozen.** It is a *no-regression* gate: it proves the suites
 > still assert the same things, **not** that those assertions are right. A different vector
@@ -212,6 +276,13 @@ green, and record all four in the phase report. Fault-inject into `/var/tmp/edu-
 | `gate-a.mjs` | 10 results — workstream-A layout/CSS gates incl. A-G18 relayout baseline. FROZEN. |
 | `gate-b456.mjs` | 6 results — B4/B5/B6: retry-wrong-only denominator, carried score, full-set read. |
 | `gate-self.mjs` | 6 results — the suite's own invariants. Runs LAST. |
+| `gate-study-more-backend.py` | G4 (exam-recall-suite P1) — server half of stats / cap / flags / prefs / answer log; `--live` on the gate DB. |
+| `gate-study-more.mjs` | G5 (exam-recall-suite P1) — the same features in a real browser on the built bundle. |
+| `gate-history-backend.py` | G6 (exam-recall-suite P2) — History / mastery server half + migration 006; `--live` on the gate DB. |
+| `gate-history.mjs` | G7 (exam-recall-suite P2) — Account Progress + Practice Next up in a real browser on the built bundle. |
+| `gate-exam-backend.py` | G8 (exam-recall-suite P3) — exam allocation / grading / Estimate / clock + migration 007; `--live` runs every exam SQL on the gate DB (race, deadline, idempotent Submit, other account 404). |
+| `gate-exam.mjs` | G9 (exam-recall-suite P3) — the timed exam in a real browser on the built app + real backend + gate DB at 390/834/1440 (resume after reload, app leave dialog, Back, auto-submit, Estimate only with the block, Retry missed keeps the total). Self-staging. |
+| `stubs/exam_fixture.py` | P3 fixture books (with / without an `exam` block) + `serve` = the local staged preview used by `gate-exam.mjs`. |
 | `htmlcheck.py` | static HTML structure check. |
 | `ag18-before.json` | the A-G18 render baseline. A first-class suite file. |
 | `b15probe.mjs` | **probe, not a gate** — records the pre-existing `#chapter=1&block=8` defect. Cannot fail. |

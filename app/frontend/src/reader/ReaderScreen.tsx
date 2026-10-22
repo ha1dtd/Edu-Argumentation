@@ -31,7 +31,8 @@ import { useReaderCursor } from '../state/ReaderCursorProvider';
 import { BlockRenderer } from './BlockRenderer';
 import { lessonHasCode } from './labCode';
 import { TheoryToc } from './TheoryToc';
-import { LabDock, labOrigins, labPath } from './LabDock';
+import { ChatDock, LabDock, labOrigins, labPath } from './LabDock';
+import { useChatDock } from '../ask/chatDock';
 import { ExercisePanel } from '../exercises/ExercisePanel';
 import { exerciseSpec } from '../exercises/exerciseSpec';
 import type { SubBlock } from '../data/types';
@@ -46,6 +47,9 @@ export interface ReaderScreenProps {
   /** 25-09-26: bring the reader to the front (Lab asked to be docked back into it). */
   onShowReader?: () => void;
 }
+
+/** 22-10-26: the one-line reason shown while Lab is off. */
+const LAB_OFF = 'Lab is off while chat is docked. Press Popup in the chat.';
 
 /** isWideViewport (app.js:259) — the contents panel is a column at lg+, a drawer below. */
 const WIDE_VIEWPORT = '(min-width: 1024px)';
@@ -97,7 +101,21 @@ export function ReaderScreen({ isVisible, actions, onShowReader }: ReaderScreenP
   // is room for it, closed where there is not; re-synced when the viewport crosses lg.
   const [tocOpen, setTocOpen] = useState<boolean>(isWideViewport);
   // ⚑ 25-09-26: the Lab panel beside the reading pane (LabDock). null = closed.
-  const [labSrc, setLabSrc] = useState<string | null>(null);
+  const [labSrc, setLabSrcRaw] = useState<string | null>(null);
+  // ⚑ 22-10-26 (user): while the tutor chat is docked in Lab's slot, Lab cannot open; docking
+  //   closes an open Lab. The ref lets the once-registered message listener see the current mode.
+  const chatDocked = useChatDock().mode === 'side';
+  const chatDockedRef = useRef(chatDocked);
+  chatDockedRef.current = chatDocked;
+  const [labNote, setLabNote] = useState(false);
+  const setLabSrc = (value: string | null) => {
+    if (value !== null && chatDockedRef.current) return;
+    setLabSrcRaw(value);
+  };
+  useEffect(() => {
+    if (chatDocked) setLabSrcRaw(null);
+    else setLabNote(false);
+  }, [chatDocked]);
   const toggleLabRef = useRef<() => void>(() => undefined);
 
   // Lab talks to us by postMessage (its header glyphs), from the panel or from its own tab:
@@ -224,6 +242,10 @@ export function ReaderScreen({ isVisible, actions, onShowReader }: ReaderScreenP
   // no code, on this book (Lab then shows the book's first lesson with code). Kept in a ref so the
   // key listener (registered once per visibility) always sees the current lesson.
   toggleLabRef.current = () => {
+    if (chatDocked) {
+      setLabNote(true);
+      return;
+    }
     if (labSrc) {
       setLabSrc(null);
       return;
@@ -353,19 +375,27 @@ export function ReaderScreen({ isVisible, actions, onShowReader }: ReaderScreenP
             {lessonHasCode(block) ? (
               <a
                 id="lab-open-btn"
-                href={`/lab/${encodeURIComponent(moduleId)}/${blockId}`}
-                target="_blank"
+                href={chatDocked ? undefined : `/lab/${encodeURIComponent(moduleId)}/${blockId}`}
+                target={chatDocked ? undefined : '_blank'}
                 rel="noopener"
-                title="Open this lesson's code in Lab, in this window ( ] )"
+                title={chatDocked ? LAB_OFF : "Open this lesson's code in Lab, in this window ( ] )"}
                 aria-keyshortcuts="]"
-                aria-label="Lab"
+                aria-label={chatDocked ? `Lab, unavailable. ${LAB_OFF}` : 'Lab'}
+                aria-disabled={chatDocked ? 'true' : undefined}
+                role={chatDocked ? 'link' : undefined}
+                tabIndex={chatDocked ? 0 : undefined}
                 onClick={(event) => {
+                  if (chatDocked) {
+                    event.preventDefault();
+                    setLabNote(true);
+                    return;
+                  }
                   // ⚑ 25-09-26 (user): Lab opens in THIS window on every screen; a new tab only from
                   //   Lab's own "open in a new tab" glyph. (Middle-click still opens a tab.)
                   event.preventDefault();
                   setLabSrc(event.currentTarget.getAttribute('href'));
                 }}
-                className="shrink-0 min-h-[44px] min-w-[44px] rounded-lg border border-gray-600 text-gray-300 hover:text-white hover:border-brand-600 transition-colors active:scale-95 flex items-center justify-center"
+                className={`shrink-0 min-h-[44px] min-w-[44px] rounded-lg border border-gray-600 text-gray-300 transition-colors flex items-center justify-center ${chatDocked ? 'opacity-40 cursor-not-allowed' : 'hover:text-white hover:border-brand-600 active:scale-95'}`}
               >
                 {/* ⚑ 25-09-26 (user): a lab-flask GLYPH, not the word — also frees the title's width at 390 px. */}
                 <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -376,6 +406,12 @@ export function ReaderScreen({ isVisible, actions, onShowReader }: ReaderScreenP
               </a>
             ) : null}
           </div>
+
+          {chatDocked && labNote ? (
+            <p id="lab-off-note" role="status" className="-mt-4 mb-6 text-xs text-gray-400">
+              {LAB_OFF}
+            </p>
+          ) : null}
 
           {/* ⛔ `prose` IS LOAD-BEARING — see app.css `#tutorial-content.prose`. */}
           <div id="tutorial-content" className="text-gray-300 prose prose-invert max-w-none">
@@ -446,7 +482,8 @@ export function ReaderScreen({ isVisible, actions, onShowReader }: ReaderScreenP
           </p>
         </div>
       </article>
-      {labSrc ? <LabDock src={labSrc} /> : null}
+      {labSrc && !chatDocked ? <LabDock src={labSrc} /> : null}
+      {chatDocked ? <ChatDock /> : null}
     </>
   );
 

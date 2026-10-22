@@ -1065,21 +1065,25 @@ def _review_rate(req: Posted) -> JSONResponse | None:
 
 @app.post("/api/review/seen")
 def api_review_seen(req: Posted = Depends(posted)) -> Response:
-    """Enrol a question after an ORDINARY quiz answer ({module, question, correct})."""
+    """Enrol a question after an ORDINARY quiz answer ({module, question, correct}).
+
+    ⚑ 22-10-26 (exam-recall-suite P1): an AI-written question sends {module, body, correct} instead of a
+      key — the server derives its key ("ai-…") and stores the body. A new card obeys the daily cap
+      (outcome "queued"). Reply {outcome, question[, dueAt]} — `outcome` unchanged for old callers."""
     blocked = _gate(req) or _review_rate(req)
     if blocked:
         return blocked
     try:
-        payload = req.read_json(MAX_REVIEW_BYTES)
+        payload = req.read_json(MAX_REVIEW_BYTES + store.MAX_BODY_BYTES)
         if not isinstance(payload.get("correct"), bool):
             raise ValueError("correct must be true or false.")
-        outcome = store.review_seen(req.account.id, store.module_key(payload.get("module")),
-                                    store.review_key(payload.get("question")), payload["correct"])
+        key, body = store.question_key_and_body(payload)
+        reply = store.review_enrol(req.account.id, store.module_key(payload.get("module")), key, payload["correct"], body)
     except db.StoreUnavailable as error:
         return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
     except (ValueError, TypeError, json.JSONDecodeError) as error:
         return _json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-    return _json(HTTPStatus.OK, {"outcome": outcome})
+    return _json(HTTPStatus.OK, reply)
 
 
 @app.post("/api/review/grade")
@@ -1101,9 +1105,13 @@ def api_review_grade(req: Posted = Depends(posted)) -> Response:
 
 @app.get("/api/review/due")
 def api_review_due(request: Request, module: str = Query(default=""), limit: int = Query(default=20)) -> Response:
-    """The cards due now for the signed-in account in one module (oldest first)."""
+    """The cards due now for the signed-in account in one module (oldest first).
+
+    ⚑ 22-10-26 (exam-recall-suite P1): `limit` is the run size, clamped 10..50 (default still 20); each
+      card carries `leech`, and an AI-written card its `body` (the only copy of the question)."""
+    limit = max(store.SESSION_SIZE_MIN, min(limit, store.SESSION_SIZE_MAX))
     try:
-        return _json(HTTPStatus.OK, store.review_due(_account(request).id, store.module_key(module), limit))
+        return _json(HTTPStatus.OK, store.review_due_page(_account(request).id, store.module_key(module), limit))
     except db.StoreUnavailable as error:
         return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
 

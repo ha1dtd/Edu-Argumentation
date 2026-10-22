@@ -27,6 +27,7 @@ still learn."* A migration is exactly where someone consolidates them for tidine
 | `src/main.tsx` | entry point | — | DOM mount | Creates the `QueryClient`, wraps `<App/>` in `QueryClientProvider`, mounts on `#root`. |
 | `src/App.tsx` | the only screen | `/api/health` | rendered page | `useQuery` on health; renders the seven resolved store paths. |
 | `src/api.ts` | the only backend caller | `fetch` | `HealthPayload` | Same-origin `fetch('/api/health')` — the SPA is served by the same app, so there is no base URL and no CORS. |
+| `src/ask/chatDock.ts` | tutor chat dock mode (22-10-26) | `localStorage reader:askMode` | `popup` \| `side` + the side slot element | **Dock** (in the Ask panel) moves `AskPanel` into Lab's side slot (`reader/LabDock.tsx` `ChatDock`, same divider/width/snap, phone = full-screen layer); `ReaderScreen` then closes Lab and disables its button + `]` until **Popup**. Conversation (`eduAskConversation`) is untouched by the switch. Gate: `gates/gate-chat-dock.mjs`. |
 
 **No state management library.** Verified against the house reference: the CoreX console
 ships **zero** of zustand / redux / jotai / mobx / recoil / valtio. Server state lives in
@@ -150,12 +151,12 @@ Review cards schedule quiz questions so they come back just before he would forg
 
 - **Cards:** one per account x module x question key (`source.question`, e.g. `ch03-b05-q2`), table `review_cards`
   (migration `004_review_cards.sql`; the question TEXT stays in the book's quizData). AI-written questions have no
-  key and are never reviewed.
+  key; since 22-10-26 they are keyed by content and their body is stored with the card (see below).
 - **Enrolment:** answering a keyed question in an ordinary quiz posts `POST /api/review/seen`: first time right =
   due in a day; first time wrong = due in 10 minutes; an existing card changes only on a wrong answer (a lapse), so
   repeating a quiz never pushes the interval out.
 - **Review run:** Practice dialog -> "Review due (N)" (`#setup-review-btn`, with a `#review-status` line). It starts a
-  normal quiz run with scope `review` (up to 20 due cards, oldest first). **Active recall:** the question shows alone
+  normal quiz run with scope `review` (up to "Per review" due cards, default 20, oldest first). **Active recall:** the question shows alone
   with a "type your answer from memory" box (`#recall-input`, nothing is saved); options appear after "Show options".
   A wrong answer is graded `again` automatically; a right one waits for Hard / Good / Easy (`#grade-*-btn`), which grades
   and moves on. Works for choose-N questions too. A review run never ticks a lesson.
@@ -164,3 +165,65 @@ Review cards schedule quiz questions so they come back just before he would forg
 - **API:** `POST /api/review/seen`, `POST /api/review/grade`, `GET /api/review/due?module=&limit=`. If the server does not
   answer, the dialog shows no review UI at all.
 - **Gates:** `gates/gate-srs.mjs`, `gates/gate-srs-backend.py`.
+- **Fixed 22-10-26 (migration `006_ease_floor.sql`, schema v6):** the check was `ease >= 1.3` on a `REAL`; the stored
+  float of 1.3 is 1.29999995, so the 6th `again` on a card answered **500**. Now `ease >= 1.29` (code still floors at 1.3).
+  Manual rollback: `migrations/rollback/006_ease_floor.down.sql`.
+
+## Exam + recall suite, phase 1 — 22-10-26 (plan `exam-recall-suite_22-10-26`)
+
+Migration `005_review_more.sql` (additive): `review_cards.body`, tables `question_flags`, `study_prefs`, `answer_log`.
+Routes live in the add-on `backend/addons/study_more.py`; store functions in the marked P1 block at the end of `store.py`.
+
+| Piece | What | In | Out |
+|---|---|---|---|
+| `GET /api/review/stats?module=` | Stats row numbers | session | due now / today, next 7 days per day, cards, leeches (lapses >= 6), new today, cap, size, retention (review answers right, 30 d) |
+| `GET`/`POST /api/study/prefs` | per book: `newPerDay` 0-200 (default 20), `sessionSize` 10-50 step 5 (default 20) | session; POST same-origin | `{module, newPerDay, sessionSize}` |
+| `GET`/`POST /api/flags` | flag on = upsert, off = delete (idempotent); AI questions keep their body | `{module, question \| body, flagged}` | `{question, flagged}` / list |
+| `POST /api/answers` | append one answer to `answer_log`; `clientId` uuid makes a retry log once | `{module, question \| body, runKind, correct, clientId, confidence?, chosen?}` | 201 logged / 200 duplicate |
+| `/api/review/seen` (changed) | AI question sends `body`, server keys it `ai-` + 12 hex of sha1(question + options); new cards over the daily cap are `queued` to the next UTC+7 midnight | | `{outcome, question, dueAt?}` |
+| `/api/review/due` (changed) | `limit` clamped 10-50; each card has `leech`, AI cards their `body` | | |
+| `quiz/ReviewStats.tsx` | collapsed "Stats" row in the Practice dialog + "New / day" stepper | `/api/review/stats` | `#review-stats`, `#stats-*` |
+| `quiz/SizePicker.tsx` | [-] n [+] stepper (44 px), used for "Per review" (`#session-size`) and "New / day" | | |
+| `quiz/FlagButton.tsx` | flag toggle under the question number (`#flag-btn`, aria-pressed, status Flagged / Unflagged / Not saved) | `/api/flags` | |
+| `quiz/ConfidenceRow.tsx` | review runs only: Sure / Unsure / Guess before the options; one tap reveals them | | confidence on the answer log |
+| `QuizSetupScreen.tsx` | adds Stats, Per review (caps Review due + Flagged runs, never ordinary Practice), "Flagged (N)" run | | |
+| `QuizScreen.tsx` | logs every first answer, enrols AI questions with body, Leech tag (`#leech-tag`) | | |
+
+Gates: `gates/gate-study-more-backend.py` (G4, `--live` on the gate DB), `gates/gate-study-more.mjs` (G5).
+
+## Exam + recall suite, phase 2 — 22-10-26 (history + mastery)
+
+No new table: reads `answer_log`, `question_flags`, `review_cards.body`, pre-v5 `wrong_answers`. Migration 006 = the ease fix above.
+Routes in the add-on `backend/addons/history.py` (GET only); store functions in the marked P2 block at the end of `store.py`.
+
+| Piece | What | In | Out |
+|---|---|---|---|
+| `GET /api/history?module=&filter=all\|wrong\|flagged&chapter=\|domain=&cursor=&limit=` | newest first; pre-v5 wrong rows after the log; a post-v5 double write listed once; `runs` = whole-run totals (Retry's denominator) | session | `{items, nextCursor, counts{all,wrong,flagged}, runs}` |
+| `GET /api/mastery?module=` | per area (exam domain if the book has a valid `exam` block, else chapter): right/answered of the newest 200; retry runs + pre-v5 rows left out; < 5 answers = not enough; Next up = weakest with >= 5 (tie: practised longest ago, then book order), else least-practised | session | `{areaKind, areas[], nextUp, target 80, window 200, minAnswers 5}` |
+| `account/ProgressPanel.tsx` | Account page "Progress": Book select, mastery, History, Practice an area, Retry wrong | the two routes | quiz runs |
+| `account/MasteryBars.tsx` | bars with the number as text + `target 80%`; `NextUpRow` also used in the Practice dialog (`#setup-next-up`) | | |
+| `account/HistoryList.tsx` | All / Wrong / Flagged chips (aria-pressed), area select, rows grouped by run, tick/cross + words, Show more, Retry wrong | | |
+| `state/quizReducer.ts` `run/retryFrom` | retry a PAST run: only its misses, total = the run's original count (6 / 6, never 2 / 2) | | |
+
+Gates: `gates/gate-history-backend.py` (G6, `--live` on the gate DB), `gates/gate-history.mjs` (G7).
+
+## Exam + recall suite, phase 3 — 22-10-26 (timed mock exam)
+
+Migration `007_exam_runs.sql` (table `exam_runs`, partial UNIQUE index `exam_runs_one_open` = one open run per account x book;
+manual rollback `migrations/rollback/007_exam_runs.down.sql`). Routes in `backend/addons/exam.py` (its docstring = the wire
+contract); pure rules in `backend/addons/exam_blueprint.py`; SQL in the marked P3 block of `store.py`. The SERVER is the clock.
+
+| Piece | What | In | Out |
+|---|---|---|---|
+| `GET /api/exam/open?module=` | preview (book `exam` block facts, else editable defaults min(40, pool) q / 60 min) + the open run + the last result; a run past its deadline is closed by this read | session | `{preview, run, last, expiredNow}` |
+| `POST /api/exam/start` | new run (largest-remainder by domain weight, else by chapter size) or the open one (`resumed`); `restart` submits the open one first | `{module, questions?, minutes?, restart?}` | `201`/`200 {run, resumed, previous}` |
+| `POST /api/exam/answer` · `/flag` | save / clear one answer; flag also writes `question_flags`; at/after the deadline -> `409 deadline` (not saved, run closed) | `{runId, question, chosen\|flagged}` | `200` · `409 {code, result}` · `404` other account |
+| `POST /api/exam/finish` | grade, close, append answered questions to `answer_log` (run_kind exam, once); a retried Submit returns the same result | `{runId}` | `{result, alreadyFinished}` |
+| Result | raw right/total, per area, missed; `scaled` (labelled Estimate, linear, pass/fail) ONLY when the book's `exam` block has `passScaled` | | |
+| `quiz/ExamRunView.tsx` (+ `ExamTimer`, `ExamNavigator`, `ExamResult`, `examMode.ts`) | the exam inside `#quiz-screen`: server countdown, navigator chips (words + shape, arrow keys), Submit / Leave via the app dialog, auto-submit at 0:00, Retry missed keeps the exam's total | | |
+| `quiz/QuizSetupScreen.tsx` `ExamRow` | Practice dialog "Exam" row: Start · Resume (time left) · New exam · last Result | | |
+| `shell/useStudyActions.ts` `guardExamLeave` | header tab / brand during a running exam -> app dialog "Leave exam?" (never a native dialog) | | |
+
+Reload or browser Back during an exam: the page leaves the exam screen (no prompt); the run stays open on the server —
+Practice -> Exam -> Resume continues it with the server's time. No real book has an `exam` block yet -> every live book runs as a
+"Practice exam" (no Estimate). Gates: `gates/gate-exam-backend.py` (G8, `--live`), `gates/gate-exam.mjs` (G9, self-staging), fixture `gates/stubs/exam_fixture.py`.

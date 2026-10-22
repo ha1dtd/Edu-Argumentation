@@ -95,6 +95,22 @@ const ALLOWED_EXTRA = new Set([
   'POST /api/rooms', // add-on live rooms (P3), 30-09-26
   'GET /api/rooms/{code}', // add-on live rooms (P3), 30-09-26
   'WS /api/rooms/{code}/ws', // add-on live rooms (P3), 30-09-26
+  'POST /api/review/seen', // spaced repetition (main.py), 21-10-26 — allow-listed late, 22-10-26
+  'POST /api/review/grade', // spaced repetition (main.py), 21-10-26 — allow-listed late, 22-10-26
+  'GET /api/review/due', // spaced repetition (main.py), 21-10-26 — allow-listed late, 22-10-26
+  'GET /api/review/stats', // add-on study_more (exam-recall-suite P1), 22-10-26
+  'GET /api/study/prefs', // add-on study_more (exam-recall-suite P1), 22-10-26
+  'POST /api/study/prefs', // add-on study_more (exam-recall-suite P1), 22-10-26
+  'GET /api/flags', // add-on study_more (exam-recall-suite P1), 22-10-26
+  'POST /api/flags', // add-on study_more (exam-recall-suite P1), 22-10-26
+  'POST /api/answers', // add-on study_more (exam-recall-suite P1), 22-10-26
+  'GET /api/history', // add-on history (exam-recall-suite P2), 22-10-26
+  'GET /api/mastery', // add-on history (exam-recall-suite P2), 22-10-26
+  'GET /api/exam/open', // add-on exam (exam-recall-suite P3), 22-10-26
+  'POST /api/exam/start', // add-on exam (exam-recall-suite P3), 22-10-26
+  'POST /api/exam/answer', // add-on exam (exam-recall-suite P3), 22-10-26
+  'POST /api/exam/flag', // add-on exam (exam-recall-suite P3), 22-10-26
+  'POST /api/exam/finish', // add-on exam (exam-recall-suite P3), 22-10-26
 ]);
 // ⚑ V6 (29-09-26): this gate compares the app's /api/ routes against the frozen legacy list +
 //   this allow-list ONLY. Each add-on phase adds its own routes here with a dated comment.

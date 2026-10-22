@@ -126,6 +126,115 @@ export interface QuizQuestion {
    * ⚠ Optional in the TYPE because an AI-generated question carries none.
    */
   source?: { chapter?: number; block?: string; question?: string };
+  /**
+   * CLIENT-SIDE ONLY, never in a book (exam-recall-suite P1, 22-10-26): set on the copies a
+   * REVIEW run is built from — the card's lapse count, so the quiz can tag a leech (lapses >= 6).
+   */
+  reviewLapses?: number;
+}
+
+// ---------------------------------------------------------------- exam-recall-suite P1 (22-10-26)
+/** How sure he was BEFORE the options were shown (review runs). Stored in answer_log only. */
+export type Confidence = 'sure' | 'unsure' | 'guess';
+
+/** What kind of run an answer came from (answer_log.run_kind). */
+export type RunKind = 'quiz' | 'practice' | 'review' | 'exam' | 'retry';
+
+/** An AI-written question, stored WITH its card / flag (no book holds it). */
+export interface StoredQuestionBody {
+  question: string;
+  options: string[];
+  correct: number | number[];
+  explanations?: (string | null)[] | null;
+}
+
+/** GET /api/review/stats?module= */
+export interface ReviewStats {
+  dueToday: number;
+  /** Cards due on each of the next 7 days (index 0 = tomorrow). Wire: [{day, count}]; normalised in queries.ts. */
+  next7: number[];
+  /** Right-on-first-try % of reviews in the last 30 days, 0..100 (whole number); null = no reviews yet. */
+  retention: number | null;
+  reviews30?: number;
+  total: number;
+  leeches: number;
+}
+
+/** GET/POST /api/study/prefs (per account + book). */
+export interface StudyPrefs {
+  newPerDay: number;
+  sessionSize: number;
+}
+
+/** One flagged question (GET /api/flags?module=). */
+export interface FlaggedQuestion {
+  question: string;
+  body?: StoredQuestionBody | null;
+  flaggedAt?: string;
+}
+
+// ---------------------------------------------------------------- exam-recall-suite P2 (22-10-26)
+// Client-side, NORMALISED shapes (data/queries.ts maps the wire onto these, once).
+
+/** One mastery area: an exam domain when the book has `exam.domains`, else a chapter. */
+export interface MasteryArea {
+  /** Stable id: the domain id ("D1") or the chapter number as a string ("7"). */
+  id: string;
+  /** Display name ("Cloud Concepts", "Ch 7 Ensembles"). */
+  name: string;
+  /** The chapter numbers this area covers (one for a chapter area). */
+  chapters: number[];
+  right: number;
+  answered: number;
+  /** right / answered as a whole %, or null when answered < MASTERY_MIN_ANSWERS ("Not enough yet"). */
+  pct: number | null;
+}
+
+/** GET /api/mastery?module= */
+export interface MasteryPayload {
+  kind: 'domain' | 'chapter';
+  areas: MasteryArea[];
+  /** Area id of "Next up" (weakest with >= 5 answers, else the least-practised), or null. */
+  nextUp: string | null;
+  /** The target %, shown as text beside each bar. */
+  target: number;
+  /** Answers counted per area (the server's window, 200). */
+  window: number;
+  /** Fewer answers than this = "Not enough yet". */
+  minAnswers: number;
+}
+
+export type HistoryFilter = 'all' | 'wrong' | 'flagged';
+
+/**
+ * One History row (GET /api/history), normalised. Three sources on the wire: `log` (answer_log),
+ * `legacy` (pre-v5 wrong_answers: no key, the question rides in `body`) and `flag` (a flagged question
+ * with its last answer, if any).
+ */
+export interface HistoryItem {
+  id: string;
+  source: 'log' | 'legacy' | 'flag';
+  /** The question key, or null for a legacy row. */
+  question: string | null;
+  /** What to print: the key, or the legacy question's text. */
+  label: string;
+  chapter: number | null;
+  /** null = never answered (a flag without a logged answer). */
+  correct: boolean | null;
+  runKind: string | null;
+  /** Only a `log` row carries a run id that "Retry wrong" can use. */
+  runId: string | null;
+  at: string | null;
+  body?: StoredQuestionBody | null;
+}
+
+export interface HistoryPage {
+  items: HistoryItem[];
+  /** Pass back as `cursor` for the next page; null = no more. */
+  nextCursor: string | null;
+  counts: { all: number; wrong: number; flagged: number };
+  /** Per run on this page: every logged answer of the run (the ORIGINAL denominator). */
+  runs: Record<string, { answered: number; right: number }>;
 }
 
 /** The reader's half of a book payload. `sections` is the chapter list. */
