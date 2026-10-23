@@ -85,7 +85,10 @@ export function AppShell() {
     if (initialRoute.kind === 'lesson') return 'tutorial';
     if (initialRoute.kind === 'account') return 'account';
     if (initialRoute.kind === 'settings') return 'settings';
-    return initialRoute.kind === 'library' && legacyHashCursor() ? 'tutorial' : 'welcome';
+    if (initialRoute.kind === 'library' && legacyHashCursor()) return 'tutorial';
+    // 22-10-26: a practice run restored from the last page load (QuizProvider) opens where it stopped.
+    const resumed = state.active.length > 0 && state.currentQuestionIndex < state.active.length && state.scope !== 'exam';
+    return resumed && (initialRoute.kind === 'library' || initialRoute.kind === 'book') ? 'quiz' : 'welcome';
   });
   /** Home is `/` (the library) unless the reader arrived at, or stays on, one book's `/<book>/`. */
   const [homeIsBook, setHomeIsBook] = useState(initialRoute.kind === 'book');
@@ -129,7 +132,7 @@ export function AppShell() {
   };
   const closeQuizSetup = () => setScreen(returnTo);
   const [activeTab, setActiveTab] = useState<NavTab>(() =>
-    isAddonId(screen) ? screen : screen === 'tutorial' ? 'learn' : screen === 'account' ? 'account' : screen === 'settings' ? 'settings' : 'home',
+    isAddonId(screen) ? screen : screen === 'quiz' ? (state.scope === 'ai' ? 'generated' : 'quiz') : screen === 'tutorial' ? 'learn' : screen === 'account' ? 'account' : screen === 'settings' ? 'settings' : 'home',
   );
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -567,7 +570,7 @@ export function AppShell() {
              wrapper it reserves space in a box the bar is not positioned against, which
              looks identical until the last option is the one being covered.
         */}
-        <Screen id="quiz-screen" visible={screen === 'quiz'} className="w-full pb-32">
+        <Screen id="quiz-screen" visible={screen === 'quiz'} className="mx-auto w-full max-w-2xl pb-40">
           {/*
             ⛔ `isVisible` is not decoration — the screen stays MOUNTED under .hidden-view,
                so without it QuizScreen's D-10 finish effect could fire from a hidden screen

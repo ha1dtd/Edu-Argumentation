@@ -110,14 +110,16 @@ const OPTION_CARD =
 //   CLOSED token set is unchanged — `OPTION_LETTER` below still resolves to exactly the same
 //   sorted class set B5b froze — so this split is invisible to the identity check.
 const OPTION_LETTER_BASE =
-  'option-letter flex items-center justify-center w-10 h-10 rounded-full bg-gray-700 font-bold shrink-0 transition-colors';
+  'option-letter flex items-center justify-center w-7 h-7 text-xs rounded-full bg-gray-700 font-bold shrink-0 transition-colors';
 const OPTION_LETTER = `${OPTION_LETTER_BASE} text-gray-400`;
-const OPTION_TEXT = 'option-text pt-1.5 text-base leading-snug';
+const OPTION_TEXT = 'option-text min-w-0 flex-1 flex items-center min-h-[1.75rem] text-[15px]';
 const EXPLANATION_TEXT = 'explanation-text bg-gray-900/50 text-sm border-t border-transparent';
-const EXPLANATION_INNER = 'explanation-inner px-6 pb-6 pt-4 flex flex-col';
+// 23-10-26 compact redesign (user: all answers must fit without scrolling): CLOSED the strip is ~1px (no padding),
+// OPEN it is one tight run-in paragraph ("INCORRECT  No, that describes…").
+const EXPLANATION_INNER = 'explanation-inner px-3 [.expanded_&]:pb-2 [.expanded_&]:pt-1.5';
 // app.js:2945 / 2948 — the two spans handleAnswerSelect builds inside .explanation-inner.
-const EXPLANATION_TITLE = 'block mb-1 font-bold tracking-wider text-xs uppercase';
-const EXPLANATION_BODY = 'text-gray-400 leading-relaxed';
+const EXPLANATION_TITLE = 'mr-2 font-bold tracking-wider text-xs uppercase';
+const EXPLANATION_BODY = 'text-gray-400 leading-snug';
 
 // app.js:2957-2975 — the inline colours. Kept as inline styles, exactly as the legacy sets
 // them, because Tailwind cannot express `rgba(16,185,129,0.1)` from the frozen class set and
@@ -193,7 +195,7 @@ export function OptionCard(props: OptionCardProps) {
       disabled={disabled}
       onClick={onSelect}
     >
-      <div className="p-6 flex items-start gap-5">
+      <div className="px-3 py-2 flex items-center gap-3">
         <span className={badgeColoured ? OPTION_LETTER_BASE : OPTION_LETTER} style={badgeStyle}>
           {String.fromCharCode(65 + index)}
         </span>

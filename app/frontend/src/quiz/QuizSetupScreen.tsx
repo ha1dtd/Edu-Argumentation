@@ -69,6 +69,18 @@ export function capToSize(questions: QuizQuestion[], size: number): QuizQuestion
   return questions.length > size ? questions.slice(0, size) : questions;
 }
 
+/** Practice length choices; 0 = every question in the selection. */
+const PRACTICE_COUNTS = [0, 10, 20, 30, 50] as const;
+const COUNT_KEY = 'edu.practice.count.v1';
+
+/** A random `n` of `questions`, kept in their original order. */
+export function sampleQuestions(questions: QuizQuestion[], n: number): QuizQuestion[] {
+  if (n <= 0 || questions.length <= n) return questions;
+  const picked = new Set<number>();
+  while (picked.size < n) picked.add(Math.floor(Math.random() * questions.length));
+  return questions.filter((_, index) => picked.has(index));
+}
+
 /** An AI card / flag's stored body as a quiz question, keyed so grading and flagging find it. */
 function questionFromBody(key: string, body: StoredQuestionBody | null | undefined): QuizQuestion | null {
   if (!body || typeof body.question !== 'string' || !Array.isArray(body.options) || body.options.length < 2) return null;
@@ -99,6 +111,15 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
   const isPractice = mode === 'practice';
   const prefs = usePrefs(moduleId, open && isPractice);
   const [size, setSize] = useState<number>(SESSION_SIZE.fallback);
+  // 22-10-26: how many questions an ordinary Practice run asks (0 = all). A random draw, remembered.
+  const [count, setCount] = useState<number>(() => {
+    try {
+      const saved = Number(localStorage.getItem(COUNT_KEY));
+      return (PRACTICE_COUNTS as readonly number[]).includes(saved) ? saved : 0;
+    } catch {
+      return 0;
+    }
+  });
   const [newPerDay, setNewPerDay] = useState<number>(NEW_PER_DAY.fallback);
   useEffect(() => {
     if (!prefs.data) return;
@@ -190,6 +211,11 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
   const start = () => {
     if (!ids.length) return;
     try {
+      localStorage.setItem(COUNT_KEY, String(count));
+    } catch {
+      /* per-viewer convenience only */
+    }
+    try {
       localStorage.setItem(storeKey, JSON.stringify(ids));
     } catch {
       /* per-viewer convenience only */
@@ -200,11 +226,11 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
       return;
     }
     if (ids.length === allIds.length) {
-      dispatch({ type: 'run/reset', questions: quizBank });
+      dispatch({ type: 'run/reset', questions: sampleQuestions(quizBank, count) });
       dispatch({ type: 'scope/set', scope: 'module', label: (data?.title as string | undefined) || 'Whole module', blockId: null });
     } else if (ids.length === 1) {
       const only = catalog.find((entry) => entry.id === ids[0]);
-      dispatch({ type: 'run/reset', questions: practiceQuestionsFor(quizBank, ids) });
+      dispatch({ type: 'run/reset', questions: sampleQuestions(practiceQuestionsFor(quizBank, ids), count) });
       dispatch({
         type: 'scope/set',
         scope: 'block',
@@ -214,7 +240,7 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
     } else {
       const hit = [...new Set(ids.map((id) => catalog.find((entry) => entry.id === id)?.chapterIndex ?? -1))];
       const wholeChapter = hit.length === 1 && ids.length === blocksOf(hit[0]).length;
-      dispatch({ type: 'run/reset', questions: practiceQuestionsFor(quizBank, ids) });
+      dispatch({ type: 'run/reset', questions: sampleQuestions(practiceQuestionsFor(quizBank, ids), count) });
       dispatch({
         type: 'scope/set',
         scope: 'selection',
@@ -353,6 +379,26 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
               newPerDay={newPerDay}
               onNewPerDay={(next) => changePrefs({ sessionSize: size, newPerDay: next })}
             />
+          )}
+
+          {isPractice && (
+            <div id="practice-count" role="radiogroup" aria-label="Questions per practice run" className="mt-5 flex flex-wrap items-center gap-2">
+              <span className="mr-1 text-sm font-semibold text-gray-200">Questions</span>
+              {PRACTICE_COUNTS.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  role="radio"
+                  aria-checked={count === n}
+                  onClick={() => setCount(n)}
+                  className={`min-h-[44px] min-w-[44px] rounded-lg border px-3 text-sm font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 ${
+                    count === n ? 'border-brand-600 bg-brand-600 text-white' : 'border-gray-600 text-gray-300 hover:border-brand-600 hover:text-white'
+                  }`}
+                >
+                  {n === 0 ? 'All' : n}
+                </button>
+              ))}
+            </div>
           )}
 
           <div className="mt-6 flex flex-wrap items-center gap-3">

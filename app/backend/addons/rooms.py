@@ -1,6 +1,6 @@
 """Live quiz rooms — HTTP + WebSocket (study-rooms-qna P3, 30-09-26).
 
-  POST /api/rooms            {bookId, blocks[], qCount 5-30, secs 10|20|30} -> {code, qCount, requested}
+  POST /api/rooms            {bookId, blocks[], qCount 5-30, secs 10|20|30, mode? "speed"(default)|"accuracy"} -> {code, qCount, requested}
                              409 {error, code} if the account already owns an open room; 429 at the room cap
   GET  /api/rooms/{code}     -> lobby snapshot | 404
   WS   /api/rooms/{code}/ws  client: join · start (owner) · answer{qIdx,choice} · next (owner) · pong
@@ -75,6 +75,9 @@ async def create_room(req: core.Posted = Depends(core.posted)) -> Response:
         secs = _int(payload.get("secs"))
         if secs not in rs.SECS_ALLOWED:
             raise ValueError("Pick 10, 20 or 30 seconds.")
+        mode = payload.get("mode", "speed")
+        if mode not in rs.MODES:
+            raise ValueError("Pick speed or accuracy scoring.")
         questions = await run_in_threadpool(_load_questions, book, sorted(set(blocks)), wanted,
                                             secrets.randbits(32))
     except (ValueError, TypeError, json.JSONDecodeError) as error:
@@ -84,7 +87,7 @@ async def create_room(req: core.Posted = Depends(core.posted)) -> Response:
     account = req.account
     try:
         room = await rs.STORE.create(account.id, account.display_name or account.username, book,
-                                     sorted(set(blocks)), questions, secs)
+                                     sorted(set(blocks)), questions, secs, mode)
     except rs.AlreadyOwner as error:
         mine = next((r.code for r in rs.STORE.rooms.values() if r.owner_id == account.id and r.state != "final"), None)
         return core._json(HTTPStatus.CONFLICT, {"error": str(error), "code": mine})

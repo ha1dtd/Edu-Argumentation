@@ -304,8 +304,8 @@ export function ExamRunView({ run, moduleId, onLeave }: ExamRunViewProps) {
         aria-labelledby="question-text"
         className={
           (question.options?.length ?? 0) >= 5
-            ? 'grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 mb-8'
-            : 'grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8'
+            ? 'grid grid-cols-1 gap-1.5 mb-4'
+            : 'grid grid-cols-1 gap-1.5 mb-4'
         }
       >
         {(question.options ?? []).map((text, option) => (

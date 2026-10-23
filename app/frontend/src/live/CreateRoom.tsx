@@ -10,6 +10,10 @@ import { CARD, FIELD, LABEL, OUTLINE_BTN, PRIMARY_BTN, SECTION_TITLE } from '../
 
 const Q_COUNTS = [5, 10, 15, 20, 25, 30];
 const SECS = [10, 20, 30];
+const MODES: { id: 'speed' | 'accuracy'; label: string }[] = [
+  { id: 'speed', label: 'Speed — faster correct answers score more' },
+  { id: 'accuracy', label: 'Accuracy — 1 point per correct answer, speed does not count' },
+];
 
 export function CreateRoom({ onRoom }: { onRoom: (code: string) => void }) {
   const { ordered } = useLibrary();
@@ -17,6 +21,7 @@ export function CreateRoom({ onRoom }: { onRoom: (code: string) => void }) {
   const [scope, setScope] = useState<ScopeValue>({ bookId: '', blocks: [] });
   const [qCount, setQCount] = useState(10);
   const [secs, setSecs] = useState(20);
+  const [mode, setMode] = useState<'speed' | 'accuracy'>('speed');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [mine, setMine] = useState<string | null>(null);
@@ -30,7 +35,7 @@ export function CreateRoom({ onRoom }: { onRoom: (code: string) => void }) {
     setError('');
     setMine(null);
     try {
-      const response = await postJson('/api/rooms', { bookId: scope.bookId, blocks: scope.blocks, qCount, secs });
+      const response = await postJson('/api/rooms', { bookId: scope.bookId, blocks: scope.blocks, qCount, secs, mode });
       const body = (await response.json().catch(() => ({}))) as { code?: string; error?: string };
       if (response.ok && body.code) onRoom(body.code);
       else if (response.status === 409 && body.code) { setMine(body.code); setError('You already have an open room.'); }
@@ -61,6 +66,12 @@ export function CreateRoom({ onRoom }: { onRoom: (code: string) => void }) {
             {SECS.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
+      </div>
+      <div className="mt-4">
+        <label htmlFor="live-mode" className={LABEL}>Scoring</label>
+        <select id="live-mode" className={FIELD} value={mode} onChange={(e) => setMode(e.target.value === 'accuracy' ? 'accuracy' : 'speed')}>
+          {MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+        </select>
       </div>
       {error ? <p id="live-create-error" className="mt-4 text-sm text-brand-400">{error}</p> : null}
       <div className="mt-6 flex flex-wrap gap-3">

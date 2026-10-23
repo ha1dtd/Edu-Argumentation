@@ -238,9 +238,10 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
            shape as D-4 (the picker) and D-5 (the library) — A3/A4 shipped the element order
            and left the class strings behind.
       */}
-      <div className="flex justify-between items-center mb-8 border-b border-gray-700 pb-4">
+      <div className="flex justify-between items-center mb-3 border-b border-gray-700 pb-2">
         <div className="min-w-0">
-          <div className="text-xl text-white font-light">
+          <div className="flex items-center gap-3 text-xl text-white font-light">
+           <span>
             Question{' '}
             {/*
               ⛔ THE BADGE IS THE BARE NUMBER — `currentQuestionIndex + 1`, exactly as
@@ -258,17 +259,7 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
             <span className="font-bold text-brand-600" id="question-number-badge">
               {count ? Math.min(state.currentQuestionIndex + 1, count) : ''}
             </span>
-          </div>
-          <p
-            id="quiz-scope-label"
-            className="mt-1 text-[0.75rem] uppercase tracking-widest text-gray-500 truncate"
-          >
-            {scopeCaption}
-          </p>
-          {/* exam-recall-suite B (22-10-26): flag this question for a later "Flagged" run; A5 leech tag.
-              Own row under the number, NOT in the right-hand cluster: there it squeezed this column at
-              390 px ("Question" / "1" wrapped, the scope label clipped — P1c browser check). */}
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+           </span>
             <FlagButton moduleId={book.moduleId} question={question} />
             {isLeech && (
               <span
@@ -280,6 +271,12 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
               </span>
             )}
           </div>
+          <p
+            id="quiz-scope-label"
+            className="mt-1 text-[0.75rem] uppercase tracking-widest text-gray-500 truncate"
+          >
+            {scopeCaption}
+          </p>
         </div>
         <div className="flex shrink-0 items-center gap-3 sm:gap-6">
           {/*
@@ -324,7 +321,7 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
 
       {/* A3: #question-asset renders the question's figure/equation through VisualBlock. */}
       <div id="question-asset" />
-      <h3 id="question-text" className="text-xl text-white mb-8 leading-relaxed font-medium">
+      <h3 id="question-text" className="text-xl text-white mb-3 leading-snug font-medium">
         {question && <RichTextViewer content={question.question} />}
       </h3>
 
@@ -383,8 +380,8 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
         id="options-container"
         className={
           (question?.options?.length ?? 0) >= 5
-            ? 'grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 mb-8'
-            : 'grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8'
+            ? 'grid grid-cols-1 gap-1.5 mb-4'
+            : 'grid grid-cols-1 gap-1.5 mb-4'
         }
       >
         {(question?.options ?? []).map((text, index) => (

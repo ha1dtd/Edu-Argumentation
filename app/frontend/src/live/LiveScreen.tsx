@@ -170,7 +170,7 @@ export function LiveScreen({ open }: { open: boolean }) {
           ) : null}
         </>
       ) : lobby ? (
-        <Lobby code={lobby.code} players={lobby.players} qCount={lobby.qCount} secs={lobby.secs} isOwner={isOwner} onStart={() => send({ type: 'start' })} />
+        <Lobby code={lobby.code} players={lobby.players} qCount={lobby.qCount} secs={lobby.secs} mode={lobby.mode} isOwner={isOwner} onStart={() => send({ type: 'start' })} />
       ) : (
         <div className={CARD}><p className="text-gray-400">Connecting…</p></div>
       )}

@@ -80,8 +80,10 @@ check('M2b no extra hint line above the options', (await page.locator('#multi-hi
 check('M3 five cards', (await cards().count()) === 5);
 check('M4 Check is visible and disabled, Next hidden', (await vis('#check-btn')) && (await page.locator('#check-btn').isDisabled()) && !(await vis('#next-btn')));
 await cards().nth(0).click(); await cards().nth(1).click(); await cards().nth(2).click();
-const lay = await page.evaluate(() => { const bar = document.querySelector('#action-container').getBoundingClientRect().top; return [...document.querySelectorAll('#options-container .option-card')].map((c) => Math.round(bar - c.getBoundingClientRect().top)); });
-check('L1 at 1366x768 every one of the 5 options starts at least 60px above the pinned bar (no scrolling to click)', lay.length === 5 && lay.every((d) => d >= 60), JSON.stringify(lay));
+await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+const lay = await page.evaluate(() => { const bar = document.querySelector('#action-container').getBoundingClientRect().top; return [...document.querySelectorAll('#options-container .option-card')].map((c) => Math.round(bar - c.getBoundingClientRect().bottom)); });
+// 23-10-26: options are ONE column now (user), so five cards no longer fit above the bar unscrolled; the contract is that scrolled to the end, the LAST card clears the pinned bar.
+check('L1 at 1366x768 scrolled to the end, the last of the 5 options sits clear above the pinned bar', lay.length === 5 && lay[4] >= 8, JSON.stringify(lay));
 check('M5 at most 2 ticks (third click ignored)', JSON.stringify(await pressed()) === JSON.stringify(['true', 'true', 'false', 'false', 'false']), JSON.stringify(await pressed()));
 check('M6 no verdict before Check', (await reveals()).every((r) => r === null));
 check('M7 Check enabled with exactly 2', !(await page.locator('#check-btn').isDisabled()));

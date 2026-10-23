@@ -15,7 +15,7 @@ export interface BoardRow { name: string; score: number; rank: number }
 export interface PerQuestionRow { name: string; points: number; answered: boolean; score: number }
 
 export type RoomFrame =
-  | { type: 'lobby'; code: string; owner: string; qCount: number; secs: number; state: string; players: LobbyPlayer[] }
+  | { type: 'lobby'; code: string; owner: string; qCount: number; secs: number; mode?: 'speed' | 'accuracy'; state: string; players: LobbyPlayer[] }
   | { type: 'question'; qIdx: number; total: number; question: string; options: string[]; secs: number; deadline: number }
   | { type: 'answered'; qIdx: number }
   | { type: 'reveal'; qIdx: number; total: number; correct: number; explanations: string[]; perQuestionBoard: PerQuestionRow[]; board: BoardRow[] }

@@ -3,13 +3,13 @@
 import type { LobbyPlayer } from './useRoomSocket';
 import { CAPTION, CARD, PRIMARY_BTN } from '../shell/ui';
 
-export function Lobby(props: { code: string; players: LobbyPlayer[]; qCount: number; secs: number; isOwner: boolean; onStart: () => void }) {
-  const { code, players, qCount, secs, isOwner, onStart } = props;
+export function Lobby(props: { code: string; players: LobbyPlayer[]; qCount: number; secs: number; mode?: 'speed' | 'accuracy'; isOwner: boolean; onStart: () => void }) {
+  const { code, players, qCount, secs, mode, isOwner, onStart } = props;
   return (
     <div className={CARD}>
       <p className={CAPTION}>Room code</p>
       <p id="live-code" className="mt-1 text-4xl font-bold tracking-[0.3em] text-white">{code}</p>
-      <p className="mt-2 text-sm text-gray-400">{`${qCount} questions · ${secs} s each`}</p>
+      <p className="mt-2 text-sm text-gray-400">{`${qCount} questions · ${secs} s each · ${mode === 'accuracy' ? '1 point per correct answer' : 'faster answers score more'}`}</p>
       <p className={`${CAPTION} mt-6`}>{`Players (${players.length})`}</p>
       <ul id="live-players" className="mt-2 flex flex-wrap gap-2">
         {players.map((p) => (

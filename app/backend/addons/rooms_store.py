@@ -43,6 +43,7 @@ PING_S = 25.0                 # app-level ping after this much silence (nginx re
 
 Q_MIN, Q_MAX = 5, 30
 SECS_ALLOWED = (10, 20, 30)
+MODES = ("speed", "accuracy")      # speed: 500-1000 pts by time left · accuracy: 1 pt per correct answer
 
 
 class CapReached(Exception):
@@ -71,6 +72,7 @@ class Room:
     blocks: list[str]
     questions: list[dict[str, Any]]
     secs: int
+    mode: str = "speed"
     players: dict[int, Player] = field(default_factory=dict)
     state: str = "lobby"                 # lobby | question | reveal | final
     q_idx: int = -1
@@ -117,8 +119,11 @@ def pick_questions(quiz: list[Any], blocks: list[str], wanted: int, seed: int) -
     return ordered[:wanted]
 
 
-def points_for(remaining: float, secs: int) -> int:
-    """Correct -> round(1000 * (0.5 + 0.5 * remaining/secs)); wrong -> 0 (the caller)."""
+def points_for(remaining: float, secs: int, mode: str = "speed") -> int:
+    """speed: correct -> round(1000 * (0.5 + 0.5 * remaining/secs)); accuracy: correct -> 1, however
+    fast. Wrong -> 0 in both (the caller)."""
+    if mode == "accuracy":
+        return 1
     fraction = max(0.0, min(1.0, remaining / secs))
     return round(1000 * (0.5 + 0.5 * fraction))
 
@@ -137,7 +142,7 @@ def board(room: Room) -> list[dict[str, Any]]:
 
 def lobby_frame(room: Room) -> dict[str, Any]:
     return {"type": "lobby", "code": room.code, "owner": room.owner_name, "qCount": room.q_count,
-            "secs": room.secs, "state": room.state,
+            "secs": room.secs, "mode": room.mode, "state": room.state,
             "players": [{"name": p.name, "online": p.socket is not None}
                         for p in sorted(room.players.values(), key=lambda p: p.name.lower())]}
 
@@ -176,7 +181,7 @@ class RoomStore:
         raise CapReached("no free room code")
 
     async def create(self, owner_id: int, owner_name: str, book_id: str, blocks: list[str],
-                     questions: list[dict[str, Any]], secs: int) -> Room:
+                     questions: list[dict[str, Any]], secs: int, mode: str = "speed") -> Room:
         async with self.lock:
             self._ensure_sweeper()
             if any(r.owner_id == owner_id and r.state != "final" for r in self.rooms.values()):
@@ -184,7 +189,7 @@ class RoomStore:
             if len(self.rooms) >= MAX_ROOMS:
                 raise CapReached("Too many rooms are open right now.")
             room = Room(code=self._new_code(), owner_id=owner_id, owner_name=owner_name, book_id=book_id,
-                        blocks=list(blocks), questions=questions, secs=secs)
+                        blocks=list(blocks), questions=questions, secs=secs, mode=mode)
             self.rooms[room.code] = room
             return room
 
@@ -296,7 +301,7 @@ class RoomStore:
             if now > room.deadline:
                 return
             correct = choice == item["correct"]
-            points = points_for(room.deadline - now, room.secs) if correct else 0
+            points = points_for(room.deadline - now, room.secs, room.mode) if correct else 0
             player.answers[room.q_idx] = {"choice": choice, "correct": correct, "points": points}
             player.score += points
             room.last_activity = now
