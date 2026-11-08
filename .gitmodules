@@ -1,0 +1,7 @@
+[submodule "ml"]
+	path = ml
+	url = https://github.com/ha1dtd/Machine-Learning.git
+[submodule "aws"]
+	path = aws
+	url = https://github.com/ha1dtd/aws.git
+	branch = main
