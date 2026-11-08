@@ -51,7 +51,7 @@ browser  http://192.168.100.66:8798/lab/...   (VPN door, same cookie; no nginx)
 | Sign-in check | `app/backend/main.py` `require_session` + `/api/auth/me` | 200 `{"account":{"id":int,"displayName":…}}` · 401 not signed in · 503 store down. Lab: anything but 200 + int id = not signed in; 503/timeout/refused = Lab **503** (never 401, never a login loop). |
 | Book enumeration | `app/backend/content.py` `list_packaged_books` / `list_data_books` | packaged `library/<id>/module.json` (id = folder, matches `^[a-z0-9][a-z0-9-]{1,63}$`), legacy `web/data/*.json` minus `test_*`. |
 | Same-origin | `app/backend/main.py` `_same_origin` | no `Origin`, or `Origin`'s host == `Host`. Lab copies it exactly. |
-| Runner | `ml/study/edu-runner/runner.py` | `SESSION ^[A-Za-z0-9_-]{8,64}$` (so a bare account id "1" is refused — hence `lab-acct-00000001`), `MODULE ^[a-z0-9][a-z0-9-]{1,63}$`, `LESSON ^ch\d{2}-b\d{2}$`, 64 KB per cell source, 60 s per cell, 80 s per request, all kernels busy → HTTP 503. |
+| Runner | `../edu-runner/runner.py` | `SESSION ^[A-Za-z0-9_-]{8,64}$` (so a bare account id "1" is refused — hence `lab-acct-00000001`), `MODULE ^[a-z0-9][a-z0-9-]{1,63}$`, `LESSON ^ch\d{2}-b\d{2}$`, 64 KB per cell source, 60 s per cell, 80 s per request, all kernels busy → HTTP 503. |
 
 ## What counts as "a lesson with code" — the ONE D5 rule
 
@@ -109,9 +109,9 @@ is created.
 ## Operate
 
 ```bash
-bash ml/study/Edu-Argumentation/lab/deploy/deploy-lab.sh              # deploy (build lab/frontend first)
-bash ml/study/Edu-Argumentation/lab/deploy/deploy-lab.sh --rollback   # newest snapshot
+bash lab/deploy/deploy-lab.sh              # deploy (build lab/frontend first)
+bash lab/deploy/deploy-lab.sh --rollback   # newest snapshot
 ssh nn 'sudo systemctl disable --now foxai-edu-lab'                   # take Lab away entirely
 ssh nn 'journalctl -u foxai-edu-lab -n 50 --no-pager'                 # who ran what (no code logged)
-bash ml/study/Edu-Argumentation/gates/run-gates-lab.sh                # G-lab (needs ≥ 6000 MB free locally)
+bash gates/run-gates-lab.sh                # G-lab (needs ≥ 6000 MB free locally)
 ```

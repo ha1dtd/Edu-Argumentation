@@ -1,5 +1,5 @@
 # Lab — edit and run a lesson's code (ruling R27). Installed by
-# ml/study/Edu-Argumentation/lab/deploy/deploy-lab.sh. Do not edit on the box.
+# lab/deploy/deploy-lab.sh. Do not edit on the box.
 #
 # Two doors (24-09-26, user report "the Lab button opens the platform page"): nginx's public 443
 # server proxies /lab/ to 127.0.0.1:8798, AND the VPN reader on http://<nn>:8767 is sent to

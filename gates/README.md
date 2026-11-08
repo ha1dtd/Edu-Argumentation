@@ -20,7 +20,7 @@ folder sits beside it so neither happens.
 ## Run everything
 
 ```bash
-cd ml/study/Edu-Argumentation/gates
+cd gates
 npm install                              # first time only
 ./node_modules/.bin/playwright install chromium   # ⛔ NEVER `npx` — npx hits the registry
 bash run-gates.sh
@@ -130,7 +130,7 @@ human remembering to `cp`.
 The exact recipe `run-gates.sh` uses:
 
 ```bash
-cd ml/study/Edu-Argumentation/aws-quiz-app
+cd aws-quiz-app
 EDU_LIBRARY_ROOT=/var/tmp/edu-smoke/lib \
 EDU_PROGRESS_PATH=/var/tmp/edu-smoke/progress.json \
 EDU_LIBRARY_META_PATH=/var/tmp/edu-smoke/library-meta.json \

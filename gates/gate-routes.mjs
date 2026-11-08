@@ -10,7 +10,7 @@
  *   and diffs the two. The result is a burn-down counter that Phases 3 and 4 drive to 0.
  *
  * REQUIRED CWD
- *   ml/study/Edu-Argumentation/      run as:  node gates/gate-routes.mjs
+ *         run as:  node gates/gate-routes.mjs
  *                                    or:      npm --prefix gates run gate-routes
  *   (the npm script runs with gates/ as cwd, so it walks up one level; both work)
  *
@@ -50,7 +50,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Hardcoded, relative to the nested repo root — NOT to process.cwd(), so the gate gives
-// the same answer from ml/study/Edu-Argumentation/ and from gates/.
+// the same answer from  and from gates/.
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const LEGACY = join(REPO_ROOT, 'aws-quiz-app', 'edu_server.py');
 const FASTAPI_APP = join(REPO_ROOT, 'app', 'backend', 'main.py');

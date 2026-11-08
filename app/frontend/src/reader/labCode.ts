@@ -1,7 +1,7 @@
 /**
  * Does this lesson have code Lab can run? — the reader's copy of the ONE D5 rule.
  *
- * ⛔ MIRROR of ml/study/Edu-Argumentation/lab/backend/library.py `lesson_code`. The Lab button
+ * ⛔ MIRROR of lab/backend/library.py `lesson_code`. The Lab button
  *    is shown exactly when Lab lists the lesson, so the two copies must agree rule for rule;
  *    gate T2-xref proves they do. Change one, change the other.
  *
