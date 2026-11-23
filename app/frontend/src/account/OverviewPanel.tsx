@@ -5,7 +5,7 @@
 import type { AccountOverview, OverviewBook } from '../data/types';
 import { BODY_MUTED, CAPTION, OUTLINE_BTN, SECTION_TITLE } from '../shell/ui';
 import type { AccountBook } from './bookList';
-import { fmtMs, fmtPct, plural, shortDay, signed } from './format';
+import { fmtMs, fmtPct, plural, shortDay } from './format';
 
 function Tile({ id, label, value, note }: { id: string; label: string; value: string; note: string }) {
   return (
@@ -22,13 +22,12 @@ export function OverviewTiles({ overview }: { overview: AccountOverview | undefi
     return <p id="overview-loading" className="mt-6 text-sm text-gray-400" aria-busy="true">Loading your numbers…</p>;
   }
   const { today, week, streak, totals } = overview;
-  const diff = week.answered - week.prevAnswered;
   return (
     <dl id="overview-tiles" className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-5">
       <Tile id="today" label="Today" value={String(today.answered)}
         note={today.answered ? `answers · ${fmtPct(today.accuracy)} right${today.ms ? ` · ${fmtMs(today.ms)}` : ''}` : 'answers so far today'} />
       <Tile id="week" label="This week" value={String(week.answered)}
-        note={`answers since Monday · ${plural(week.activeDays, 'active day')} · ${signed(diff)} vs last week`} />
+        note={`answers since Monday · ${plural(week.activeDays, 'active day')} · last week: ${week.prevAnswered}`} />
       <Tile id="streak" label="Streak" value={plural(streak.current, 'day')}
         note={`longest ${streak.longest} · ${streak.activeDays30} of the last 30 days`} />
       <Tile id="due" label="Cards due now" value={String(totals.dueNow)} note={`of ${totals.cards} review cards`} />
