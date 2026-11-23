@@ -18,6 +18,7 @@ import { showNotice } from '../shell/dialog';
 import { BODY_MUTED, CAPTION, SECTION_TITLE } from '../shell/ui';
 import { HistoryList } from './HistoryList';
 import { MasteryBars } from './MasteryBars';
+import { accountBooks } from './bookList';
 
 // ---------------------------------------------------------------- run builders (pure; also used by Practice)
 
@@ -96,17 +97,17 @@ export function retryPlanFor(runId: string, items: HistoryItem[], runs: HistoryP
 
 // ---------------------------------------------------------------- the panel
 
-interface LibraryBookLite { file: string; moduleId?: string; title: string }
 
 const SELECT =
   'min-h-[44px] max-w-full rounded-lg border border-gray-600 bg-gray-900 px-3 text-sm text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600';
 
-export function ProgressPanel({ open, onStartRun }: { open: boolean; onStartRun: () => void }) {
+/** `showBookSelect` false = the Account page owns the one Book select above (23-11-26). */
+export function ProgressPanel({ open, onStartRun, showBookSelect = true }: { open: boolean; onStartRun: () => void; showBookSelect?: boolean }) {
   const { moduleId, quizBank, data, activeBookFile, openBook, isLoading: bookLoading } = useBookContext();
   const { dispatch } = useQuiz();
   const queryClient = useQueryClient();
   const modules = useModules();
-  const books = ((modules.data ?? []) as unknown as LibraryBookLite[]).filter((b) => b && b.file);
+  const books = accountBooks(modules.data);
   const prefs = usePrefs(moduleId, open);
   const size = prefs.data?.sessionSize ?? SESSION_SIZE.fallback;
 
@@ -154,13 +155,13 @@ export function ProgressPanel({ open, onStartRun }: { open: boolean; onStartRun:
     <section id="account-progress-panel" className="mt-8" aria-labelledby="progress-panel-title">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 id="progress-panel-title" className={SECTION_TITLE}>Progress</h3>
-        {books.length > 1 && (
+        {showBookSelect && books.length > 1 && (
           <>
             <label htmlFor="progress-book" className="sr-only">Book</label>
             <select id="progress-book" className={SELECT} value={activeBookFile ?? ''} onChange={(e) => e.target.value && openBook(e.target.value)}>
               {!activeBookFile && <option value="">{title}</option>}
               {books.map((b) => (
-                <option key={b.file} value={b.file}>{b.title}</option>
+                <option key={b.module} value={b.file}>{b.title}</option>
               ))}
             </select>
           </>
@@ -186,7 +187,10 @@ export function ProgressPanel({ open, onStartRun }: { open: boolean; onStartRun:
         ) : null}
       </div>
 
-      <h4 className={`mt-8 mb-3 ${CAPTION}`}>History</h4>
+      {/* 23-11-26 (Account redesign A): History starts CLOSED — it listed every answer in full and made the phone
+          page 16,607 px tall. The summary says what is inside; opening it shows the same list as before. */}
+      <details id="history-details" className="mt-8">
+        <summary className={`cursor-pointer min-h-[44px] flex items-center ${CAPTION}`}>History of every answer (tap to open)</summary>
       {history.isError ? (
         <p className="text-sm text-red-300" role="alert">Could not load history.</p>
       ) : history.isLoading ? (
@@ -210,6 +214,7 @@ export function ProgressPanel({ open, onStartRun }: { open: boolean; onStartRun:
           retrying={retrying}
         />
       )}
+      </details>
     </section>
   );
 }

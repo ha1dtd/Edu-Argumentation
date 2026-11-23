@@ -26,6 +26,7 @@
 //   `#action-container .action-bar-inner` · #next-btn · #quiz-new-btn · #restart-btn
 import { useBookContext } from '../state/BookProvider';
 import { useEffect, useMemo, useState } from 'react';
+import { useQuestionTimer } from './questionTimer';
 import { gradeReview, logAnswer, recordReviewSeen, recordWrongAnswer, reviewKeyOf, storedBodyOf } from '../data/writes';
 import type { QuizKind } from '../data/writes';
 import type { Confidence, RunKind } from '../data/types';
@@ -82,6 +83,8 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
     setRecallText('');
     setConfidence(null);
   }, [state.currentQuestionIndex, state.active]);
+  // Account redesign C (23-11-26): ms this question was on screen -> answer_log.duration_ms (tab-hidden time left out).
+  const questionMs = useQuestionTimer(`${state.currentQuestionIndex}:${state.active.length}`);
   const optionsShown = !isReview || recalled || state.isAnswered;
   const answeredWrong = state.wrongIndices.includes(state.currentQuestionIndex);
   // 22-10-26 (A3): a book question's own key, or an AI question's content key (`ai-…`).
@@ -90,7 +93,7 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
   const isLeech = isReview && (question?.reviewLapses ?? 0) >= 6;
   useEffect(() => {
     if (isReview && state.isAnswered && answeredWrong) {
-      gradeReview({ module: book.moduleId, question: reviewKey, grade: 'again' });
+      gradeReview({ module: book.moduleId, question: reviewKey, grade: 'again', confidence });
     }
     // one grade per answered question: keyed on the answer event, not on every render
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -117,6 +120,7 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
       correct,
       confidence: isReview ? confidence : null,
       chosen,
+      durationMs: questionMs(),
     });
   };
   /** Enrol after an ordinary answer — with the stored body when it is an AI-written question. */
@@ -519,7 +523,7 @@ export function QuizScreen({ isVisible, onFinish, onNewQuiz }: QuizScreenProps) 
                       : 'min-h-[44px] rounded-lg border border-gray-600 px-5 text-sm font-bold uppercase tracking-wider text-gray-200 hover:border-brand-600 transition-colors'
                   }
                   onClick={() => {
-                    gradeReview({ module: book.moduleId, question: reviewKey, grade });
+                    gradeReview({ module: book.moduleId, question: reviewKey, grade, confidence });
                     dispatch({ type: 'run/advance' });
                   }}
                 >

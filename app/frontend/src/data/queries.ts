@@ -30,7 +30,7 @@
 import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
 import { getJson } from './client';
 import type { ExamAreaResult, ExamChoice, ExamPreview, ExamResultData, ExamRun } from '../quiz/examMode';
-import type { FlaggedQuestion, HistoryFilter, HistoryItem, HistoryPage, MasteryArea, MasteryPayload, LibraryBook, ModulePayload, ProgressPayload, ReviewStats, StoredQuestionBody, StudyPrefs } from './types';
+import type { AccountInsights, AccountOverview, FlaggedQuestion, HistoryFilter, HistoryItem, HistoryPage, MasteryArea, MasteryPayload, LibraryBook, ModulePayload, ProgressPayload, ReviewStats, StoredQuestionBody, StudyPrefs } from './types';
 
 /** /api/general, verbatim on the wire. Globals #22 GENERATED_QUIZ_SIZE and #23 aiQuestionCount. */
 export interface GeneralSettings {
@@ -264,6 +264,7 @@ export function useMastery(moduleId: string, enabled: boolean) {
             right: Math.max(0, num(a.right)),
             answered,
             pct,
+            group: a.group === 'practice' || a.group === 'other' ? a.group : 'chapters',
           };
         });
       const next = raw?.nextUp as { id?: unknown } | null | undefined;
@@ -274,6 +275,7 @@ export function useMastery(moduleId: string, enabled: boolean) {
         target: num(raw?.target, 80),
         window: num(raw?.window, 200),
         minAnswers,
+        unassigned: Math.max(0, num(raw?.unassigned)),
       };
     },
   });
@@ -636,5 +638,44 @@ export function useBook(url: string | null) {
     queryKey: queryKeys.book(url ?? ''),
     queryFn: ({ signal }) => getJson<ModulePayload>(url as string, signal),
     enabled: Boolean(url),
+  });
+}
+
+// ---------------------------------------------------------------- Account redesign (23-11-26)
+// Wire: addons/account_insights.py (backend/insights.py). Read-only; a failed read shows one error line in its
+// own card and never blocks the rest of the Account page.
+
+/** GET /api/account/overview — streak, today / this week, one summary per book, cards due. */
+export function useAccountOverview(enabled: boolean) {
+  return useQuery({
+    queryKey: ['account-overview'] as const,
+    enabled,
+    staleTime: 0,
+    retry: 0,
+    refetchOnMount: 'always',
+    queryFn: async ({ signal }) => {
+      const raw = await getJson<AccountOverview>('/api/account/overview', signal);
+      // A reply of the wrong shape is an error line in its card, never a crash of the page.
+      if (!raw?.today || !raw.week || !raw.streak || !raw.totals || !Array.isArray(raw.books)) throw new Error('Unexpected overview reply.');
+      return raw;
+    },
+  });
+}
+
+/** GET /api/account/insights?module= — weak topics, trend, heatmap, time, review schedule for ONE book. */
+export function useAccountInsights(moduleId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['account-insights', moduleId] as const,
+    enabled: enabled && Boolean(moduleId),
+    staleTime: 0,
+    retry: 0,
+    refetchOnMount: 'always',
+    queryFn: async ({ signal }) => {
+      const raw = await getJson<AccountInsights>(`/api/account/insights?module=${encodeURIComponent(moduleId)}`, signal);
+      if (!raw || !Array.isArray(raw.weak) || !Array.isArray(raw.weeks) || !raw.heatmap || !raw.time || !raw.srs || !raw.grades) {
+        throw new Error('Unexpected insights reply.');
+      }
+      return raw;
+    },
   });
 }

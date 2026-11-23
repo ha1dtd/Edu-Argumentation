@@ -168,6 +168,8 @@ const uuidLike = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}
   const a = posts.answers[0] || {};
   check('V5 the answer is logged with confidence guess, run review, a fresh uuid', posts.answers.length === 1 && a.question === 'ch01-b01-q2' && a.runKind === 'review' && a.confidence === 'guess' && a.correct === false && a.chosen === 0 && uuidLike(a.clientId), JSON.stringify(a));
   check('V6 the review grade still goes out (again)', posts.grade.length === 1 && posts.grade[0].grade === 'again');
+  // 23-11-26 (Account redesign B + C): the grade carries the confidence tapped before the options (-> review_log), the answer the time on screen.
+  check('V6b the grade carries confidence guess; the answer carries durationMs (whole ms, 0..300000)', posts.grade[0].confidence === 'guess' && Number.isInteger(a.durationMs) && a.durationMs >= 0 && a.durationMs <= 300000, JSON.stringify({ g: posts.grade[0], d: a.durationMs }));
   await page.locator('#next-btn').click(); await page.waitForTimeout(500);
   check('V7 the AI card is rebuilt from its stored body', (await questionText(page)).includes('which step size diverges'), (await questionText(page)).slice(0, 60));
   check('V8 lapses 7 -> the Leech tag shows', await visible(page, '#leech-tag'));

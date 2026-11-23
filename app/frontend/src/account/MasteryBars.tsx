@@ -55,36 +55,69 @@ export interface MasteryBarsProps {
   canPractice: (area: MasteryArea) => boolean;
 }
 
+function AreaRows({ areas, target, id, label }: { areas: MasteryArea[]; target: number; id: string; label: string }) {
+  return (
+    <ul id={id} className="space-y-3" aria-label={label}>
+      {areas.map((area) => {
+        const width = area.pct === null ? 0 : Math.max(0, Math.min(100, area.pct));
+        const below = area.pct !== null && area.pct < target;
+        return (
+          <li key={area.id} data-area={area.id} className="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 text-sm">
+            <span className="min-w-0 break-words text-gray-200">{area.name}</span>
+            <span className="order-3 col-span-2 sm:order-none sm:col-span-1 relative h-2.5 rounded-full bg-gray-700 overflow-hidden" aria-hidden="true">
+              <span className={`absolute inset-y-0 left-0 rounded-full ${below ? 'bg-amber-400' : 'bg-green-400'}`} style={{ width: `${width}%` }} />
+              <span className="absolute inset-y-0 w-0.5 bg-gray-300" style={{ left: `calc(${Math.min(100, Math.max(0, target))}% - 1px)` }} />
+            </span>
+            <span className="tabular-nums whitespace-nowrap text-right" data-cell="pct">
+              {/* P2c (22-10-26): real spaces between the parts — margins alone left "92%11/12" for a screen reader. */}
+              <span className={area.pct === null ? 'text-gray-400' : 'font-semibold text-white'}>{pctText(area)}</span>{' '}
+              <span className="ml-1 text-gray-400">{area.right}/{area.answered}</span>
+              {below && <>{' '}<span className="ml-1 text-gray-400">target {target}%</span></>}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export function MasteryBars({ data, onPractice, canPractice }: MasteryBarsProps) {
   const next = data.nextUp ? data.areas.find((a) => a.id === data.nextUp) ?? null : null;
   const target = data.target;
   if (!data.areas.length) {
     return <p id="mastery-empty" className="text-sm text-gray-400">No answers yet. Practise a chapter to see it here.</p>;
   }
+  // 23-11-26 (Account redesign A): the book's real chapters (or exam domains) first; its practice sets and any
+  // other areas sit apart, closed, with a count of how many of them have been started — they used to bury the
+  // chapters under 24 empty rows.
+  const main = data.areas.filter((a) => a.group !== 'practice' && a.group !== 'other');
+  const practice = data.areas.filter((a) => a.group === 'practice');
+  const other = data.areas.filter((a) => a.group === 'other');
+  const started = (list: MasteryArea[]) => list.filter((a) => a.answered > 0).length;
+  const kindLabel = data.kind === 'domain' ? 'Mastery per exam domain' : 'Mastery per chapter';
   return (
     <div className="space-y-4">
       {next && <NextUpRow area={next} idBase="mastery" onPractice={onPractice} canPractice={canPractice(next)} />}
-      <ul id="mastery-list" className="space-y-3" aria-label={data.kind === 'domain' ? 'Mastery per exam domain' : 'Mastery per chapter'}>
-        {data.areas.map((area) => {
-          const width = area.pct === null ? 0 : Math.max(0, Math.min(100, area.pct));
-          const below = area.pct !== null && area.pct < target;
-          return (
-            <li key={area.id} data-area={area.id} className="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 text-sm">
-              <span className="min-w-0 break-words text-gray-200">{area.name}</span>
-              <span className="order-3 col-span-2 sm:order-none sm:col-span-1 relative h-2.5 rounded-full bg-gray-700 overflow-hidden" aria-hidden="true">
-                <span className={`absolute inset-y-0 left-0 rounded-full ${below ? 'bg-amber-400' : 'bg-green-400'}`} style={{ width: `${width}%` }} />
-                <span className="absolute inset-y-0 w-0.5 bg-gray-300" style={{ left: `calc(${Math.min(100, Math.max(0, target))}% - 1px)` }} />
-              </span>
-              <span className="tabular-nums whitespace-nowrap text-right" data-cell="pct">
-                {/* P2c (22-10-26): real spaces between the parts — margins alone left "92%11/12" for a screen reader. */}
-                <span className={area.pct === null ? 'text-gray-400' : 'font-semibold text-white'}>{pctText(area)}</span>{' '}
-                <span className="ml-1 text-gray-400">{area.right}/{area.answered}</span>
-                {below && <>{' '}<span className="ml-1 text-gray-400">target {target}%</span></>}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
+      <AreaRows areas={main} target={target} id="mastery-list" label={kindLabel} />
+      {practice.length > 0 && (
+        <details id="mastery-practice-group">
+          <summary className="cursor-pointer text-sm text-gray-200 min-h-[44px] flex items-center">
+            Practice sets — {started(practice)} of {practice.length} started
+          </summary>
+          <AreaRows areas={practice} target={target} id="mastery-list-practice" label="Mastery per practice set" />
+        </details>
+      )}
+      {other.length > 0 && (
+        <details id="mastery-other-group">
+          <summary className="cursor-pointer text-sm text-gray-200 min-h-[44px] flex items-center">Other sets — {started(other)} of {other.length} started</summary>
+          <AreaRows areas={other} target={target} id="mastery-list-other" label="Mastery per other set" />
+        </details>
+      )}
+      {(data.unassigned ?? 0) > 0 && (
+        <p id="mastery-unassigned" className="text-xs text-gray-400">
+          {data.unassigned} answers are not in any bar above (AI-written questions carry no chapter). They are counted in “Your learning”.
+        </p>
+      )}
       <p className="text-xs text-gray-400">Right answers in the last 200 per area. Target {target}%.</p>
     </div>
   );

@@ -227,3 +227,16 @@ contract); pure rules in `backend/addons/exam_blueprint.py`; SQL in the marked P
 Reload or browser Back during an exam: the page leaves the exam screen (no prompt); the run stays open on the server —
 Practice -> Exam -> Resume continues it with the server's time. No real book has an `exam` block yet -> every live book runs as a
 "Practice exam" (no Estimate). Gates: `gates/gate-exam-backend.py` (G8, `--live`), `gates/gate-exam.mjs` (G9, self-staging), fixture `gates/stubs/exam_fixture.py`.
+
+
+---
+
+## Account page redesign (23-11-26) — insights, grade history, time
+
+| File | Purpose | Input | Output | How |
+|---|---|---|---|---|
+| `backend/insights.py` | the numbers of the Account page | `answer_log`, `review_cards`, `review_log`, `attempts`, `progress` (one account) | `overview()` account-wide, `insights(module)` per book | pure builders over plain rows (gated without a DB) + three SELECTs. Definitions are at the top of the file: learner day UTC+7, retries left out, "currently wrong" = latest answer wrong, a topic = chapter + practice set of the same subject, weak = >= 5 answers lowest accuracy first. |
+| `backend/addons/account_insights.py` | routes | session | `GET /api/account/overview`, `GET /api/account/insights?module=` | read-only, account from the session. |
+| `backend/migrations/008_review_log_time.sql` | schema v8 | — | `review_log` table (every applied Again / Hard / Good / Easy with confidence and interval before / after) + `answer_log.duration_ms` | additive, idempotent. Rollback: `migrations/rollback/008_review_log_time.down.sql` (manual; roll the code back first). |
+| `frontend/src/account/{OverviewPanel,InsightsPanel,charts,format,bookList}` | the page | the two routes | tiles, books, weak / improving / activity / time / schedule | `AccountScreen` opens on the last-studied book (once per visit) and holds the per-book reads until it has. |
+| `frontend/src/quiz/questionTimer.ts` | time per question | visibility of the tab | ms sent as `durationMs` with every logged answer | tab-hidden time left out, 5 min cap per question. Reading lessons and timed-exam answers are NOT timed. |

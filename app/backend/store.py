@@ -467,18 +467,24 @@ def review_grade_moment(raw: Any, now: datetime) -> tuple[datetime, bool]:
     return at, True
 
 
-def review_grade(account_id: int, module: str, key: str, grade: str, at: Any = None) -> dict[str, Any]:
+def review_grade(account_id: int, module: str, key: str, grade: str, at: Any = None, confidence: Any = None) -> dict[str, Any]:
     """Apply one review grade (creates the card if the question was never enrolled).
 
     IDEMPOTENT for a resend (23-11-26): ``at`` is the press time. A card whose last_reviewed_at is already
     at or after ``at`` has had this press (or a later one) applied, so the call changes nothing and
-    returns the card as it is, with ``duplicate: true``. Without ``at`` (old client) every call applies."""
+    returns the card as it is, with ``duplicate: true``. Without ``at`` (old client) every call applies.
+
+    23-11-26 (Account redesign B): every APPLIED grade is also appended to review_log (migration 008) with the
+    optional ``confidence`` (sure / unsure / guess, else NULL) and the interval before / after. A duplicate
+    resend is not logged."""
     import db
 
     now = datetime.now(timezone.utc)
     moment, sent = review_grade_moment(at, now)
     if grade not in SRS_GRADES:
         raise ValueError(f"grade must be one of {', '.join(SRS_GRADES)}.")
+    if confidence is not None and confidence not in ("sure", "unsure", "guess"):
+        raise ValueError("confidence must be one of sure, unsure, guess.")
     with db.connect() as conn:
         row = conn.execute(
             "SELECT ease, interval_days, reps, lapses, due_at, last_reviewed_at FROM review_cards"
@@ -497,6 +503,14 @@ def review_grade(account_id: int, module: str, key: str, grade: str, at: Any = N
             " interval_days = EXCLUDED.interval_days, reps = EXCLUDED.reps, lapses = EXCLUDED.lapses,"
             " due_at = EXCLUDED.due_at, last_reviewed_at = EXCLUDED.last_reviewed_at",
             (account_id, module, key, s["ease"], s["interval_days"], s["reps"], s["lapses"], s["due_at"], now),
+        )
+        found = re.match(r"^ch(\d{1,3})-", key)
+        conn.execute(
+            "INSERT INTO review_log (account_id, module_id, question_key, grade, confidence, chapter, interval_before,"
+            " interval_after, ease_after, lapses_after, reviewed_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            " ON CONFLICT (account_id, module_id, question_key, reviewed_at) DO NOTHING",
+            (account_id, module, key, grade, confidence, int(found.group(1)) if found else None,
+             float(row["interval_days"]) if row else None, s["interval_days"], s["ease"], s["lapses"], now),
         )
     return {"question": key, "intervalDays": s["interval_days"], "reps": s["reps"], "lapses": s["lapses"],
             "dueAt": _stamp(s["due_at"])}
@@ -541,6 +555,7 @@ SESSION_SIZE_DEFAULT, SESSION_SIZE_MIN, SESSION_SIZE_MAX, SESSION_SIZE_STEP = 20
 LEECH_LAPSES = 6                    # a card lapsed this often is tagged "leech" (still scheduled)
 MAX_BODY_BYTES = 8 * 1024           # one stored AI question (question + options + explanations)
 MAX_CHOSEN_BYTES = 2 * 1024
+MAX_DURATION_MS = 3_600_000        # answer_log.duration_ms CHECK (migration 008)
 RETENTION_DAYS = 30
 RUN_KINDS = ("quiz", "practice", "review", "exam", "retry")
 CONFIDENCES = ("sure", "unsure", "guess")
@@ -679,8 +694,16 @@ def answer_entry(payload: dict[str, Any]) -> dict[str, Any]:
         chosen_json = json.dumps(chosen, ensure_ascii=False)
         if len(chosen_json.encode("utf-8")) > MAX_CHOSEN_BYTES:
             raise ValueError(f"chosen must be smaller than {MAX_CHOSEN_BYTES // 1024} KB.")
+    # 23-11-26 (Account redesign C): ms the question was on screen. Optional (an old client sends none);
+    # a value outside 0..1 h is a client bug and is stored as "not measured", never as a wrong time.
+    duration = payload.get("durationMs")
+    duration_ms = None
+    if duration is not None and not isinstance(duration, bool) and isinstance(duration, (int, float)) \
+            and 0 <= duration <= MAX_DURATION_MS:
+        duration_ms = int(round(duration))
     return {"question_key": key, "chapter": chapter, "domain": domain, "run_kind": run_kind, "run_id": run_id,
-            "correct": payload["correct"], "confidence": confidence, "chosen": chosen_json, "client_id": client_id}
+            "correct": payload["correct"], "confidence": confidence, "chosen": chosen_json, "client_id": client_id,
+            "duration_ms": duration_ms}
 
 
 # --------------------------------------------------------------------------- P1 SQL: review cards
@@ -921,10 +944,10 @@ def log_answer(account_id: int, module: str, entry: dict[str, Any]) -> str:
 
     added = db.execute(
         "INSERT INTO answer_log (account_id, module_id, question_key, chapter, domain, run_kind, run_id, correct,"
-        " confidence, chosen, client_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::uuid)"
+        " confidence, chosen, client_id, duration_ms) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::uuid, %s)"
         " ON CONFLICT (account_id, client_id) DO NOTHING",
         (account_id, module, entry["question_key"], entry["chapter"], entry["domain"], entry["run_kind"], entry["run_id"],
-         entry["correct"], entry["confidence"], entry["chosen"], entry["client_id"]),
+         entry["correct"], entry["confidence"], entry["chosen"], entry["client_id"], entry["duration_ms"]),
     )
     return "logged" if added else "duplicate"
 # =========================================================================== /exam-recall-suite P1

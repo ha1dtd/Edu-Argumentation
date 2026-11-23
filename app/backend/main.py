@@ -1088,8 +1088,9 @@ def api_review_seen(req: Posted = Depends(posted)) -> Response:
 
 @app.post("/api/review/grade")
 def api_review_grade(req: Posted = Depends(posted)) -> Response:
-    """Grade one card in a review run ({module, question, grade: again|hard|good|easy, at: ISO press time}).
-    ``at`` makes a resend of a grade that failed to save harmless (store.review_grade)."""
+    """Grade one card in a review run ({module, question, grade: again|hard|good|easy, at: ISO press time,
+    confidence?: sure|unsure|guess}). ``at`` makes a resend of a grade that failed to save harmless
+    (store.review_grade); the applied grade is also appended to review_log (23-11-26)."""
     blocked = _gate(req) or _review_rate(req)
     if blocked:
         return blocked
@@ -1097,7 +1098,7 @@ def api_review_grade(req: Posted = Depends(posted)) -> Response:
         payload = req.read_json(MAX_REVIEW_BYTES)
         reply = store.review_grade(req.account.id, store.module_key(payload.get("module")),
                                    store.review_key(payload.get("question")), str(payload.get("grade") or ""),
-                                   payload.get("at"))
+                                   payload.get("at"), payload.get("confidence"))
     except db.StoreUnavailable as error:
         return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
     except (ValueError, TypeError, json.JSONDecodeError) as error:

@@ -4,7 +4,7 @@
       -> {module, filter, items[], nextCursor|null, counts{all, wrong, flagged}, runs{runId: {answered, right}}}
   GET /api/mastery?module=
       -> {module, areaKind: "chapter"|"domain", exam{name}|null, window, minAnswers, target,
-          areas[{id, name, chapters[], answered, right, pct|null, enough, lastAt|null, weight?}],
+          areas[{id, name, chapters[], answered, right, pct|null, enough, lastAt|null, weight?, group}],
           nextUp{id, name, reason: "weakest"|"least-practised", answered, right, pct|null}|null, unassigned}
 
 Item shapes and the rules (what counts, denominators, ties) are documented on store.history_page /
@@ -27,6 +27,7 @@ from fastapi.responses import Response
 
 import ai
 import db
+import insights
 import main as core
 import store
 
@@ -61,6 +62,18 @@ def history_list(request: Request, module: str = Query(default=""), filter: str 
 def mastery_get(request: Request, module: str = Query(default="")) -> Response:
     try:
         key = store.module_key(module)
-        return core._json(HTTPStatus.OK, store.mastery(core._account(request).id, key, _spec(key)))
+        spec = _spec(key)
+        result = store.mastery(core._account(request).id, key, spec)
+        # 23-11-26 (Account redesign A): each area says which group it belongs to — chapters / practice /
+        # other — so the page shows practice sets apart from the real chapters. Additive; nothing else changes.
+        groups = insights.area_groups(spec)
+        for area in result["areas"]:
+            area["group"] = groups.get(area["id"], "chapters")
+        # "Next up" is picked among the real chapters / domains only: "Practice 7: Databases 71% (7 answers)" is a
+        # sample of one subject, not a chapter to go and study (23-11-26). A book with no such sets is unchanged.
+        main = [a for a in result["areas"] if a["group"] == "chapters"]
+        if main and len(main) != len(result["areas"]):
+            result["nextUp"] = store.pick_next_up(main, result["minAnswers"])
+        return core._json(HTTPStatus.OK, result)
     except (db.StoreUnavailable, ValueError, TypeError) as error:
         return _error(error)

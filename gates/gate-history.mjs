@@ -111,7 +111,9 @@ async function open({ width = 1366, height = 900 } = {}) {
   await page.goto(BASE, { waitUntil: 'networkidle' }); await page.waitForTimeout(700);
   return { page, gets, posts, errors, native };
 }
-const nav = async (page, id) => { if (!(await page.locator(id).isVisible())) { await page.locator('#menu-btn').click(); await page.waitForTimeout(300); } await page.locator(id).click(); await page.waitForTimeout(700); };
+const nav = async (page, id) => { if (!(await page.locator(id).isVisible())) { await page.locator('#menu-btn').click(); await page.waitForTimeout(300); } await page.locator(id).click(); await page.waitForTimeout(700); if (id === '#nav-account') { await page.evaluate(() => document.getElementById('history-details')?.setAttribute('open', '')); await page.waitForTimeout(150); } };
+// 23-11-26 (Account redesign): History is a <details> that starts CLOSED, so a visit to Account opens it here before the History checks run (the
+// closed state itself is asserted by gate-insights.mjs); the Book select moved to the page's "Your learning" card as #account-book.
 const text = (page, sel) => page.locator(sel).first().innerText().catch(() => '');
 const raw = (page, sel) => page.locator(sel).first().evaluate((e) => e.innerText.replace(/\s+/g, ' ').trim()).catch(() => '');
 // The viewer's shadow root also holds a <style> (@import …): read only the non-style nodes.
@@ -220,7 +222,7 @@ const rowsOf = (page) => page.$$eval('#history-list > li', (gs) => gs.map((g) =>
   const q = (await questionText(page)).trim();
   check('S2 ...and starts a run of that area', / c2 /.test(q), q.slice(0, 30));
   await nav(page, '#nav-account');
-  await page.locator('#progress-book').selectOption('gate-other'); await page.waitForTimeout(1200);
+  await page.locator('#account-book').selectOption('gate-other'); await page.waitForTimeout(1200);
   check('B1 the Book select opens the other book (its mastery is read)', gets.mastery.includes('gate-other') && /Other book/i.test(await raw(page, '#account-progress-panel')), gets.mastery.join(','));
   check('B2 a book with no areas says so, no error', /No answers yet/i.test(await raw(page, '#account-progress-panel')) && errors.length === 0, errors.join('|'));
   await page.close();
@@ -233,7 +235,7 @@ for (const [w, h] of [[390, 844], [834, 1112], [1440, 900]]) {
   await page.locator('#history-more-btn').click(); await page.waitForTimeout(600);
   await page.locator('#account-progress-panel').scrollIntoViewIfNeeded();
   const d = await sideways(page);
-  const boxes = await minBox(page, '#progress-book, #mastery-next-up-btn, #history-filter-all, #history-filter-wrong, #history-filter-flagged, #history-area, [data-retry-run]');
+  const boxes = await minBox(page, '#account-book, #mastery-next-up-btn, #history-filter-all, #history-filter-wrong, #history-filter-flagged, #history-area, [data-retry-run]');
   await page.locator('#account-progress-panel').screenshot({ path: `${SHOTS}/account-progress-${w}.png` });
   await page.screenshot({ path: `${SHOTS}/account-page-${w}.png`, fullPage: true });
   await nav(page, '#nav-quiz');

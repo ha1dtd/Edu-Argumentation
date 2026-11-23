@@ -123,8 +123,9 @@ for n in funcs.values():
     for d in n.decorator_list:
         if isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr in ("get", "post") and d.args:
             routes[(d.func.attr, d.args[0].value)] = n
-want = {("get", "/api/review/stats"), ("get", "/api/study/prefs"), ("post", "/api/study/prefs"), ("get", "/api/flags"), ("post", "/api/flags"), ("post", "/api/answers")}
-check("R1 study_more declares exactly its six routes", set(routes) == want, str(sorted(routes)))
+want = {("get", "/api/review/stats"), ("get", "/api/study/prefs"), ("post", "/api/study/prefs"), ("get", "/api/flags"), ("post", "/api/flags"), ("post", "/api/answers"),
+        ("get", "/api/review/ai-cards"), ("get", "/api/review/due-blocks"), ("get", "/api/review/due-in")}   # the last three were added 01-11 / 23-11 and never declared here (R1 was red before the Account redesign run)
+check("R1 study_more declares exactly its nine routes", set(routes) == want, str(sorted(routes)))
 first_call = lambda fn: next((ast.unparse(s.value.func) for s in fn.body if isinstance(s, ast.Assign) and isinstance(s.value, ast.Call)), "")
 check("R2 every POST starts with _limited(req)", all(first_call(f) == "_limited" for (m, _), f in routes.items() if m == "post"), str({p: first_call(f) for (m, p), f in routes.items() if m == "post"}))
 lim = funcs.get("_limited")

@@ -276,10 +276,12 @@ const term = (ci, bi) => String(bank.tutorialData.sections[ci].items[bi].term ||
   const stored = q ? gateDb(`import db; r=db.fetch_one("SELECT question FROM wrong_answers ORDER BY id DESC LIMIT 1"); print(r['question'])`) : '';
   await page.click('#nav-account');
   await page.waitForTimeout(1500);
-  const shownTotal = Number((await page.textContent('#account-wrong-total'))?.trim());
+  // 23-11-26 (Account redesign): the Account page no longer prints the ever-growing wrong_answers total; its number is "Currently wrong"
+  // (questions whose latest answer was wrong), so it need not be >= the recorded total. Read it from its tile; NOT RUN on this PC (needs the smoke harness).
+  const shownTotal = Number((await page.textContent('#tile-wrong [data-cell="value"]'))?.trim());
   const adminHidden = !(await page.$('#account-admin'));
   check('AUTH-18 a wrong pick in the quiz UI is recorded (full text) and counted on the Account page; the reader sees no Accounts admin',
-    onQuiz && Boolean(q) && after === before + 1 && stored === String(q?.question) && (await path()) === '/account' && shownTotal >= after && adminHidden,
+    onQuiz && Boolean(q) && after === before + 1 && stored === String(q?.question) && (await path()) === '/account' && Number.isFinite(shownTotal) && adminHidden,
     JSON.stringify({ onQuiz, found: Boolean(q), before, after, stored: stored.slice(0, 50), path: (await path()), shownTotal, adminHidden }));
 }
 {

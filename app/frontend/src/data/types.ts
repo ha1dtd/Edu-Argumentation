@@ -188,6 +188,8 @@ export interface MasteryArea {
   answered: number;
   /** right / answered as a whole %, or null when answered < MASTERY_MIN_ANSWERS ("Not enough yet"). */
   pct: number | null;
+  /** 23-11-26: which group the page lists it under — the book's chapters, its practice sets, or anything else. */
+  group?: 'chapters' | 'practice' | 'other';
 }
 
 /** GET /api/mastery?module= */
@@ -202,6 +204,8 @@ export interface MasteryPayload {
   window: number;
   /** Fewer answers than this = "Not enough yet". */
   minAnswers: number;
+  /** 23-11-26: answers that fit no chapter bar (AI-written questions carry no chapter). */
+  unassigned?: number;
 }
 
 export type HistoryFilter = 'all' | 'wrong' | 'flagged';
@@ -302,3 +306,112 @@ export interface TheoryCursor {
  * PAYLOAD, not the tutorial half — `data` on BookProvider is the tutorial half.
  */
 export type ModuleData = ModulePayload;
+
+// ---------------------------------------------------------------- Account redesign (23-11-26)
+// Wire shapes of GET /api/account/overview and /api/account/insights (backend/insights.py documents every field).
+export interface SrsSummary {
+  total: number;
+  dueNow: number;
+  dueToday: number;
+  leeches: number;
+  stages: { new: number; learning: number; young: number; mature: number };
+  next7: { day: string; count: number }[];
+}
+
+export interface OverviewBook {
+  module: string;
+  lastAt: string | null;
+  lessons: number;
+  currentlyWrong: number;
+  aiAnswered: number;
+  answered7: number;
+  accuracy7: number | null;
+  ms7: number;
+  srs: SrsSummary;
+}
+
+export interface AccountOverview {
+  today: { date: string; answered: number; accuracy: number | null; ms: number };
+  week: { start: string; answered: number; accuracy: number | null; activeDays: number; ms: number; prevAnswered: number; prevAccuracy: number | null };
+  streak: { current: number; longest: number; activeDays30: number; lastActive: string | null };
+  lastBook: string | null;
+  books: OverviewBook[];
+  totals: { dueNow: number; currentlyWrong: number; cards: number };
+}
+
+export interface TopicTrend {
+  recent: number | null;
+  earlier: number | null;
+  delta: number | null;
+  label: 'improving' | 'slipping' | 'steady' | 'not enough yet';
+}
+
+export interface TopicRow {
+  id: string;
+  name: string;
+  groups: string[];
+  chapters: number[];
+  answered: number;
+  right: number;
+  accuracy: number | null;
+  enough: boolean;
+  currentlyWrong: number;
+  cards: number;
+  lapses: number;
+  leeches: number;
+  due: number;
+  lastAt: string | null;
+  trend: TopicTrend;
+}
+
+export interface WeekBucket {
+  start: string;
+  answered: number;
+  accuracy: number | null;
+  reviews: number;
+  recall: number | null;
+  ms: number;
+  grades: { again: number; hard: number; good: number; easy: number };
+}
+
+export interface SessionRow {
+  runId: string;
+  kind: string;
+  at: string;
+  answered: number;
+  right: number;
+  ms: number | null;
+  wallMs: number;
+}
+
+export interface AccountInsights {
+  module: string;
+  areaKind: 'chapter' | 'domain';
+  topics: TopicRow[];
+  weak: TopicRow[];
+  improving: TopicRow[];
+  slipping: TopicRow[];
+  notStarted: string[];
+  unassigned: number;
+  minAnswers: number;
+  heatmap: { from: string; days: { d: string; n: number; ms: number }[]; max: number };
+  weeks: WeekBucket[];
+  time: {
+    totalMs: number;
+    trackedAnswers: number;
+    untrackedAnswers: number;
+    since: string | null;
+    avgQuestionMs: number | null;
+    byTopic: { id: string; name: string; ms: number; tracked: number; answered: number; avgMs: number | null }[];
+    sessionsTotal: number;
+    avgSessionMs: number | null;
+    sessions: SessionRow[];
+  };
+  srs: SrsSummary;
+  grades: { again: number; hard: number; good: number; easy: number; total: number; since: string | null };
+  retention30: number | null;
+  reviews30: number;
+  calibration: Record<'sure' | 'unsure' | 'guess', { n: number; right: number }>;
+  currentlyWrong: number;
+  answeredTotal: number;
+}

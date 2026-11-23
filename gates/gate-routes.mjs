@@ -106,6 +106,11 @@ const ALLOWED_EXTRA = new Set([
   'POST /api/answers', // add-on study_more (exam-recall-suite P1), 22-10-26
   'GET /api/history', // add-on history (exam-recall-suite P2), 22-10-26
   'GET /api/mastery', // add-on history (exam-recall-suite P2), 22-10-26
+  'GET /api/review/ai-cards', // add-on study_more (AI panel), 23-11-26 — was undeclared until the Account redesign run
+  'GET /api/review/due-blocks', // add-on study_more (review reminder), 01-11-26 — same
+  'GET /api/review/due-in', // add-on study_more (review reminder), 01-11-26 — same
+  'GET /api/account/overview', // add-on account_insights (Account redesign), 23-11-26
+  'GET /api/account/insights', // add-on account_insights (Account redesign), 23-11-26
   'GET /api/exam/open', // add-on exam (exam-recall-suite P3), 22-10-26
   'POST /api/exam/start', // add-on exam (exam-recall-suite P3), 22-10-26
   'POST /api/exam/answer', // add-on exam (exam-recall-suite P3), 22-10-26

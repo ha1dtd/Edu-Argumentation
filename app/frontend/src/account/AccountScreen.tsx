@@ -12,15 +12,18 @@
 //   Settings page's VERBATIM: the primary button IS "Continue reading", the secondary IS "Practice",
 //   the title IS #welcome-title, section titles ARE #library-heading. No colour, font or size here is
 //   new. gates/gate-r-style.mjs measures every pair with getComputedStyle.
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getJson } from '../data/client';
 import { postJson, signOut } from '../data/writes';
-import { moduleIdFor } from '../data/bookPaths';
-import { useModules } from '../data/queries';
+import { useAccountOverview, useModules } from '../data/queries';
+import { useBookContext } from '../state/BookProvider';
 import { useAccount } from './AccountContext';
 import { ProgressPanel } from './ProgressPanel';
+import { InsightsPanel } from './InsightsPanel';
+import { BooksOverview, OverviewTiles } from './OverviewPanel';
+import { accountBooks } from './bookList';
 import {
   BODY_MUTED, CAPTION, CARD, EYEBROW, FIELD, LABEL, OUTLINE_BTN, PAGE_TITLE, PRIMARY_BTN, SECTION_TITLE,
 } from '../shell/ui';
@@ -39,18 +42,6 @@ interface AccountRow {
   isOwner: boolean;
   claudeAccess: boolean;
   createdAt: string;
-}
-
-interface LibraryBook {
-  file: string;
-  moduleId?: string;
-  title: string;
-  lessons?: number;
-}
-
-/** The same progress key the library cards use (state/LibraryProvider.tsx). */
-function progressKey(book: LibraryBook): string {
-  return book.moduleId && !/^t-/.test(book.moduleId) ? book.moduleId : moduleIdFor({} as never, book.file);
 }
 
 function lessonLabel(block: string): string {
@@ -236,34 +227,64 @@ function AccountsAdmin() {
   );
 }
 
+const SELECT =
+  'min-h-[44px] max-w-full rounded-lg border border-gray-600 bg-gray-900 px-3 text-sm text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600';
+
 /** `onStartRun` (exam-recall-suite P2): switch to the quiz screen after the Progress panel seeded a run. */
 export function AccountScreen({ open, onStartRun }: { open: boolean; onStartRun?: () => void }) {
   const account = useAccount();
   const modules = useModules();
+  const { moduleId: openModule, activeBookFile, openBook } = useBookContext();
   const stats = useQuery({
     queryKey: ['account-stats'],
     queryFn: () => getJson<Stats>('/api/account/stats'),
     enabled: open,
     refetchOnMount: 'always',
   });
-  const books = ((modules.data ?? []) as unknown) as LibraryBook[];
-  const titleOf = (module: string) => books.find((b) => progressKey(b) === module)?.title ?? module;
-  const lessonsOf = (module: string) => books.find((b) => progressKey(b) === module)?.lessons;
-  const wrongFor = (module: string) => stats.data?.wrongAnswers.find((w) => w.module === module)?.count ?? 0;
-  const modulesSeen = Array.from(new Set([
-    ...(stats.data?.completed ?? []).map((c) => c.module),
-    ...(stats.data?.wrongAnswers ?? []).map((w) => w.module),
-  ]));
+  const overview = useAccountOverview(open);
+  // 23-11-26 (Account redesign A): real titles + one entry per book. The old lookup missed the "t-…" id of the AWS
+  // book, so the page showed the raw id and no lesson total; the same book listed from two files showed twice.
+  const books = useMemo(() => accountBooks(modules.data), [modules.data]);
+  const titleOf = (module: string) => books.find((b) => b.module === module)?.title ?? module;
+
+  // The page opens on the book he studied LAST, not on whichever book the app happened to have open. Once per
+  // visit, and only after the overview answered; opening a book here is what the Book select below does too.
+  // `ready` holds back the per-book reads (insights, mastery, history) until the book is settled, so the page never
+  // fetches a book it is about to leave. A failed overview or library read settles it too.
+  const placed = useRef(false);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (!open) { placed.current = false; setReady(false); return; }
+    if (placed.current) return;
+    if (overview.isError || modules.isError) { placed.current = true; setReady(true); return; }
+    if (!overview.isFetched || overview.isFetching || !books.length) return;
+    placed.current = true;
+    setReady(true);
+    const last = overview.data?.lastBook ? books.find((b) => b.module === overview.data?.lastBook) : undefined;
+    if (last && last.file !== activeBookFile && last.module !== openModule) openBook(last.file);
+  }, [open, overview.isFetched, overview.isFetching, overview.isError, modules.isError, overview.data?.lastBook, books, activeBookFile, openModule, openBook]);
+
+  const attempts = stats.data?.attempts ?? [];
+  const shownAttempts = attempts.slice(0, 5);
+  const moreAttempts = attempts.slice(5);
+  const attemptRow = (a: Stats['attempts'][number], i: number) => (
+    <li key={`${a.at}-${i}`} className="py-2 flex flex-wrap justify-between gap-2">
+      <span className="text-gray-200">{titleOf(a.module)} — {lessonLabel(a.block)}</span>
+      <span className={a.score === a.total ? 'text-green-400 font-semibold' : 'text-amber-400 font-semibold'}>
+        {a.score} / {a.total}
+        <span className="ml-3 font-normal text-gray-400">{when(a.at)}</span>
+      </span>
+    </li>
+  );
 
   return (
     <>
       <div className={CARD}>
         <p className={EYEBROW}>Account{account.isOwner ? ' · Owner' : ''}</p>
         <h1 id="account-title" className={PAGE_TITLE}>{account.displayName}</h1>
-        <dl className="mt-6 grid gap-4 sm:grid-cols-2 text-sm">
-          <div><dt className="text-gray-400">Username</dt><dd id="account-username" className="text-white font-medium mt-1">{account.username}</dd></div>
-          <div><dt className="text-gray-400">Wrong answers recorded</dt><dd id="account-wrong-total" className="text-white font-medium mt-1">{stats.data ? stats.data.wrongTotal : '…'}</dd></div>
-        </dl>
+        <p className="mt-2 text-sm text-gray-400">Signed in as <span id="account-username" className="text-white font-medium">{account.username}</span></p>
+        <OverviewTiles overview={overview.data} />
+        {overview.isError ? <p className="mt-4 text-sm text-red-300" role="alert">Could not load your numbers.</p> : null}
         <button id="account-signout-btn" type="button" className={`mt-6 gap-2 ${OUTLINE_BTN}`} onClick={() => void signOut()}>
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12H3m0 0l4-4m-4 4l4 4M13 5h5a2 2 0 012 2v10a2 2 0 01-2 2h-5" />
@@ -272,47 +293,42 @@ export function AccountScreen({ open, onStartRun }: { open: boolean; onStartRun?
         </button>
       </div>
 
+      <BooksOverview overview={overview.data} books={books} selected={openModule} loading={overview.isLoading} failed={overview.isError}
+        onPick={(module) => { const b = books.find((x) => x.module === module); if (b) openBook(b.file); }} />
+
+      <section id="account-insights" className={CARD} aria-labelledby="account-insights-title">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="account-insights-title" className={SECTION_TITLE}>Your learning</h2>
+          {books.length > 1 && (
+            <>
+              <label htmlFor="account-book" className="sr-only">Book</label>
+              <select id="account-book" className={SELECT} value={activeBookFile ?? ''} onChange={(e) => e.target.value && openBook(e.target.value)}>
+                {!activeBookFile && <option value="">{titleOf(openModule)}</option>}
+                {books.map((b) => <option key={b.module} value={b.file}>{b.title}</option>)}
+              </select>
+            </>
+          )}
+        </div>
+        <p className={`${BODY_MUTED} mb-2`}>{titleOf(openModule)}: what is weak, what is improving and where the time goes.</p>
+        <InsightsPanel moduleId={openModule} title={titleOf(openModule)} open={open && ready} onStartRun={() => onStartRun?.()} />
+      </section>
+
       <section className={CARD} aria-labelledby="account-progress-title">
         <h2 id="account-progress-title" className={SECTION_TITLE}>Your progress</h2>
-        <p className={`${BODY_MUTED} mb-6`}>Finished lessons and recorded wrong answers, per book. Only yours.</p>
+        <p className={`${BODY_MUTED} mb-6`}>Mastery per chapter, your latest lesson assessments and every answer. Only yours.</p>
         {stats.isError ? <p className="text-sm text-red-300" role="alert">Could not load your numbers.</p> : null}
-        {stats.data && !modulesSeen.length ? <p className="text-sm text-gray-400">Nothing finished yet.</p> : null}
-        {modulesSeen.length ? (
-          <div className="overflow-x-auto">
-            <table id="account-progress" className="w-full text-sm text-left">
-              <thead className={CAPTION}>
-                <tr><th className="py-2 pr-4">Book</th><th className="py-2 pr-4">Lessons finished</th><th className="py-2">Wrong answers</th></tr>
-              </thead>
-              <tbody className="text-gray-200">
-                {modulesSeen.map((module) => {
-                  const done = stats.data?.completed.find((c) => c.module === module)?.lessons ?? 0;
-                  const total = lessonsOf(module);
-                  return (
-                    <tr key={module} className="border-t border-gray-700" data-module={module}>
-                      <td className="py-2 pr-4 font-medium">{titleOf(module)}</td>
-                      <td className="py-2 pr-4" data-cell="lessons">{total ? `${done} of ${total}` : done}</td>
-                      <td className="py-2" data-cell="wrong">{wrongFor(module)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-        <h3 className={`mt-8 mb-3 ${CAPTION}`}>Recent assessments</h3>
-        {stats.data && !stats.data.attempts.length ? <p className="text-sm text-gray-400">No assessments finished yet.</p> : null}
+        <h3 className={`mb-3 ${CAPTION}`}>Recent assessments</h3>
+        {stats.data && !attempts.length ? <p className="text-sm text-gray-400">No assessments finished yet.</p> : null}
         <ul id="account-attempts" className="divide-y divide-gray-700 text-sm">
-          {(stats.data?.attempts ?? []).map((a, i) => (
-            <li key={`${a.at}-${i}`} className="py-2 flex flex-wrap justify-between gap-2">
-              <span className="text-gray-200">{titleOf(a.module)} — {lessonLabel(a.block)}</span>
-              <span className={a.score === a.total ? 'text-green-400 font-semibold' : 'text-amber-400 font-semibold'}>
-                {a.score} / {a.total}
-                <span className="ml-3 font-normal text-gray-400">{when(a.at)}</span>
-              </span>
-            </li>
-          ))}
+          {shownAttempts.map(attemptRow)}
         </ul>
-        {onStartRun ? <ProgressPanel open={open} onStartRun={onStartRun} /> : null}
+        {moreAttempts.length > 0 && (
+          <details id="account-attempts-more">
+            <summary className="cursor-pointer text-sm text-gray-200 min-h-[44px] flex items-center">Show {moreAttempts.length} more</summary>
+            <ul className="divide-y divide-gray-700 text-sm">{moreAttempts.map((a, i) => attemptRow(a, i + 5))}</ul>
+          </details>
+        )}
+        {onStartRun ? <ProgressPanel open={open && ready} onStartRun={onStartRun} showBookSelect={false} /> : null}
       </section>
 
       <PasswordCard />

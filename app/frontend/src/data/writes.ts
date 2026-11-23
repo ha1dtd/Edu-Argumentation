@@ -229,6 +229,8 @@ export interface AnswerLogBody {
   confidence?: Confidence | null;
   /** The position picked, or the sorted set for choose-N. */
   chosen: number | number[];
+  /** Account redesign C (23-11-26): ms the question was on screen before this answer (tab-hidden time left out). */
+  durationMs?: number;
 }
 
 /**
@@ -268,6 +270,8 @@ interface PendingGrade {
   question: string;
   grade: ReviewGrade;
   at: string;
+  /** Account redesign B (23-11-26): the Sure / Unsure / Guess tap made before the options showed, stored in review_log. */
+  confidence?: Confidence | null;
 }
 
 const gradeListeners = new Set<() => void>();
@@ -356,9 +360,10 @@ if (typeof window !== 'undefined') {
 }
 
 /** Grade one card in a review run (wrong = again; right = hard / good / easy, his choice). Never silently lost. */
-export function gradeReview(body: { module: string; question: string | undefined; grade: ReviewGrade }): void {
+export function gradeReview(body: { module: string; question: string | undefined; grade: ReviewGrade; confidence?: Confidence | null }): void {
   if (!body.question) return;
   const grade: PendingGrade = { module: body.module, question: body.question, grade: body.grade, at: new Date().toISOString() };
+  if (body.confidence) grade.confidence = body.confidence;
   void postReviewGrade(grade).then((outcome) => {
     if (outcome !== 'failed') return;
     writeGradeQueue([...readGradeQueue(), grade].slice(-GRADE_QUEUE_MAX));
