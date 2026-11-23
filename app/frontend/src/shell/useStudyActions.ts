@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys, useProviderReadiness, useQuizSizing, MAX_FRESH_QUIZ_SIZE } from '../data/queries';
 import {
+  flushPendingGrades,
   flushPendingProgress,
   generationToken,
   postJson,
@@ -69,7 +70,7 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
   const [aiBlockStatus, setAiBlockStatus] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
   const [loading, setLoading] = useState({ scope: '', model: '' });
-  const generateMemory = useRef<{ fromSetup: boolean; selection: string[] }>({ fromSetup: false, selection: [] });
+  const generateMemory = useRef<{ fromSetup: boolean; selection: string[]; count?: number }>({ fromSetup: false, selection: [] });
 
   // ⚠ `data` IS the tutorialData (BookProvider), so the title is `data.title`. Reading
   //   `data.tutorialData.title` made this always false and Generate silently did nothing —
@@ -93,6 +94,7 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
   useEffect(() => {
     if (flushed.current) return;
     flushed.current = true;
+    void flushPendingGrades();   // 23-11-26: review grades that failed to save last time (empty queue = no request)
     void flushPendingProgress().then((landed) => {
       landed.forEach((reply) => {
         if (reply.module) applyProgress(reply.module, reply);
@@ -235,8 +237,10 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
   );
 
   /** startGeneratedQuiz (app.js:3029). */
+  // 23-11-26: `wanted` (the AI-Quiz dialog's Questions row; 0 = All) overrides the settings default.
+  // One ticked block asks /api/quiz (server max 10); several or none ask /api/quiz/fresh (5..30).
   const startGeneratedQuiz = useCallback(
-    async (selection: string[] = []) => {
+    async (selection: string[] = [], wanted?: number) => {
       if (!hasTitle || !aiReady) return;
       const token = await generationToken(provider.tokenRequired);
       if (token === null) return;
@@ -248,13 +252,21 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
       const request = oneBlock
         ? {
             url: '/api/quiz' as const,
-            body: { module: activeBookFile, chapter: oneBlock.chapterIndex + 1, block: oneBlock.blockIndex + 1, count: aiQuestionCount },
+            body: {
+              module: activeBookFile,
+              chapter: oneBlock.chapterIndex + 1,
+              block: oneBlock.blockIndex + 1,
+              count: wanted === undefined ? aiQuestionCount : Math.max(3, Math.min(wanted > 0 ? wanted : MAX_FRESH_QUIZ_SIZE, 10)),
+            },
           }
         : {
             url: '/api/quiz/fresh' as const,
             body: {
               module: activeBookFile,
-              count: generatedCountFor(picked.length),
+              count:
+                wanted === undefined
+                  ? generatedCountFor(picked.length)
+                  : Math.max(5, Math.min(wanted > 0 ? wanted : MAX_FRESH_QUIZ_SIZE, MAX_FRESH_QUIZ_SIZE)),
               ...(picked.length ? { blocks: picked.map((b) => [b.chapterIndex + 1, b.blockIndex + 1]) } : {}),
             },
           };
@@ -264,7 +276,7 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
         const reply = (await response.json()) as { questions?: QuizQuestion[]; error?: string };
         if (!response.ok) throw new Error(reply.error || `Request failed (${response.status}).`);
         setAiQuiz(reply.questions ?? [], oneBlock ? theoryBlockId(oneBlock.chapterIndex, oneBlock.blockIndex) : null);
-        generateMemory.current = { fromSetup: true, selection };
+        generateMemory.current = { fromSetup: true, selection, count: wanted };
         showQuiz('ai');
       } catch (error) {
         if (!isAbort(error)) void showNotice({ title: 'Could not generate a quiz', body: (error as Error).message });
@@ -281,7 +293,7 @@ export function useStudyActions({ showQuiz, showLoading, showHome, showReaderAt 
   /** The #generate-new-btn listener (app.js:1326). */
   const generateAnother = useCallback(() => {
     if (generateMemory.current.fromSetup) {
-      void startGeneratedQuiz(generateMemory.current.selection);
+      void startGeneratedQuiz(generateMemory.current.selection, generateMemory.current.count);
       return;
     }
     const origin = blockFromId(stateRef.current.scopeBlockId || '');

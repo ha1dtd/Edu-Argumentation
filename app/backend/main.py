@@ -1088,14 +1088,16 @@ def api_review_seen(req: Posted = Depends(posted)) -> Response:
 
 @app.post("/api/review/grade")
 def api_review_grade(req: Posted = Depends(posted)) -> Response:
-    """Grade one card in a review run ({module, question, grade: again|hard|good|easy})."""
+    """Grade one card in a review run ({module, question, grade: again|hard|good|easy, at: ISO press time}).
+    ``at`` makes a resend of a grade that failed to save harmless (store.review_grade)."""
     blocked = _gate(req) or _review_rate(req)
     if blocked:
         return blocked
     try:
         payload = req.read_json(MAX_REVIEW_BYTES)
         reply = store.review_grade(req.account.id, store.module_key(payload.get("module")),
-                                   store.review_key(payload.get("question")), str(payload.get("grade") or ""))
+                                   store.review_key(payload.get("question")), str(payload.get("grade") or ""),
+                                   payload.get("at"))
     except db.StoreUnavailable as error:
         return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
     except (ValueError, TypeError, json.JSONDecodeError) as error:
@@ -1104,14 +1106,19 @@ def api_review_grade(req: Posted = Depends(posted)) -> Response:
 
 
 @app.get("/api/review/due")
-def api_review_due(request: Request, module: str = Query(default=""), limit: int = Query(default=20)) -> Response:
+def api_review_due(request: Request, module: str = Query(default=""), limit: int = Query(default=20),
+                   kind: str = Query(default="all")) -> Response:
     """The cards due now for the signed-in account in one module (oldest first).
 
     ⚑ 22-10-26 (exam-recall-suite P1): `limit` is the run size, clamped 10..50 (default still 20); each
-      card carries `leech`, and an AI-written card its `body` (the only copy of the question)."""
+      card carries `leech`, and an AI-written card its `body` (the only copy of the question).
+    ⚑ 23-11-26 (AI panel): `kind` = all (default, as before) | book | ai — one kind of card, still inside today's
+      budgets (the AI run respects its own 20 a day)."""
     limit = max(store.SESSION_SIZE_MIN, min(limit, store.SESSION_SIZE_MAX))
     try:
-        return _json(HTTPStatus.OK, store.review_due_page(_account(request).id, store.module_key(module), limit))
+        return _json(HTTPStatus.OK, store.review_due_page(_account(request).id, store.module_key(module), limit, kind))
+    except ValueError as error:
+        return _json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
     except db.StoreUnavailable as error:
         return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
 

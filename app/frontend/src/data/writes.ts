@@ -250,10 +250,120 @@ export async function savePrefs(body: { module: string } & Partial<StudyPrefs>):
   }
 }
 
-/** Grade one card in a review run (wrong = again; right = hard / good / easy, his choice). */
+// ⚑ A REVIEW GRADE MUST NOT BE LOST (23-11-26, user: Hard/Good/Easy "should be recorded and affect the next
+//   assessment"). It used to be fire-and-forget: one failed POST silently dropped the grade. Now:
+//   1 try 3 times with a growing pause (network / 5xx / 429 are retried; another 4xx is our fault, dropped);
+//   2 still failing -> keep it in localStorage (REVIEW_GRADE_PENDING_KEY) and resend on the next load and
+//     every 30 s / when the browser is back online;
+//   3 a small non-blocking notice (shell/GradeQueueNotice) says how many are waiting.
+//   Every grade carries `at` (the press time). The server skips a grade whose card was already reviewed at or
+//   after `at` (store.review_grade), so a resend can never be applied twice.
+export const REVIEW_GRADE_PENDING_KEY = 'eduPendingReviewGrades';
+const GRADE_QUEUE_MAX = 200;
+const GRADE_QUEUE_MAX_AGE_MS = 6 * 24 * 3_600_000;   // the server accepts a press time up to 7 days old
+const GRADE_RETRY_MS = 30_000;
+
+interface PendingGrade {
+  module: string;
+  question: string;
+  grade: ReviewGrade;
+  at: string;
+}
+
+const gradeListeners = new Set<() => void>();
+let gradeQueueCount = 0;
+let gradeFlushing = false;
+let gradeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function readGradeQueue(): PendingGrade[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(REVIEW_GRADE_PENDING_KEY) || '[]') as PendingGrade[];
+    return Array.isArray(parsed) ? parsed.filter((g) => g && g.module && g.question && g.grade && g.at) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeGradeQueue(queue: PendingGrade[]): void {
+  try {
+    if (queue.length) localStorage.setItem(REVIEW_GRADE_PENDING_KEY, JSON.stringify(queue));
+    else localStorage.removeItem(REVIEW_GRADE_PENDING_KEY);
+  } catch {
+    /* storage blocked: the three tries were the only chance */
+  }
+  gradeQueueCount = queue.length;
+  gradeListeners.forEach((listener) => listener());
+}
+
+/** For the notice (useSyncExternalStore): how many grades are saved only in this browser, not yet on the server. */
+export const subscribePendingGrades = (listener: () => void): (() => void) => {
+  gradeListeners.add(listener);
+  return () => { gradeListeners.delete(listener); };
+};
+export const pendingGradeCount = (): number => gradeQueueCount;
+
+/** 'saved' = on the server (or already there); 'rejected' = a 4xx, retrying cannot help; 'failed' = try again later. */
+export async function postReviewGrade(grade: PendingGrade, attempts = 3): Promise<'saved' | 'rejected' | 'failed'> {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await postJson('/api/review/grade', grade);
+      if (response.ok) return 'saved';
+      // 401 (session expired) and 429 (rate limit) are not our fault: keep the grade for after sign-in / later.
+      if (response.status >= 400 && response.status < 500 && response.status !== 429 && response.status !== 401) return 'rejected';
+    } catch {
+      /* network: fall through to the retry */
+    }
+    if (attempt < attempts) await new Promise((done) => setTimeout(done, 400 * attempt));
+  }
+  return 'failed';
+}
+
+function scheduleGradeFlush(): void {
+  if (gradeTimer !== null || !gradeQueueCount) return;
+  gradeTimer = setTimeout(() => {
+    gradeTimer = null;
+    void flushPendingGrades();
+  }, GRADE_RETRY_MS);
+}
+
+/** Resend every queued grade, oldest first. An empty queue sends nothing (gate R-RO2: no non-GET on a plain browse). */
+export async function flushPendingGrades(): Promise<number> {
+  if (gradeFlushing) return gradeQueueCount;
+  const fresh = readGradeQueue().filter((g) => Date.now() - Date.parse(g.at) < GRADE_QUEUE_MAX_AGE_MS);
+  gradeQueueCount = fresh.length;
+  if (!fresh.length) {
+    writeGradeQueue([]);
+    return 0;
+  }
+  gradeFlushing = true;
+  try {
+    const left: PendingGrade[] = [];
+    for (const grade of fresh) {
+      if (left.length) { left.push(grade); continue; }     // keep the order: one failure holds the rest back
+      const outcome = await postReviewGrade(grade, 2);
+      if (outcome === 'failed') left.push(grade);
+    }
+    writeGradeQueue(left);
+    return left.length;
+  } finally {
+    gradeFlushing = false;
+    scheduleGradeFlush();
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => { void flushPendingGrades(); });
+}
+
+/** Grade one card in a review run (wrong = again; right = hard / good / easy, his choice). Never silently lost. */
 export function gradeReview(body: { module: string; question: string | undefined; grade: ReviewGrade }): void {
   if (!body.question) return;
-  void postJson('/api/review/grade', body).catch(() => undefined);
+  const grade: PendingGrade = { module: body.module, question: body.question, grade: body.grade, at: new Date().toISOString() };
+  void postReviewGrade(grade).then((outcome) => {
+    if (outcome !== 'failed') return;
+    writeGradeQueue([...readGradeQueue(), grade].slice(-GRADE_QUEUE_MAX));
+    scheduleGradeFlush();
+  });
 }
 
 // ---------------------------------------------------------------- exam-recall-suite P3 (22-10-26)
@@ -421,7 +531,7 @@ export async function signOut(): Promise<void> {
     /* private mode */
   }
   try {
-    const drop = [PROGRESS_PENDING_KEY, 'eduAskConversation'];
+    const drop = [PROGRESS_PENDING_KEY, REVIEW_GRADE_PENDING_KEY, 'eduAskConversation'];
     for (let i = 0; i < localStorage.length; i += 1) {
       const key = localStorage.key(i);
       if (key && key.startsWith('eduExercises.')) drop.push(key);

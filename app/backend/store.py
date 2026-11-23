@@ -351,7 +351,7 @@ def wrong_answer_positions(payload: dict[str, Any], option_count: int) -> tuple[
 SRS_GRADES = ("again", "hard", "good", "easy")
 SRS_START_EASE = 2.5
 SRS_MIN_EASE = 1.3
-SRS_MAX_DAYS = 365.0
+SRS_MAX_DAYS = 14.0     # 23-11-26 (user: "too long = i will forget"): no card waits more than 14 days
 SRS_AGAIN_MINUTES = 10
 REVIEW_KEY = re.compile(r"^[A-Za-z0-9._-]{3,64}$")
 
@@ -361,9 +361,14 @@ def srs_next(card: dict[str, Any] | None, grade: str, now: datetime) -> dict[str
 
     again: back to step 0, one more lapse, ease -0.2 (not below 1.3), due in 10 minutes.
     hard : ease -0.15, interval x1.2 (at least 1 day), reps +1.
-    good : 1 day, then 3 days, then interval x ease; reps +1.
+    good : 1 day, then 4 days, then interval x ease; reps +1.
     easy : ease +0.15, 4 days at first, then interval x ease x 1.3 (at least 4 days); reps +1.
-    Interval is capped at one year. Returns ease, interval_days, reps, lapses, due_at (UTC).
+    Interval is capped at SRS_MAX_DAYS (14 days; was one year until 23-11-26). Returns ease, interval_days,
+    reps, lapses, due_at (UTC).
+    18-11-26 (user: "yesterday things I learned should come back"): a day-or-longer card falls due at the
+    START of its study day (STUDY_DAY_TZ midnight + whole days), so what he learned yesterday evening is
+    waiting this morning, not at the same clock hour. 1 / 4 / x ease follows SM-2 (1 / 6) and Anki (1 day
+    graduating, 4 easy); the "too constant" complaint (12-11-26) is answered by the daily cap instead.
     """
     from datetime import timedelta
 
@@ -383,18 +388,18 @@ def srs_next(card: dict[str, Any] | None, grade: str, now: datetime) -> dict[str
             ease = max(SRS_MIN_EASE, ease - 0.15)
             interval = max(1.0, interval * 1.2) if reps else 1.0
         elif grade == "good":
-            interval = 1.0 if reps == 0 else 3.0 if reps == 1 else interval * ease
+            interval = 1.0 if reps == 0 else 4.0 if reps == 1 else interval * ease
         else:  # easy
             ease += 0.15
             interval = 4.0 if reps == 0 else max(4.0, interval * ease * 1.3)
         reps += 1
         interval = min(interval, SRS_MAX_DAYS)
-        due = now + timedelta(days=interval)
+        due = study_day_start(now) + timedelta(days=max(1, round(interval)))
     return {"ease": round(ease, 3), "interval_days": round(interval, 3), "reps": reps, "lapses": lapses, "due_at": due}
 
 
 def review_first_seen(correct: bool, now: datetime) -> dict[str, Any]:
-    """A card created by answering a question in an ordinary quiz: right -> first review in a day;
+    """A card created by answering a question in an ordinary quiz: right -> first review the next study day;
     wrong -> back in ten minutes WITHOUT counting a lapse (he had not learned it yet)."""
     state = srs_next(None, "good" if correct else "again", now)
     if not correct:
@@ -441,17 +446,49 @@ def review_seen(account_id: int, module: str, key: str, correct: bool) -> str:
         return "lapsed"
 
 
-def review_grade(account_id: int, module: str, key: str, grade: str) -> dict[str, Any]:
-    """Apply one review grade (creates the card if the question was never enrolled)."""
+def review_grade_moment(raw: Any, now: datetime) -> tuple[datetime, bool]:
+    """(moment, sent) for a grade. ``raw`` is the ISO time the button was pressed, from the browser; the
+    browser queues a grade that failed to save and resends it later (23-11-26), so the press time is what
+    makes a resend harmless. Accepted when it is within the last 7 days and no more than 1 day ahead
+    (clock skew); anything else, or no value at all (an old client), counts as "now"."""
+    from datetime import timedelta
+
+    if not raw:
+        return now, False
+    try:
+        at = datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return now, False
+    if at.tzinfo is None:
+        return now, False
+    at = at.astimezone(timezone.utc)
+    if not (now - timedelta(days=7) <= at <= now + timedelta(days=1)):
+        return now, False
+    return at, True
+
+
+def review_grade(account_id: int, module: str, key: str, grade: str, at: Any = None) -> dict[str, Any]:
+    """Apply one review grade (creates the card if the question was never enrolled).
+
+    IDEMPOTENT for a resend (23-11-26): ``at`` is the press time. A card whose last_reviewed_at is already
+    at or after ``at`` has had this press (or a later one) applied, so the call changes nothing and
+    returns the card as it is, with ``duplicate: true``. Without ``at`` (old client) every call applies."""
     import db
 
     now = datetime.now(timezone.utc)
+    moment, sent = review_grade_moment(at, now)
+    if grade not in SRS_GRADES:
+        raise ValueError(f"grade must be one of {', '.join(SRS_GRADES)}.")
     with db.connect() as conn:
         row = conn.execute(
-            "SELECT ease, interval_days, reps, lapses FROM review_cards"
+            "SELECT ease, interval_days, reps, lapses, due_at, last_reviewed_at FROM review_cards"
             " WHERE account_id = %s AND module_id = %s AND question_key = %s FOR UPDATE",
             (account_id, module, key),
         ).fetchone()
+        if sent and row is not None and row["last_reviewed_at"] is not None and row["last_reviewed_at"] >= moment:
+            return {"question": key, "intervalDays": row["interval_days"], "reps": row["reps"], "lapses": row["lapses"],
+                    "dueAt": _stamp(row["due_at"]), "duplicate": True}
+        now = moment
         s = srs_next(row, grade, now)
         conn.execute(
             "INSERT INTO review_cards (account_id, module_id, question_key, ease, interval_days, reps, lapses, due_at, last_reviewed_at)"
@@ -695,21 +732,40 @@ def review_enrol(account_id: int, module: str, key: str, correct: bool, body: di
         return {"outcome": "lapsed", "question": key, "dueAt": _stamp(s["due_at"])}
 
 
-def review_due_page(account_id: int, module: str, limit: int = SESSION_SIZE_DEFAULT) -> dict[str, Any]:
+def review_kind(value: Any) -> str:
+    """The `kind` query of the AI-panel reads: "all" (default, every card), "book" (the book's own
+    questions) or "ai" (AI-written cards, key not chNN-bNN-qN). Anything else is a 400."""
+    kind = "all" if value is None or value == "" else str(value)
+    if kind not in ("all", "book", "ai"):
+        raise ValueError("kind must be all, book or ai.")
+    return kind
+
+
+def review_kind_sql(kind: str) -> str:
+    """A WHERE fragment (no parameters) selecting one kind of card by its key; "" for all."""
+    return {"all": "", "book": f"NOT {REVIEW_IS_AI_SQL}", "ai": REVIEW_IS_AI_SQL}[kind]
+
+
+def review_due_page(account_id: int, module: str, limit: int = SESSION_SIZE_DEFAULT, kind: str = "all") -> dict[str, Any]:
     """review_due plus P1: limit clamped to the run size 10-50, each card tagged `leech`, and an
-    AI-written card carries its `body` (the only copy of the question)."""
+    AI-written card carries its `body` (the only copy of the question).
+    23-11-26 AI panel: kind "ai" / "book" keeps one kind of card; both budgets still decide who is inside today's
+    window, so the AI run respects its own 20 a day. `total` counts the cards of that kind."""
     import db
 
+    kind = review_kind(kind)
+    where = review_kind_sql(kind)
     limit = max(SESSION_SIZE_MIN, min(int(limit), SESSION_SIZE_MAX))
+    window = review_window_sql(review_budget(account_id, module))   # 23-11-26: two daily budgets
     rows = db.fetch_all(
-        "SELECT question_key, due_at, reps, lapses, body FROM review_cards"
-        " WHERE account_id = %s AND module_id = %s AND due_at <= now() ORDER BY due_at LIMIT %s",
+        f"SELECT question_key, due_at, reps, lapses, body FROM {window}" + (f" WHERE {where}" if where else "")
+        + " ORDER BY ord, is_ai, question_key LIMIT %s",
         (account_id, module, limit),
     )
     counts = db.fetch_one(
-        "SELECT count(*) FILTER (WHERE due_at <= now()) AS due, count(*) AS total FROM review_cards"
-        " WHERE account_id = %s AND module_id = %s",
-        (account_id, module),
+        f"SELECT count(*) AS due, (SELECT count(*) FROM review_cards WHERE account_id = %s AND module_id = %s"
+        + (f" AND {where}" if where else "") + f") AS total FROM {window}" + (f" WHERE {where}" if where else ""),
+        (account_id, module, account_id, module),
     ) or {"due": 0, "total": 0}
     due = []
     for r in rows:
@@ -719,6 +775,24 @@ def review_due_page(account_id: int, module: str, limit: int = SESSION_SIZE_DEFA
             item["body"] = r["body"]
         due.append(item)
     return {"due": due, "dueCount": int(counts["due"]), "total": int(counts["total"])}
+
+
+AI_CARDS_MAX = 500
+
+
+def review_ai_cards(account_id: int, module: str, limit: int = AI_CARDS_MAX) -> dict[str, Any]:
+    """23-11-26 AI panel: EVERY AI-written card of one book with its stored body (the practice pool), newest
+    first. A card whose body is missing is skipped (nothing to ask). -> {cards: [{question, body, lapses}], total}."""
+    import db
+
+    limit = max(1, min(int(limit), AI_CARDS_MAX))
+    rows = db.fetch_all(
+        f"SELECT question_key, lapses, body FROM review_cards WHERE account_id = %s AND module_id = %s AND {REVIEW_IS_AI_SQL}"
+        " AND body IS NOT NULL ORDER BY created_at DESC, question_key LIMIT %s",
+        (account_id, module, limit),
+    )
+    return {"cards": [{"question": r["question_key"], "body": r["body"], "lapses": int(r["lapses"])} for r in rows],
+            "total": len(rows)}
 
 
 def read_prefs(account_id: int, module: str, conn: Any = None) -> dict[str, int]:
@@ -747,14 +821,18 @@ def save_prefs(account_id: int, module: str, update: dict[str, int]) -> dict[str
     return read_prefs(account_id, module)
 
 
-def review_stats(account_id: int, module: str) -> dict[str, Any]:
+def review_stats(account_id: int, module: str, kind: str = "all") -> dict[str, Any]:
     """The Practice dialog's Stats row for one account x book.
 
     dueNow · dueToday (due before the learners' midnight) · next7 = one count per day for the 7 days
     after today · total cards · leeches (lapses >= 6) + up to 50 leech keys · newToday + the cap ·
     retention = % of REVIEW answers right in the last 30 days (answer_log; null before any).
+    23-11-26 AI panel: kind "ai" / "book" counts only that kind of card (retention too); "all" = as before.
     """
     import db
+
+    kind = review_kind(kind)
+    cards_and = (" AND " + review_kind_sql(kind)) if kind != "all" else ""
 
     now = datetime.now(timezone.utc)
     day0 = study_day_start(now)
@@ -771,17 +849,17 @@ def review_stats(account_id: int, module: str) -> dict[str, Any]:
             " count(*) FILTER (WHERE lapses >= %(leech)s) AS leeches,"
             " count(*) FILTER (WHERE created_at >= %(day0)s) AS new_today, "
             + ", ".join(windows) +
-            " FROM review_cards WHERE account_id = %(a)s AND module_id = %(m)s",
+            " FROM review_cards WHERE account_id = %(a)s AND module_id = %(m)s" + cards_and,
             params,
         ).fetchone()
         leech_keys = [r["question_key"] for r in conn.execute(
-            "SELECT question_key FROM review_cards WHERE account_id = %s AND module_id = %s AND lapses >= %s"
+            "SELECT question_key FROM review_cards WHERE account_id = %s AND module_id = %s AND lapses >= %s" + cards_and +
             " ORDER BY lapses DESC, question_key LIMIT 50",
             (account_id, module, LEECH_LAPSES),
         ).fetchall()]
         ret = conn.execute(
             "SELECT count(*) AS n, count(*) FILTER (WHERE correct) AS ok FROM answer_log"
-            " WHERE account_id = %s AND module_id = %s AND run_kind = 'review' AND answered_at >= %s",
+            " WHERE account_id = %s AND module_id = %s AND run_kind = 'review' AND answered_at >= %s" + cards_and,
             (account_id, module, now - timedelta(days=RETENTION_DAYS)),
         ).fetchone()
         prefs = read_prefs(account_id, module, conn)
@@ -1403,20 +1481,102 @@ def review_blocks(value: Any) -> list[str]:
     return blocks
 
 
-def review_due_by_block(account_id: int, module: str) -> dict[str, Any]:
-    """{blocks: [{block, due}] (due > 0 only), dueCount, total} — one row per block, so a chapter is
-    counted once however many of its cards fell due, on whatever days."""
+# ⚑ DAILY REVIEW CAPS (12-11-26 "the questions come back too constantly"; 23-11-26 rebuilt). Two separate
+#   budgets per study day (STUDY_DAY_TZ), each used up by the cards of ITS OWN kind reviewed today
+#   (last_reviewed_at >= the day's start), so neither can eat the other:
+#     REVIEW_PER_DAY    = 100  chapter cards (the book's own questions)
+#     REVIEW_AI_PER_DAY = 20   AI-written cards (keys that are not chNN-bNN-qN: block "other")
+#   Cards over a budget stay due and wait ("held"). The badge, the chapter rows and the run all read the
+#   SAME window (review_window_sql), so the three never disagree. No schema change.
+REVIEW_PER_DAY = 100
+REVIEW_AI_PER_DAY = 20
+# ⚑ ORDER INSIDE EACH BUDGET (user 23-11-26: "most recent always shows up first ... older can wait a bit, but
+#   too long = i forget"). Two groups, taken in proportion REVIEW_YOUNG_SHARE : (1 - share) = 60 : 40; when
+#   one group runs dry the other fills the rest:
+#     YOUNG = reps <= 1 (first review after learning, or relearning after a miss), newest-created first —
+#             the most fragile memories (a late first review loses the most recall).
+#     OLDER = reps >= 2, lowest predicted recall first = elapsed days / interval days, highest first
+#             ("relative overdueness", Anki's recommended backlog order): a 14-day card 5 days late is safer
+#             than a 3-day card 8 days late.
+#   ``rk`` = k-th card of its group / its share, so 0.6 : 0.4 interleaves them; the tiny reps>1 term only
+#   breaks a tie. ``pos`` = place inside the budget's kind; ``ord`` = pos / budget, which spreads the AI
+#   cards evenly through a run instead of dumping them at the end.
+REVIEW_YOUNG_SHARE = 0.6
+REVIEW_IS_AI_SQL = f"(question_key !~ '{REVIEW_BOOK_KEY}')"
+REVIEW_RANK_SQL = ("(row_number() OVER (PARTITION BY " + REVIEW_IS_AI_SQL + ", (reps <= 1)"
+                   " ORDER BY CASE WHEN reps <= 1 THEN created_at END DESC NULLS LAST,"
+                   " CASE WHEN reps > 1 THEN extract(epoch FROM now() - COALESCE(last_reviewed_at, created_at))"
+                   " / 86400.0 / GREATEST(interval_days, 0.5) END DESC NULLS LAST, question_key)"
+                   f" / CASE WHEN reps <= 1 THEN {REVIEW_YOUNG_SHARE} ELSE {1 - REVIEW_YOUNG_SHARE} END"
+                   " + (reps > 1)::int * 0.000001)")
+
+
+def review_budget(account_id: int, module: str, now: datetime | None = None) -> dict[str, int]:
+    """{chapter, ai}: how many more cards of each kind may be offered today (cap minus reviewed today)."""
     import db
 
+    start = study_day_start(now or datetime.now(timezone.utc))
+    done = db.fetch_one(
+        f"SELECT count(*) FILTER (WHERE NOT {REVIEW_IS_AI_SQL}) AS chapter, count(*) FILTER (WHERE {REVIEW_IS_AI_SQL}) AS ai"
+        " FROM review_cards WHERE account_id = %s AND module_id = %s AND last_reviewed_at >= %s",
+        (account_id, module, start),
+    ) or {"chapter": 0, "ai": 0}
+    return {"chapter": max(0, REVIEW_PER_DAY - int(done["chapter"])), "ai": max(0, REVIEW_AI_PER_DAY - int(done["ai"]))}
+
+
+def review_window_sql(budget: dict[str, int], held: bool = False) -> str:
+    """The due cards inside today's budgets (or, ``held=True``, the due cards waiting outside them), as a
+    FROM-able subquery named ``w`` that takes TWO parameters (account_id, module). Columns: question_key,
+    due_at, reps, lapses, body, is_ai, rk, pos, ord. Budgets are ints from review_budget, inlined."""
+    chapter, ai = int(budget["chapter"]), int(budget["ai"])
+    inside = "pos > CASE WHEN is_ai THEN %d ELSE %d END" % (ai, chapter) if held else \
+             "pos <= CASE WHEN is_ai THEN %d ELSE %d END" % (ai, chapter)
+    return (
+        "(SELECT p.*, pos::numeric / CASE WHEN is_ai THEN %d ELSE %d END AS ord FROM"
+        " (SELECT r.*, row_number() OVER (PARTITION BY is_ai ORDER BY rk, question_key) AS pos FROM"
+        f"  (SELECT question_key, due_at, reps, lapses, body, {REVIEW_IS_AI_SQL} AS is_ai, {REVIEW_RANK_SQL} AS rk"
+        "   FROM review_cards WHERE account_id = %%s AND module_id = %%s AND due_at <= now()) r) p"
+        f" WHERE {inside}) w"
+    ) % (max(ai, 1), max(chapter, 1))
+
+
+def review_due_by_block(account_id: int, module: str) -> dict[str, Any]:
+    """{blocks: [{block, due}] (due > 0 only, inside today's budgets), dueCount (chapter + AI shown),
+    held (chapter cards due but waiting for tomorrow), dailyCap (chapter), aiDueCount (AI cards shown, already
+    inside dueCount), aiHeld, aiDailyCap, heldBlocks: [{block, count, oldestDueAt}] (due but waiting, per block,
+    AI under "other"), upcoming: [{block, count, nextDueAt}] (not due yet), total}. One row per block, so a
+    chapter is counted once however many of its cards fell due, on whatever days."""
+    import db
+
+    budget = review_budget(account_id, module)
     rows = db.fetch_all(
-        f"SELECT {REVIEW_BLOCK_SQL} AS block, count(*) AS due FROM review_cards"
-        " WHERE account_id = %s AND module_id = %s AND due_at <= now() GROUP BY 1 ORDER BY 1",
+        f"SELECT {REVIEW_BLOCK_SQL} AS block, count(*) AS due, count(*) FILTER (WHERE is_ai) AS ai"
+        f" FROM {review_window_sql(budget)} GROUP BY 1 ORDER BY min(ord), 1",
         (account_id, module),
     )
-    total = db.fetch_one("SELECT count(*) AS total FROM review_cards WHERE account_id = %s AND module_id = %s",
-                         (account_id, module)) or {"total": 0}
+    waiting = db.fetch_all(
+        f"SELECT {REVIEW_BLOCK_SQL} AS block, count(*) AS n, min(due_at) AS oldest, count(*) FILTER (WHERE is_ai) AS ai"
+        f" FROM {review_window_sql(budget, held=True)} GROUP BY 1 ORDER BY min(due_at), 1",
+        (account_id, module),
+    )
+    counts = db.fetch_one(
+        "SELECT count(*) AS total FROM review_cards WHERE account_id = %s AND module_id = %s",
+        (account_id, module),
+    ) or {"total": 0}
+    later = db.fetch_all(
+        f"SELECT {REVIEW_BLOCK_SQL} AS block, count(*) AS n, min(due_at) AS next_due FROM review_cards"
+        " WHERE account_id = %s AND module_id = %s AND due_at > now() GROUP BY 1 ORDER BY 1",
+        (account_id, module),
+    )
     blocks = [{"block": r["block"], "due": int(r["due"])} for r in rows]
-    return {"blocks": blocks, "dueCount": sum(b["due"] for b in blocks), "total": int(total["total"])}
+    shown = sum(b["due"] for b in blocks)
+    ai_shown = sum(int(r["ai"]) for r in rows)
+    ai_held = sum(int(r["ai"]) for r in waiting)
+    return {"blocks": blocks, "dueCount": shown, "held": sum(int(r["n"]) for r in waiting) - ai_held,
+            "dailyCap": REVIEW_PER_DAY, "aiDueCount": ai_shown, "aiHeld": ai_held, "aiDailyCap": REVIEW_AI_PER_DAY,
+            "heldBlocks": [{"block": r["block"], "count": int(r["n"]), "oldestDueAt": _stamp(r["oldest"])} for r in waiting],
+            "upcoming": [{"block": r["block"], "count": int(r["n"]), "nextDueAt": _stamp(r["next_due"])} for r in later],
+            "total": int(counts["total"])}
 
 
 REVIEW_PICK_MAX = 500   # the reminder lets him type how many to review; a chapter never holds this many
@@ -1428,15 +1588,14 @@ def review_due_in_blocks(account_id: int, module: str, blocks: list[str], limit:
     import db
 
     limit = max(1, min(int(limit), REVIEW_PICK_MAX))
+    window = review_window_sql(review_budget(account_id, module))   # the SAME window as review_due_by_block
     rows = db.fetch_all(
-        "SELECT question_key, due_at, reps, lapses, body FROM review_cards"
-        f" WHERE account_id = %s AND module_id = %s AND due_at <= now() AND {REVIEW_BLOCK_SQL} = ANY(%s)"
-        " ORDER BY due_at LIMIT %s",
+        f"SELECT question_key, due_at, reps, lapses, body FROM {window}"
+        f" WHERE {REVIEW_BLOCK_SQL} = ANY(%s) ORDER BY ord, is_ai, question_key LIMIT %s",
         (account_id, module, blocks, limit),
     )
     count = db.fetch_one(
-        "SELECT count(*) AS due FROM review_cards"
-        f" WHERE account_id = %s AND module_id = %s AND due_at <= now() AND {REVIEW_BLOCK_SQL} = ANY(%s)",
+        f"SELECT count(*) AS due FROM {window} WHERE {REVIEW_BLOCK_SQL} = ANY(%s)",
         (account_id, module, blocks),
     ) or {"due": 0}
     due = []

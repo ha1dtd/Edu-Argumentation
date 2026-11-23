@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import { DialogHost } from './shell/dialog';
+import { GradeQueueNotice } from './shell/GradeQueueNotice';
 // ⛔ THE TWO STYLESHEETS, AND THEIR ORDER IS LOAD-BEARING. DO NOT SWAP THEM.
 //    tailwind.css is the three @tailwind layers (item A, 22-09-26 — it replaced the runtime
 //    Tailwind CDN <script> that used to sit in index.html). app.css is the hand-written
@@ -40,6 +41,8 @@ createRoot(container).render(
       <App />
       {/* 30-09-26: the ONE in-app dialog (shell/dialog.tsx) — the browser's native popups are banned. */}
       <DialogHost />
+      {/* 23-11-26: small, non-blocking: review grades that are saved only in this browser so far. */}
+      <GradeQueueNotice />
     </QueryClientProvider>
   </StrictMode>,
 );

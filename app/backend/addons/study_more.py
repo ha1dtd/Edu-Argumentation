@@ -3,6 +3,7 @@
   GET  /api/review/stats?module=     -> {dueNow, dueToday, next7[{day,count}], next7Total, total, leeches,
                                          leechKeys[], newToday, newPerDay, sessionSize, retention|null,
                                          reviews30, retentionDays}
+  GET  /api/review/ai-cards?module=            -> {cards[{question, body, lapses}], total}     (23-11-26 AI panel)
   GET  /api/review/due-blocks?module=            -> {blocks[{block, due}], dueCount, total}   (01-11-26)
   GET  /api/review/due-in?module=&blocks=&limit= -> {due[...], dueCount}  /api/review/due for some blocks
   GET  /api/study/prefs?module=      -> {module, newPerDay, sessionSize}             (defaults 20 / 20)
@@ -71,10 +72,20 @@ _BAD = (db.StoreUnavailable, ValueError, TypeError, json.JSONDecodeError)
 
 
 @router.get("/api/review/stats")
-def study_review_stats(request: Request, module: str = Query(default="")) -> Response:
+def study_review_stats(request: Request, module: str = Query(default=""), kind: str = Query(default="all")) -> Response:
+    """23-11-26 AI panel: `kind` = all (default) | book | ai."""
     try:
-        return core._json(HTTPStatus.OK, store.review_stats(core._account(request).id, store.module_key(module)))
-    except db.StoreUnavailable as error:
+        return core._json(HTTPStatus.OK, store.review_stats(core._account(request).id, store.module_key(module), kind))
+    except _BAD as error:
+        return _store_error(error)
+
+
+@router.get("/api/review/ai-cards")
+def study_review_ai_cards(request: Request, module: str = Query(default="")) -> Response:
+    """23-11-26 AI panel: every AI-written card of the book with its stored body — the AI practice pool."""
+    try:
+        return core._json(HTTPStatus.OK, store.review_ai_cards(core._account(request).id, store.module_key(module)))
+    except _BAD as error:
         return _store_error(error)
 
 

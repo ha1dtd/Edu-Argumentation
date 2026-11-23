@@ -51,6 +51,10 @@ const module_ = {
 // A stored AI card (body only — no book holds it). Non-ASCII on purpose: the key hashes UTF-8 bytes.
 const AI_BODY = { question: 'Gradient descent — which step size diverges?', options: ['Very large η', 'Tiny η', 'Adaptive η', 'Zero'], correct: 0, explanations: null };
 const AI_CARD_KEY = aiKey(AI_BODY);
+// 23-11-26 AI panel: the AI-written pool (every AI card of the book, with its body) and the AI side's due list.
+const AI_BODIES = [AI_BODY,
+  { question: 'AI pool Q2: which metric ignores true negatives?', options: ['Precision', 'Accuracy', 'Specificity', 'NPV'], correct: 0, explanations: null },
+  { question: 'AI pool Q3: pick the two regularisers', options: ['L1', 'ReLU', 'L2', 'Softmax', 'Adam'], correct: [0, 2], explanations: null }];
 const FRESH = [
   { question: 'AI Q1: what does PCA keep?', options: ['Max variance', 'Min variance', 'Labels', 'Nothing'], correct: 0, explanations: ['Yes.', 'No.', 'No.', 'No.'] },
   { question: 'AI Q2: pick the two ensembles', options: ['Bagging', 'PCA', 'Boosting', 'k-means', 'SVD'], correct: [0, 2], explanations: null },
@@ -58,10 +62,10 @@ const FRESH = [
 const json = (route, body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 const browser = await chromium.launch({ executablePath: process.env.GATE_CHROME || chromium.executablePath() });
 
-async function open({ width = 1366, height = 768, flagFail = false } = {}) {
-  const posts = { seen: [], grade: [], answers: [], flags: [], prefs: [] };
-  const gets = { due: [] };
-  let flagged = [{ question: 'ch01-b01-q3', flaggedAt: '2026-10-22T01:00:00Z' }];
+async function open({ width = 1366, height = 768, flagFail = false, aiFlag = false } = {}) {
+  const posts = { seen: [], grade: [], answers: [], flags: [], prefs: [], fresh: [] };
+  const gets = { due: [], kinds: [], statsKinds: [], aiCards: 0 };
+  let flagged = [{ question: 'ch01-b01-q3', flaggedAt: '2026-10-22T01:00:00Z' }, ...(aiFlag ? [{ question: aiKey(AI_BODIES[1]), flaggedAt: '2026-10-22T02:00:00Z', body: AI_BODIES[1] }] : [])];
   const page = await (await browser.newContext({ viewport: { width, height } })).newPage();
   const errors = []; page.on('pageerror', (e) => errors.push(String(e).slice(0, 160)));
   const native = []; page.on('dialog', (d) => { native.push(d.type()); void d.dismiss(); });
@@ -73,13 +77,16 @@ async function open({ width = 1366, height = 768, flagFail = false } = {}) {
     if (u.pathname === '/api/review/seen' && m === 'POST') { posts.seen.push(body()); return json(route, { outcome: 'created' }); }
     if (u.pathname === '/api/review/grade' && m === 'POST') { posts.grade.push(body()); return json(route, { question: 'x' }); }
     if (u.pathname === '/api/review/due') {
-      gets.due.push(u.searchParams.get('limit'));
+      gets.due.push(u.searchParams.get('limit')); gets.kinds.push(u.searchParams.get('kind'));
+      if (u.searchParams.get('kind') === 'ai') return json(route, { due: AI_BODIES.slice(0, 2).map((b, i) => ({ question: aiKey(b), dueAt: 'x', reps: 1, lapses: i, body: b })), dueCount: 20, total: 65 });
       return json(route, { due: [
         { question: 'ch01-b01-q2', dueAt: 'x', reps: 1, lapses: 0 },
         { question: AI_CARD_KEY, dueAt: 'x', reps: 0, lapses: 7, leech: true, body: AI_BODY },
         { question: 'ch01-b01-q1', dueAt: 'x', reps: 1, lapses: 1 },
       ], dueCount: 3, total: 214 });
     }
+    if (u.pathname === '/api/review/ai-cards') { gets.aiCards += 1; return json(route, { cards: AI_BODIES.map((b) => ({ question: aiKey(b), body: b, lapses: 0 })), total: AI_BODIES.length }); }
+    if (u.pathname === '/api/review/stats' && u.searchParams.get('kind') === 'ai') { gets.statsKinds.push('ai'); return json(route, { module: 'geron-homl3', dueNow: 20, dueToday: 33, next7: [2, 0, 1, 0, 0, 0, 4].map((count, i) => ({ day: `2026-10-${23 + i}`, count })), next7Total: 7, total: 65, leeches: 1, leechKeys: [], newToday: 0, newPerDay: 20, sessionSize: 25, retention: 70, reviews30: 9, retentionDays: 30 }); }
     if (u.pathname === '/api/review/stats') return json(route, { module: 'geron-homl3', dueNow: 3, dueToday: 12, next7: [1, 0, 4, 2, 0, 0, 3].map((count, i) => ({ day: `2026-10-${23 + i}`, count })), next7Total: 10, total: 214, leeches: 3, leechKeys: [], newToday: 4, newPerDay: 20, sessionSize: 25, retention: 82, reviews30: 40, retentionDays: 30 });
     if (u.pathname === '/api/study/prefs' && m === 'GET') return json(route, { module: 'geron-homl3', newPerDay: 20, sessionSize: 25 });
     if (u.pathname === '/api/study/prefs' && m === 'POST') { posts.prefs.push(body()); return json(route, { module: 'geron-homl3', newPerDay: 20, sessionSize: 25, ...body() }); }
@@ -91,7 +98,7 @@ async function open({ width = 1366, height = 768, flagFail = false } = {}) {
       return json(route, { question: b.question, flagged: b.flagged });
     }
     if (u.pathname === '/api/answers' && m === 'POST') { posts.answers.push(body()); return json(route, { outcome: 'logged' }, 201); }
-    if (u.pathname === '/api/quiz/fresh' && m === 'POST') return json(route, { questions: FRESH });
+    if (u.pathname === '/api/quiz/fresh' && m === 'POST') { posts.fresh.push(body()); return json(route, { questions: FRESH }); }
     if (u.pathname === '/api/progress') return json(route, { module: 'geron-homl3', completed: {} });
     if (u.pathname === '/api/general') return json(route, { ai_question_count: 5, fresh_quiz_size: 10 });
     if (u.pathname === '/api/provider') return json(route, { ready: true, model: 'stub-model', token_required: false });
@@ -209,6 +216,74 @@ const uuidLike = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}
   check('F1 server 500: says Not saved and rolls the flag back', posts.flags.length === 1 && (await raw(page, '#flag-status')) === 'Not saved' && (await page.locator('#flag-btn').getAttribute('aria-pressed')) === 'false', await raw(page, '#flag-status'));
   check('F2 no page errors', errors.length === 0, errors.join('|'));
   await page.close();
+}
+
+// ---- 4b. 23-11-26 AI panel: it lives in the AI-Quiz dialog (user: "not the Practice tab") -------------
+{
+  // Practice is exactly as before: no switch, no AI exam note, every kind of card (kind=all), Flagged holds BOTH flags.
+  const p = await open({ aiFlag: true });
+  await nav(p.page, '#nav-quiz'); await p.page.waitForTimeout(700);
+  check('A1 Practice has NO Book | AI-written switch and no AI panel', !(await exists(p.page, '#pool-switch')) && !(await exists(p.page, '#ai-practice')) && !(await exists(p.page, '#exam-ai-note')));
+  check('A2 Practice asks for kind=all (as before: both kinds) and Flagged counts every flag (2)', p.gets.kinds.every((k) => k === 'all') && /flagged \(2\)/i.test(await text(p.page, '#setup-flagged-btn')), `${p.gets.kinds.join(',')} · ${await text(p.page, '#setup-flagged-btn')}`);
+  check('A2b Practice START is still "Start" and the chapter tree + All/None are there', /^start$/i.test(await text(p.page, '#setup-start-btn')) && (await exists(p.page, '#setup-tree')) && (await exists(p.page, '#setup-all-btn')));
+  await p.page.close();
+
+  const { page, gets, posts, errors } = await open({ aiFlag: true });
+  await nav(page, '#nav-generated-quiz'); await page.waitForTimeout(900);
+  check('A3 AI-Quiz keeps its chapter tree + All/None, and its START is named "Generate new"', (await exists(page, '#setup-tree')) && (await exists(page, '#setup-all-btn')) && /generate new/i.test(await text(page, '#setup-start-btn')), await text(page, '#setup-start-btn'));
+  check('A4 ONE merged panel: no second section, no "Practice the AI questions you already have" heading, no long explanation', !(await exists(page, '#ai-practice')) && !(await exists(page, '#ai-practice-title')) && !/Practice the AI questions you already have|reuses the AI questions already saved/.test(await page.evaluate(() => document.body.innerText)));
+  await page.locator('#setup-all-btn').click(); await page.waitForTimeout(300);
+  const cnt = await text(page, '#setup-count');
+  check('A5 asks kind=ai for due + the AI pool; ONE count line: <n> blocks ticked · 3 saved AI questions · 20 due today (limit 20)', gets.kinds.includes('ai') && gets.aiCards >= 1 && /^\d+ blocks? ticked · 3 saved AI questions · 20 due today \(limit 20\)$/.test(cnt), `${gets.kinds.join(',')} · ${cnt}`);
+  check('A5b ONE Questions row (10/20/30/50/All), default 20 selected; no second picker', (await page.locator('#ai-count-picker').count()) === 1 && (await page.locator('[role=radiogroup]').count()) === 1 && (await page.locator('#ai-count-picker button').allTextContents()).map((t) => t.trim()).join(',') === 'All,10,20,30,50' && (await page.locator('#ai-count-picker button[aria-checked=true]').innerText()).trim() === '20');
+  const btns = (await page.locator('#setup-start-btn, #ai-practice-btn, #ai-review-btn').allTextContents()).map((t) => t.trim().replace(/\s+/g, ' ').toLowerCase());
+  const bbox = await page.evaluate(() => ['setup-start-btn', 'ai-practice-btn', 'ai-review-btn'].map((id) => { const r = document.getElementById(id).getBoundingClientRect(); return [Math.round(r.top), Math.round(r.height)]; }));
+  check('A6 action row: GENERATE NEW · PRACTICE SAVED · REVIEW DUE (20), one line, same height; Flagged (1, AI only) comes after', btns.join('|') === 'generate new|practice saved|review due (20)' && bbox.every((x) => x[0] === bbox[0][0] && x[1] === bbox[0][1]) && /flagged \(1\)/i.test(await text(page, '#setup-flagged-btn')), `${btns.join('|')} ${JSON.stringify(bbox)}`);
+  check('A6b enabled/disabled: GENERATE NEW on when blocks are ticked; PRACTICE SAVED + REVIEW DUE on (3 saved, 20 due)', !(await page.locator('#setup-start-btn').isDisabled()) && !(await page.locator('#ai-practice-btn').isDisabled()) && !(await page.locator('#ai-review-btn').isDisabled()));
+  await page.locator('#setup-none-btn').click(); await page.waitForTimeout(300);
+  check('A6c nothing ticked: GENERATE NEW disabled, "0 blocks ticked", saved actions still enabled', (await page.locator('#setup-start-btn').isDisabled()) && /^0 blocks ticked/.test(await text(page, '#setup-count')) && !(await page.locator('#ai-practice-btn').isDisabled()) && !(await page.locator('#ai-review-btn').isDisabled()), await text(page, '#setup-count'));
+  await page.locator('#setup-all-btn').click(); await page.waitForTimeout(200);
+  await page.locator('#review-stats summary').click(); await page.waitForTimeout(300);
+  check('A7 AI Stats: 65 cards, 33 due today, 7 next 7 days, no New / day stepper', (await text(page, '#stats-total')) === '65' && (await text(page, '#stats-due-today')) === '33' && (await text(page, '#stats-next7')) === '7' && !(await exists(page, '#new-per-day')), `${await text(page, '#stats-total')}/${await text(page, '#stats-due-today')}`);
+  const order = await page.evaluate(() => ['setup-count', 'ai-count-picker', 'ai-practice-btn', 'review-stats', 'ai-session-size', 'exam-ai-note'].map((id) => document.getElementById(id)?.getBoundingClientRect().top ?? -1));
+  check('A8 exam note is one small muted line; Per review is there; order: count · Questions · actions · Stats · Per review · exam note', /Exam: book questions only \(AI exam coming next\)/.test(await text(page, '#exam-ai-note')) && !(await exists(page, '#exam-row')) && (await exists(page, '#ai-session-size')) && order.every((v, i) => v >= 0 && (i === 0 || v > order[i - 1])), order.join(','));
+  const ab = await minBox(page, '#ai-count-picker button, #setup-start-btn, #ai-practice-btn, #ai-review-btn, #setup-flagged-btn, #review-stats summary, #ai-session-size button');
+  check('A9 every control is at least 44 px', ab.length >= 12 && ab.every((n) => n >= 44), ab.join(','));
+  await page.locator('#ai-practice-btn').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `${SHOTS}/aiquiz-panel.png`, fullPage: true });
+  await page.screenshot({ path: `${SHOTS}/aiquiz-merged-desktop.png`, fullPage: true });
+  await page.locator('#ai-count-picker button', { hasText: /^10$/ }).click();
+  await page.locator('#ai-practice-btn').click(); await page.waitForTimeout(900);
+  const asked = await page.evaluate(() => document.body.innerText + ' ' + [...document.querySelectorAll('rich-text-viewer')].map((v) => (v.shadowRoot ? v.shadowRoot.textContent : v.textContent)).join(' '));
+  check('A10 PRACTICE SAVED runs ONLY the 3 saved AI questions (10 asked, 3 exist), captioned AI-written', AI_BODIES.some((b) => asked.includes(b.question.slice(0, 20))) && /AI-written · 3 questions/i.test(await text(page, '#quiz-scope-label')), await text(page, '#quiz-scope-label'));
+  check('A11 no new questions were generated (no /api/quiz/fresh) by practising the saved ones', posts.fresh.length === 0, String(posts.fresh.length));
+  await page.close();
+  const second = await open({ aiFlag: true });
+  await nav(second.page, '#nav-generated-quiz'); await second.page.waitForTimeout(900);
+  await second.page.locator('#ai-review-btn').click(); await second.page.waitForTimeout(900);
+  check('A12 REVIEW DUE (AI) runs the AI cards: recall-first row, then 4 options', (await visible(second.page, '#confidence-sure-btn')) && (await second.page.locator('#confidence-sure-btn').click().then(() => true)) && ((await second.page.waitForTimeout(300), await cards(second.page).count()) === 4));
+  const ph = await open({ aiFlag: true, width: 390, height: 844 });
+  await nav(ph.page, '#nav-generated-quiz'); await ph.page.waitForTimeout(900);
+  await ph.page.locator('#setup-all-btn').click(); await ph.page.waitForTimeout(300);
+  const phOver = await sideways(ph.page);
+  const phBox = await minBox(ph.page, '#ai-count-picker button, #setup-start-btn, #ai-practice-btn, #ai-review-btn, #setup-flagged-btn, #review-stats summary, #ai-session-size button');
+  await ph.page.screenshot({ path: `${SHOTS}/aiquiz-merged-390.png`, fullPage: true });
+  check('A16 phone 390px: the merged AI-Quiz dialog does not scroll sideways, controls >= 44 px', phOver <= 0 && phBox.length >= 12 && phBox.every((n) => n >= 44) && ph.errors.length === 0, `overflow ${phOver} min ${Math.min(...phBox)}`);
+  await ph.page.close();
+  check('A13 no page errors', errors.length === 0 && second.errors.length === 0 && p.errors.length === 0, errors.concat(second.errors, p.errors).join('|'));
+  await second.page.close();
+  const third = await open({ aiFlag: true });
+  await nav(third.page, '#nav-generated-quiz'); await third.page.waitForTimeout(900);
+  await third.page.locator('#setup-all-btn').click(); await third.page.locator('#ai-count-picker button', { hasText: /^30$/ }).click();
+  await third.page.locator('#setup-start-btn').click(); await third.page.waitForTimeout(900);
+  check('A14 GENERATE NEW sends the Questions row value (30) to /api/quiz/fresh; the default is 20', third.posts.fresh.length === 1 && third.posts.fresh[0].count === 30, JSON.stringify(third.posts.fresh));
+  await third.page.close();
+  const fourth = await open({ aiFlag: true });
+  await nav(fourth.page, '#nav-generated-quiz'); await fourth.page.waitForTimeout(900);
+  await fourth.page.evaluate(() => localStorage.removeItem('edu.aiquiz.count.v1'));
+  await fourth.page.locator('#setup-all-btn').click(); await fourth.page.locator('#setup-start-btn').click(); await fourth.page.waitForTimeout(900);
+  check('A15 default Generate asks for 20', fourth.posts.fresh.length === 1 && fourth.posts.fresh[0].count === 20, JSON.stringify(fourth.posts.fresh));
+  await fourth.page.close();
 }
 
 // ---- 5. three widths: no sideways scroll; screenshots -------------------------------------------------

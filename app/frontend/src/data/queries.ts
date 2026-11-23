@@ -103,21 +103,53 @@ export function clampStep(value: unknown, bounds: { min: number; max: number; st
   return Math.min(bounds.max, Math.max(bounds.min, stepped));
 }
 
-export function useReviewDue(moduleId: string, enabled: boolean, limit: number = SESSION_SIZE.fallback) {
+/** Which cards a read covers (23-11-26 AI panel): every card (Practice, as before), the book's own, or the AI-written ones (AI-Quiz dialog). */
+export type CardPool = 'all' | 'book' | 'ai';
+
+export function useReviewDue(moduleId: string, enabled: boolean, limit: number = SESSION_SIZE.fallback, pool: CardPool = 'all') {
   const size = clampStep(limit, SESSION_SIZE);
   return useQuery({
-    queryKey: ['review-due', moduleId, size] as const,
+    queryKey: ['review-due', moduleId, size, pool] as const,
     enabled: enabled && Boolean(moduleId),
     staleTime: 0,
     retry: 0,
-    queryFn: ({ signal }) => getJson<ReviewDue>(`/api/review/due?module=${encodeURIComponent(moduleId)}&limit=${size}`, signal),
+    queryFn: ({ signal }) => getJson<ReviewDue>(`/api/review/due?module=${encodeURIComponent(moduleId)}&limit=${size}&kind=${pool}`, signal),
+  });
+}
+
+/** GET /api/review/ai-cards — every AI-written card of the book with its stored body: the AI practice pool. */
+export interface AiCards {
+  cards: { question: string; body: StoredQuestionBody | null; lapses: number }[];
+  total: number;
+}
+
+export function useAiCards(moduleId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['ai-cards', moduleId] as const,
+    enabled: enabled && Boolean(moduleId),
+    staleTime: 0,
+    retry: 0,
+    queryFn: ({ signal }) => getJson<AiCards>(`/api/review/ai-cards?module=${encodeURIComponent(moduleId)}`, signal),
   });
 }
 
 /** /api/review/due-blocks (01-11-26): cards due now per block; "other" = cards with no book key. */
 export interface ReviewDueBlocks {
   blocks: { block: string; due: number }[];
+  /** Cards offered today (inside both daily limits: chapter cards + AI-written cards). */
   dueCount: number;
+  /** Chapter cards due but waiting for tomorrow because today's chapter limit is used up (12-11-26). */
+  held?: number;
+  /** The chapter-card daily limit (100 since 23-11-26). */
+  dailyCap?: number;
+  /** 23-11-26: AI-written cards have their OWN daily limit. aiDueCount is already inside dueCount. */
+  aiDueCount?: number;
+  aiHeld?: number;
+  aiDailyCap?: number;
+  /** 23-11-26: cards due now but waiting (outside today's limits), per block, oldest due time. AI cards: block "other". */
+  heldBlocks?: { block: string; count: number; oldestDueAt: string }[];
+  /** Cards not due yet, per block, with the earliest due time (12-11-26: "when do they come back"). */
+  upcoming?: { block: string; count: number; nextDueAt: string }[];
   total: number;
 }
 
@@ -144,16 +176,16 @@ export function fetchReviewDueIn(moduleId: string, blocks: string[], limit: numb
 // it) hides the panel — it never blocks Practice. retry: 0 for the same reason as useReviewDue.
 
 /** GET /api/review/stats — due today, the next 7 days, retention, cards, leeches. */
-export function useReviewStats(moduleId: string, enabled: boolean) {
+export function useReviewStats(moduleId: string, enabled: boolean, pool: CardPool = 'all') {
   return useQuery({
-    queryKey: ['review-stats', moduleId] as const,
+    queryKey: ['review-stats', moduleId, pool] as const,
     enabled: enabled && Boolean(moduleId),
     staleTime: 0,
     retry: 0,
     queryFn: async ({ signal }): Promise<ReviewStats> => {
       // Wire (addons/study_more.py -> store.review_stats): next7 = [{day, count}] x 7, retention = whole %.
       const raw = await getJson<Omit<Partial<ReviewStats>, 'next7'> & { next7?: unknown[] }>(
-        `/api/review/stats?module=${encodeURIComponent(moduleId)}`,
+        `/api/review/stats?module=${encodeURIComponent(moduleId)}&kind=${pool}`,
         signal,
       );
       const next7 = Array.isArray(raw?.next7)

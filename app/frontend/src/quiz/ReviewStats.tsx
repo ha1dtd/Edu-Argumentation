@@ -7,6 +7,7 @@
 // A failed /api/review/stats read hides the numbers but keeps the New / day stepper.
 // ⛔ Class strings are complete literals (Tailwind purge).
 import { useReviewStats, NEW_PER_DAY } from '../data/queries';
+import type { CardPool } from '../data/queries';
 import { SizePicker } from './SizePicker';
 
 const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -15,12 +16,14 @@ export interface ReviewStatsProps {
   moduleId: string;
   /** The Practice dialog is open — fetch only then. */
   open: boolean;
+  /** 23-11-26: which cards the numbers count — the book's own, or the AI-written ones. */
+  pool?: CardPool;
   newPerDay: number;
   onNewPerDay: (next: number) => void;
 }
 
-export function ReviewStats({ moduleId, open, newPerDay, onNewPerDay }: ReviewStatsProps) {
-  const stats = useReviewStats(moduleId, open);
+export function ReviewStats({ moduleId, open, pool = 'all', newPerDay, onNewPerDay }: ReviewStatsProps) {
+  const stats = useReviewStats(moduleId, open, pool);
   const data = stats.data;
   const week = data?.next7 ?? [];
   const weekTotal = week.reduce((sum, n) => sum + n, 0);
@@ -73,6 +76,7 @@ export function ReviewStats({ moduleId, open, newPerDay, onNewPerDay }: ReviewSt
             {data.leeches > 0 && <p className="text-xs text-gray-400">Leech = missed 6+ times. Still scheduled.</p>}
           </>
         )}
+        {pool !== 'ai' && (
         <SizePicker
           id="new-per-day"
           label="New / day"
@@ -83,6 +87,7 @@ export function ReviewStats({ moduleId, open, newPerDay, onNewPerDay }: ReviewSt
           step={NEW_PER_DAY.step}
           onChange={onNewPerDay}
         />
+        )}
       </div>
     </details>
   );

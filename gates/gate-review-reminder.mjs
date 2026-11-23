@@ -5,12 +5,16 @@
  * Tier 1/2, browser: the REAL built bundle (app/frontend/dist) with the API stubbed in the browser:
  *     cd app/frontend && ./node_modules/.bin/vite build && node ../../gates/gate-review-reminder.mjs
  * Proves: with cards due the button sits on the right edge with a red badge = dueCount and shakes
- * (animation reviewNudge); its panel has ONE row per chapter (blocks of one chapter merged, book order,
+ * (animation reviewNudge); its panel has ONE row per chapter (blocks of one chapter merged, server priority order,
  * unknown blocks under "Other" last) and a chapter's Review button asks /api/review/due-in for THAT
  * chapter's blocks only and opens a recall-first run of them; the Review button opens a "how many"
  * field (99 typed on a 2-question chapter becomes 2, 1 runs 1); the button hides during the quiz; with
  * nothing due there is no badge and no motion; with the server failing there is no button at all.
  * 01-11-26 per-chapter rework. Screenshots: /var/tmp/review-reminder-*.png.
+ * 23-11-26 (SRS v2): two daily limits (chapter 100, AI-written 20 — both held lines, the AI row labelled with its own
+ * limit), the "Due, waiting today" list (heldBlocks), and the grade retry queue: a review grade whose POST fails
+ * (503) is tried 3 times, kept in localStorage, shows a small non-blocking notice, and is resent on the next load
+ * with the SAME press time `at`; a 4xx is not queued; an empty queue sends nothing.
  */
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
@@ -39,13 +43,20 @@ const module_ = {
   quizData: [mk('Q1', ['A1', 'B1', 'C1', 'D1'], 0, 1, 1), mk('Q2', ['A2', 'B2', 'C2', 'D2'], 2, 1, 2), mk('Q3', ['A3', 'B3', 'C3', 'D3'], 1, 2, 1)],
 };
 // One block per chapter, plus "other" (cards with no book key) which must land in "Other", last.
-const BLOCKS = { blocks: [{ block: 'ch01-b01', due: 2 }, { block: 'ch02-b01', due: 1 }, { block: 'other', due: 4 }], dueCount: 7, total: 9 };
+// 12-11-26: `held` (due but over today's cap) + `upcoming` (not due yet, per block, earliest due time).
+const IN = (ms) => new Date(Date.now() + ms).toISOString();
+const UPCOMING = [{ block: 'ch02-b01', count: 5, nextDueAt: IN(3 * 86_400_000 + 3_600_000) }, { block: 'ch01-b01', count: 2, nextDueAt: IN(5 * 3_600_000 + 60_000) }];
+const AGO = (ms) => new Date(Date.now() - ms).toISOString();
+// 23-11-26: chapter limit 100 + AI limit 20; heldBlocks = due now but outside today's limits (AI cards under "other").
+const HELD = [{ block: 'ch02-b01', count: 1, oldestDueAt: AGO(2 * 86_400_000 + 3_600_000) }, { block: 'other', count: 2, oldestDueAt: AGO(86_400_000 + 3_600_000) }, { block: 'ch01-b01', count: 2, oldestDueAt: AGO(4 * 86_400_000 + 3_600_000) }];
+const BLOCKS = { blocks: [{ block: 'other', due: 4 }, { block: 'ch02-b01', due: 1 }, { block: 'ch01-b01', due: 2 }], dueCount: 7, held: 3, dailyCap: 100, aiDueCount: 4, aiHeld: 2, aiDailyCap: 20, heldBlocks: HELD, upcoming: UPCOMING, total: 9 };
 const CARDS = { 'ch01-b01': [{ question: 'ch01-b01-q2', dueAt: 'x', reps: 1, lapses: 0 }, { question: 'ch01-b01-q1', dueAt: 'x', reps: 2, lapses: 0 }], 'ch02-b01': [{ question: 'ch02-b01-q1', dueAt: 'x', reps: 1, lapses: 0 }] };
 const json = (route, body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 const browser = await chromium.launch({ executablePath: chromium.executablePath() });
-async function open(dueMode) {
-  const page = await (await browser.newContext({ viewport: { width: 1366, height: 768 } })).newPage();
+async function open(dueMode, context, grade = { status: 200 }) {
+  const page = await (context || await browser.newContext({ viewport: { width: 1366, height: 768 } })).newPage();
   const dueIn = [];
+  const gradePosts = [];
   const errors = []; page.on('pageerror', (e) => errors.push(String(e).slice(0, 160)));
   await page.route('**/api/**', (route) => {
     const u = new URL(route.request().url());
@@ -53,7 +64,7 @@ async function open(dueMode) {
     if (u.pathname === '/api/modules') return json(route, { books: [{ file: 'geron-homl3', book: 'geron-homl3', base: 'book/geron-homl3/', moduleId: 'geron-homl3', title: 'Test book', chapters: 2, lessons: 2, questions: 3, default: true }] });
     if (u.pathname === '/api/review/due-blocks') {
       if (dueMode === 'down') return route.fulfill({ status: 500, body: 'no' });
-      if (dueMode === 'empty') return json(route, { blocks: [], dueCount: 0, total: 5 });
+      if (dueMode === 'empty') return json(route, { blocks: [], dueCount: 0, held: 0, dailyCap: 100, aiDueCount: 0, aiHeld: 0, aiDailyCap: 20, heldBlocks: [], upcoming: UPCOMING, total: 5 });
       return json(route, BLOCKS);
     }
     if (u.pathname === '/api/review/due-in') {
@@ -63,6 +74,7 @@ async function open(dueMode) {
       const due = blocks.flatMap((b) => CARDS[b] || []).slice(0, limit);
       return json(route, { due, dueCount: due.length });
     }
+    if (u.pathname === '/api/review/grade') { gradePosts.push(JSON.parse(route.request().postData() || '{}')); return json(route, { question: 'x' }, grade.status); }
     if (u.pathname === '/api/progress') return json(route, { module: 'geron-homl3', completed: {} });
     if (u.pathname === '/api/general') return json(route, { ai_question_count: 5, fresh_quiz_size: 10 });
     if (u.pathname === '/api/provider') return json(route, { ready: false, model: '', token_required: false });
@@ -70,7 +82,7 @@ async function open(dueMode) {
   });
   await page.route('**/book/geron-homl3/module.json', (route) => json(route, module_));
   await page.goto(BASE, { waitUntil: 'networkidle' }); await page.waitForTimeout(800);
-  return { page, errors, dueIn };
+  return { page, errors, dueIn, gradePosts };
 }
 const btn = (page) => page.locator('#review-reminder');
 const exists = (page, sel) => page.locator(sel).count().then((n) => n > 0);
@@ -86,7 +98,7 @@ const anim = (page) => btn(page).evaluate((el) => getComputedStyle(el).animation
   await page.screenshot({ path: '/var/tmp/review-reminder-due.png' });
   await btn(page).click(); await page.waitForTimeout(300);
   const rows = await page.locator('#review-reminder-chapters li').allInnerTexts();
-  check('D4 one row per chapter, book order, Other last', rows.length === 3 && /Chapter 1: Cloud/.test(rows[0]) && /2 left/.test(rows[0]) && /Chapter 2: Storage/.test(rows[1]) && /1 left/.test(rows[1]) && /Other/.test(rows[2]) && /4 left/.test(rows[2]), rows.map((r) => r.replace(/\n/g, ' ')).join(' | '));
+  check('D4 one row per chapter, SERVER priority order (Ch 2 sent first), AI-written last with its own limit', rows.length === 3 && /Chapter 2: Storage/.test(rows[0]) && /1 left/.test(rows[0]) && /Chapter 1: Cloud/.test(rows[1]) && /2 left/.test(rows[1]) && /AI-written \(own limit 20 a day\)/.test(rows[2]) && /4 left/.test(rows[2]), rows.map((r) => r.replace(/\n/g, ' ')).join(' | '));
   await page.screenshot({ path: '/var/tmp/review-reminder-panel.png' });
   await page.keyboard.press('Escape'); await page.waitForTimeout(200);
   check('D5 Escape closes the panel', !(await exists(page, '#review-reminder-panel')));
@@ -136,6 +148,78 @@ const anim = (page) => btn(page).evaluate((el) => getComputedStyle(el).animation
   await page.locator('#ask-fab').screenshot({ path: '/var/tmp/review-reminder-chatfab.png' });
   check('C2 no page errors', errors.length === 0, errors.join('|'));
   await page.close();
+}
+
+// ---- 1b. calmer (12-11-26): coming-back list, held note, shake once per day ----------------------------
+{
+  const { page, errors } = await open('due');
+  await btn(page).click(); await page.waitForTimeout(300);
+  const up = await page.locator('#review-reminder-upcoming li').allInnerTexts();
+  check('G1 "Coming back": one row per chapter, soonest first, with count and time', up.length === 2 && /Chapter 1: Cloud/.test(up[0]) && /2/.test(up[0]) && /in 5 hours/.test(up[0]) && /Chapter 2: Storage/.test(up[1]) && /5/.test(up[1]) && /in 3 days/.test(up[1]), up.map((r) => r.replace(/\s+/g, ' ')).join(' | '));
+  check('G2 held note says 3 wait for tomorrow, limit 100 (chapter cards)', /3 more are waiting for tomorrow \(daily limit 100\)/.test(await page.locator('#review-reminder-held').innerText()), await page.locator('#review-reminder-held').innerText());
+  check('G2b second held line: 2 AI-written wait, AI limit 20 (its own limit, separate line)', /2 AI-written are waiting for tomorrow \(AI limit 20\)/.test(await page.locator('#review-reminder-ai-held').innerText()), await page.locator('#review-reminder-ai-held').innerText());
+  const wl = await page.locator('#review-reminder-waiting li').allInnerTexts();
+  check('G2c "Due, waiting today": one row per chapter, longest-waiting first, AI-written as its own row', wl.length === 3 && /Chapter 1: Cloud/.test(wl[0]) && /2\s*·\s*for 4 days/.test(wl[0]) && /Chapter 2: Storage/.test(wl[1]) && /1\s*·\s*for 2 days/.test(wl[1]) && /AI-written/.test(wl[2]) && /2\s*·\s*for 1 day/.test(wl[2]), wl.map((r) => r.replace(/\s+/g, ' ')).join(' | '));
+  check('G3 held cards are not in the badge or rows (7 = 2 + 1 + 4)', (await page.locator('#review-reminder-badge').innerText()).trim() === '7');
+  await page.screenshot({ path: '/var/tmp/review-reminder-coming-back.png' });
+  check('G4 no page errors', errors.length === 0, errors.join('|'));
+  await page.close();
+}
+{
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+  const first = await open('due', ctx);
+  const a1 = await anim(first.page); await first.page.close();
+  const second = await open('due', ctx);        // same browser, same day: reload
+  const a2 = await anim(second.page);
+  check('G5 first load of the day shakes', a1 === 'reviewNudge', a1);
+  check('G6 a reload the same day does NOT shake, badge stays', a2 === 'none' && (await exists(second.page, '#review-reminder-badge')), a2);
+  check('G7 no page errors', first.errors.length === 0 && second.errors.length === 0);
+  await ctx.close();
+}
+{
+  const { page } = await open('empty');
+  await btn(page).click(); await page.waitForTimeout(200);
+  const t = await page.locator('#review-reminder-panel').innerText();
+  check('G8 nothing due: still lists what is coming back', /coming back/i.test(t) && /in 3 days/.test(t), t.replace(/\s+/g, ' '));
+  check('G8b nothing due and nothing held: no held lines, no waiting list', !(await exists(page, '#review-reminder-held')) && !(await exists(page, '#review-reminder-ai-held')) && !(await exists(page, '#review-reminder-waiting')));
+  await page.close();
+}
+
+// ---- 1c. a review grade must not be lost (23-11-26) ---------------------------------------------------
+async function pressGood(page, dueIn) {
+  await btn(page).click(); await page.waitForTimeout(200);
+  await page.locator('li[data-chapter="chapter-0"] .review-pick-btn').click(); await page.waitForTimeout(200);
+  await page.locator('li[data-chapter="chapter-0"] .review-pick-start').click(); await page.waitForTimeout(900);
+  await page.locator('#recall-show-btn').click(); await page.waitForTimeout(300);
+  await page.locator('#options-container .option-card').nth(2).click(); await page.waitForTimeout(300);   // Q2: the right option is C2
+  await page.locator('#grade-good-btn').click();
+}
+const queued = (page) => page.evaluate(() => JSON.parse(localStorage.getItem('eduPendingReviewGrades') || '[]'));
+{
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+  const a = await open('due', ctx, { status: 503 });
+  check('Q0 an empty queue sends nothing on load', a.gradePosts.length === 0);
+  await pressGood(a.page, a.dueIn); await a.page.waitForTimeout(2600);
+  const q = await queued(a.page);
+  check('Q1 a failing save is tried 3 times, each with the same press time', a.gradePosts.length === 3 && a.gradePosts.every((g) => g.question === 'ch01-b01-q2' && g.grade === 'good' && g.at === a.gradePosts[0].at) && !Number.isNaN(Date.parse(a.gradePosts[0].at)), JSON.stringify(a.gradePosts.map((g) => g.at)));
+  check('Q2 after 3 failures the grade is kept in this browser (localStorage), once', q.length === 1 && q[0].question === 'ch01-b01-q2' && q[0].grade === 'good' && q[0].at === a.gradePosts[0].at, JSON.stringify(q));
+  const note = await a.page.locator('#grade-queue-notice').innerText().catch(() => '');
+  check('Q3 a small notice says 1 answer is not saved yet', /1 review answer is not saved yet/.test(note), note);
+  const q4 = { pe: await a.page.locator('#grade-queue-notice').evaluate((el) => getComputedStyle(el).pointerEvents), dialog: await exists(a.page, '#app-dialog'), nextCard: await exists(a.page, '#recall-input') };
+  check('Q4 the notice does not block: no app dialog (#app-dialog), pointer-events none, the run already moved on', q4.pe === 'none' && !q4.dialog && q4.nextCard, JSON.stringify(q4));
+  await a.page.screenshot({ path: '/var/tmp/review-reminder-grade-queue.png' });
+  const savedAt = a.gradePosts[0].at; await a.page.close();
+  const b = await open('due', ctx, { status: 200 });         // next load, server back: the queue is resent
+  await b.page.waitForTimeout(1200);
+  check('Q5 next load resends the queued grade with the SAME press time, once', b.gradePosts.length === 1 && b.gradePosts[0].at === savedAt && b.gradePosts[0].question === 'ch01-b01-q2', JSON.stringify(b.gradePosts));
+  check('Q6 once it lands the queue is empty and the notice is gone', (await queued(b.page)).length === 0 && !(await exists(b.page, '#grade-queue-notice')));
+  check('Q7 no page errors', a.errors.length === 0 && b.errors.length === 0, a.errors.concat(b.errors).join('|'));
+  await b.page.close(); await ctx.close();
+  const ctx2 = await browser.newContext({ viewport: { width: 1366, height: 768 } });      // fresh browser: no half-finished run to restore
+  const c = await open('due', ctx2, { status: 400 });
+  await pressGood(c.page, c.dueIn); await c.page.waitForTimeout(1500);
+  check('Q8 a 4xx (our fault) is not retried and not queued', c.gradePosts.length === 1 && (await queued(c.page)).length === 0 && !(await exists(c.page, '#grade-queue-notice')), String(c.gradePosts.length));
+  await ctx2.close();
 }
 
 // ---- 2. nothing due / server failing -------------------------------------------------------------------

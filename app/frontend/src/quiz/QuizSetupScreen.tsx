@@ -20,7 +20,7 @@ import { useBookContext } from '../state/BookProvider';
 import { useProgressContext } from '../state/ProgressProvider';
 import { useQuiz } from '../state/QuizProvider';
 import type { QuizQuestion, StoredQuestionBody } from '../data/types';
-import { NEW_PER_DAY, SESSION_SIZE, clampStep, useFlags, useMastery, usePrefs, useReviewDue } from '../data/queries';
+import { NEW_PER_DAY, SESSION_SIZE, clampStep, useAiCards, useFlags, useMastery, usePrefs, useReviewDue } from '../data/queries';
 import type { MasteryArea } from '../data/types';
 import type { ReviewDue } from '../data/queries';
 import { NextUpRow } from '../account/MasteryBars';
@@ -73,6 +73,9 @@ export function capToSize(questions: QuizQuestion[], size: number): QuizQuestion
 /** Practice length choices; 0 = every question in the selection. */
 const PRACTICE_COUNTS = [0, 10, 20, 30, 50] as const;
 const COUNT_KEY = 'edu.practice.count.v1';
+/** The AI-Quiz dialog's own Questions choice (generate AND practise saved); default 20 = the generator's default. */
+const AI_COUNT_KEY = 'edu.aiquiz.count.v1';
+const AI_COUNT_DEFAULT = 20;
 
 /** A random `n` of `questions`, kept in their original order. */
 export function sampleQuestions(questions: QuizQuestion[], n: number): QuizQuestion[] {
@@ -83,7 +86,7 @@ export function sampleQuestions(questions: QuizQuestion[], n: number): QuizQuest
 }
 
 /** An AI card / flag's stored body as a quiz question, keyed so grading and flagging find it. */
-function questionFromBody(key: string, body: StoredQuestionBody | null | undefined): QuizQuestion | null {
+export function questionFromBody(key: string, body: StoredQuestionBody | null | undefined): QuizQuestion | null {
   if (!body || typeof body.question !== 'string' || !Array.isArray(body.options) || body.options.length < 2) return null;
   const correct = body.correct;
   const valid = Array.isArray(correct)
@@ -128,17 +131,24 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
   // failed save keeps the local value for this visit (defaults stand if the read fails).
   const queryClient = useQueryClient();
   const isPractice = mode === 'practice';
-  const prefs = usePrefs(moduleId, open && isPractice);
+  const prefs = usePrefs(moduleId, open);
   const [size, setSize] = useState<number>(SESSION_SIZE.fallback);
   // 22-10-26: how many questions an ordinary Practice run asks (0 = all). A random draw, remembered.
-  const [count, setCount] = useState<number>(() => {
+  // The dialog stays mounted while its mode flips, so each mode keeps its OWN count (Practice: All; AI-Quiz: 20).
+  const countKey = isPractice ? COUNT_KEY : AI_COUNT_KEY;
+  const readCount = (key: string, fallback: number): number => {
     try {
-      const saved = Number(localStorage.getItem(COUNT_KEY));
-      return (PRACTICE_COUNTS as readonly number[]).includes(saved) ? saved : 0;
+      const raw = localStorage.getItem(key);
+      const saved = raw === null ? NaN : Number(raw);
+      return (PRACTICE_COUNTS as readonly number[]).includes(saved) ? saved : fallback;
     } catch {
-      return 0;
+      return fallback;
     }
-  });
+  };
+  const [practiceCount, setPracticeCount] = useState<number>(() => readCount(COUNT_KEY, 0));
+  const [aiCount, setAiCount] = useState<number>(() => readCount(AI_COUNT_KEY, AI_COUNT_DEFAULT));
+  const count = isPractice ? practiceCount : aiCount;
+  const setCount = isPractice ? setPracticeCount : setAiCount;
   const [newPerDay, setNewPerDay] = useState<number>(NEW_PER_DAY.fallback);
   useEffect(() => {
     if (!prefs.data) return;
@@ -159,10 +169,15 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
       });
     }, 600);
   };
-  const review = useReviewDue(moduleId, open && isPractice, size);
+  // AI-Quiz (merged panel, 23-11-26): the due count / pool / flags are the AI-written cards only (kind=ai).
+  const review = useReviewDue(moduleId, open, size, isPractice ? 'all' : 'ai');
   const dueCount = review.data?.dueCount ?? 0;
+  const aiCards = useAiCards(moduleId, open && !isPractice);
+  const aiPool = (aiCards.data?.cards ?? [])
+    .map((card) => questionFromBody(card.question, card.body))
+    .filter((question): question is QuizQuestion => Boolean(question));
   // B: flagged questions in this book — "Flagged (N)" starts a run from them.
-  const flags = useFlags(moduleId, open && isPractice);
+  const flags = useFlags(moduleId, open);
   // exam-recall-suite P2 (22-10-26) D: the weakest area, one tap to practise it (full list: Account → Progress).
   const mastery = useMastery(moduleId, open && isPractice);
   const nextUp = mastery.data?.nextUp ? mastery.data.areas.find((a) => a.id === mastery.data?.nextUp) ?? null : null;
@@ -212,25 +227,28 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
   const blocksText = `${ids.length} block${ids.length === 1 ? '' : 's'}`;
   let countText: string;
   let ready = ids.length > 0;
-  if (!ids.length) {
+  let aiHint = 'Questions: how many to generate, or to practise from the saved ones.';
+  if (mode === 'generate') {
+    // One line for the whole dialog: ticked blocks · saved AI questions · due today.
+    const saved = aiCards.isLoading ? '…' : String(aiPool.length);
+    countText = `${blocksText} ticked · ${saved} saved AI questions · ${dueCount} due today (limit 20)`;
+    if (!actions.aiReady) {
+      aiHint = actions.providerReady ? AI_ONLY_ON_LIBRARY_BOOKS : 'No model connected';
+      ready = false;
+    }
+  } else if (!ids.length) {
     countText = 'Nothing selected';
-  } else if (mode === 'practice') {
+  } else {
     const count = practiceQuestionsFor(quizBank, ids).length;
     countText = `${blocksText} · ${count} question${count === 1 ? '' : 's'}`;
     ready = count > 0;
-  } else if (!actions.aiReady) {
-    countText = actions.providerReady ? AI_ONLY_ON_LIBRARY_BOOKS : 'No model connected';
-    ready = false;
-  } else {
-    const count = ids.length === 1 ? actions.aiQuestionCount : actions.generatedCountFor(ids.length);
-    countText = `${blocksText} · ${count} AI questions`;
   }
 
   /** The #setup-start-btn listener (app.js:3294). */
   const start = () => {
     if (!ids.length) return;
     try {
-      localStorage.setItem(COUNT_KEY, String(count));
+      localStorage.setItem(countKey, String(count));
     } catch {
       /* per-viewer convenience only */
     }
@@ -241,7 +259,7 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
     }
     if (mode === 'generate') {
       // Everything ticked is the same as no restriction: draw from the whole book.
-      void actions.startGeneratedQuiz(ids.length === allIds.length ? [] : ids);
+      void actions.startGeneratedQuiz(ids.length === allIds.length ? [] : ids, count);
       return;
     }
     if (ids.length === allIds.length) {
@@ -274,10 +292,10 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
 
   /** Start a spaced-repetition run: the due cards that exist in this book's bank, oldest due first. */
   const startReview = () => {
-    const questions = reviewRunQuestions(quizBank, review.data?.due ?? [], size);
+    const questions = reviewRunQuestions(isPractice ? quizBank : [], review.data?.due ?? [], size);
     if (!questions.length) return;
     dispatch({ type: 'run/reset', questions });
-    dispatch({ type: 'scope/set', scope: 'review', label: 'Review', blockId: null });
+    dispatch({ type: 'scope/set', scope: 'review', label: isPractice ? 'Review' : 'AI-written review', blockId: null });
     onStart();
   };
 
@@ -286,6 +304,7 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
     const byKey = new Map<string, QuizQuestion>();
     for (const question of quizBank) if (question?.source?.question) byKey.set(question.source.question, question);
     return (flags.data ?? [])
+      .filter((flag) => isPractice || isAiKey(flag.question))
       .map((flag) => byKey.get(flag.question) ?? questionFromBody(flag.question, flag.body))
       .filter((question): question is QuizQuestion => Boolean(question));
   })();
@@ -293,7 +312,19 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
     const questions = capToSize(flaggedQuestions, size);
     if (!questions.length) return;
     dispatch({ type: 'run/reset', questions });
-    dispatch({ type: 'scope/set', scope: 'selection', label: 'Flagged', blockId: null });
+    dispatch({ type: 'scope/set', scope: 'selection', label: isPractice ? 'Flagged' : 'Flagged AI-written', blockId: null });
+    onStart();
+  };
+  /** AI-Quiz: practise the saved AI questions (every one, whatever is ticked: an AI card has no block), `count` of them. */
+  const practiseSaved = () => {
+    if (!aiPool.length) return;
+    try {
+      localStorage.setItem(countKey, String(count));
+    } catch {
+      /* per-viewer convenience only */
+    }
+    dispatch({ type: 'run/reset', questions: sampleQuestions(aiPool, count) });
+    dispatch({ type: 'scope/set', scope: 'selection', label: 'AI-written', blockId: null });
     onStart();
   };
 
@@ -365,6 +396,12 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
             {countText}
           </p>
 
+          {!isPractice && (
+            <p id="ai-hint" className="mt-1 text-xs text-gray-400">
+              {aiHint}
+            </p>
+          )}
+
           {mode === 'practice' && review.data && (
             <p id="review-status" className="mt-1 text-sm text-gray-400" role="status">
               {dueCount > 0
@@ -390,8 +427,8 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
             />
           )}
 
-          {isPractice && (
-            <div id="practice-count" role="radiogroup" aria-label="Questions per practice run" className="mt-5 flex flex-wrap items-center gap-2">
+          {(
+            <div id={isPractice ? 'practice-count' : 'ai-count-picker'} role="radiogroup" aria-label={isPractice ? 'Questions per practice run' : 'Questions per generated or practised AI run'} className="mt-5 flex flex-wrap items-center gap-2">
               <span className="mr-1 text-sm font-semibold text-gray-200">Questions</span>
               {PRACTICE_COUNTS.map((n) => (
                 <button
@@ -417,10 +454,32 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
               type="button"
               disabled={!ready}
               onClick={start}
-              className="min-h-[44px] px-8 rounded-lg bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider text-sm transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50 disabled:cursor-not-allowed"
+              className={`min-h-[44px] ${isPractice ? 'px-8' : 'px-6'} rounded-lg bg-brand-600 hover:bg-brand-900 text-white font-bold uppercase tracking-wider text-sm transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50 disabled:cursor-not-allowed`}
             >
-              Start
+              {mode === 'generate' ? 'Generate new' : 'Start'}
             </button>
+            {!isPractice && (
+              <>
+                <button
+                  id="ai-practice-btn"
+                  type="button"
+                  disabled={!aiPool.length}
+                  onClick={practiseSaved}
+                  className="min-h-[44px] px-6 rounded-lg border border-brand-600 text-white hover:bg-brand-600 text-sm font-bold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                >
+                  Practice saved
+                </button>
+                <button
+                  id="ai-review-btn"
+                  type="button"
+                  disabled={dueCount === 0}
+                  onClick={startReview}
+                  className="min-h-[44px] px-6 rounded-lg border border-brand-600 text-white hover:bg-brand-600 text-sm font-bold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                >
+                  Review due ({dueCount})
+                </button>
+              </>
+            )}
             {mode === 'practice' && dueCount > 0 && (
               <button
                 id="setup-review-btn"
@@ -431,7 +490,7 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
                 Review due ({dueCount})
               </button>
             )}
-            {isPractice && flaggedQuestions.length > 0 && (
+            {flaggedQuestions.length > 0 && (
               <button
                 id="setup-flagged-btn"
                 type="button"
@@ -455,6 +514,17 @@ export function QuizSetupScreen({ mode, open, onStart, onCancel, actions }: Quiz
               Cancel
             </button>
           </div>
+          {!isPractice && (
+            <>
+              <ReviewStats moduleId={moduleId} open={open} pool="ai" newPerDay={newPerDay} onNewPerDay={() => undefined} />
+              <div className="mt-4">
+                <SizePicker id="ai-session-size" label="Per review" unit="cards per review" value={size} min={SESSION_SIZE.min} max={SESSION_SIZE.max} step={SESSION_SIZE.step} onChange={(next) => changePrefs({ sessionSize: next, newPerDay })} />
+              </div>
+              <p id="exam-ai-note" className="mt-4 text-xs text-gray-400">
+                Exam: book questions only (AI exam coming next)
+              </p>
+            </>
+          )}
           {isPractice && (
             <ExamRow
               moduleId={moduleId}
@@ -641,3 +711,6 @@ function ExamRow({
     </div>
   );
 }
+
+/** A key that is not chNN-bNN-qN is an AI-written card (the server's store.REVIEW_BOOK_KEY). */
+export const isAiKey = (key: string): boolean => !/-b[0-9]+-q[0-9]+$/.test(key);

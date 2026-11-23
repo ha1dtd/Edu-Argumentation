@@ -152,9 +152,10 @@ html { scroll-padding-bottom: 7rem; }
 @media (prefers-reduced-motion: no-preference) {
   #action-container:not(.hidden-view) .action-bar-inner { animation: actionBarIn 200ms ease-out; }
 }
-/* Review reminder (quiz/ReviewReminder.tsx, 01-11-26): shakes while cards are due, still when none are. */
+/* Review reminder (quiz/ReviewReminder.tsx, 01-11-26): shakes while cards are due, still when none are.
+   12-11-26 (user: "too constant"): the shake plays 3 times, ONCE per day (.is-nudge); the badge stays all day. */
 @media (prefers-reduced-motion: no-preference) {
-  #review-reminder.is-due { animation: reviewNudge 3s ease-in-out infinite; }
+  #review-reminder.is-nudge { animation: reviewNudge 3s ease-in-out 3; }
 }
 @keyframes reviewNudge {
   0%, 80%, 100% { transform: none; }
